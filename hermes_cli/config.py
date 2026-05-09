@@ -960,6 +960,7 @@ _EXTRA_KNOWN_ROOT_KEYS = {
     "multiplex_profiles", "profile_routes", "platforms", "require_mention",
     "unauthorized_dm_behavior", "signal", "allow_all_users",
     "timeouts",          # unified timeout resolution section (agent/deadline.py)
+    "pricing_overrides", # user-supplied per-model pricing (agent/usage_pricing.py)
 }
 _KNOWN_ROOT_KEYS = frozenset(DEFAULT_CONFIG.keys()) | _EXTRA_KNOWN_ROOT_KEYS
 
