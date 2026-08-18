@@ -1170,18 +1170,19 @@ def _apply_display_config(agent, _agent_cfg, platform):
 
 
 def _memory_provider_init_kwargs(agent, platform) -> dict[str, Any]:
-    """Scoping kwargs for ``MemoryManager.initialize_all`` (status_callback is CLI-only:
-    gateway status travels a different path and the indicator no-ops without it)."""
+    """Scoping kwargs for ``MemoryManager.initialize_all``. ``status_callback`` is the agent's bound
+    ``_emit_status``, which resolves the surface callback at emission time, so a gateway/TUI that
+    binds ``agent.status_callback`` after construction still receives provider status lines."""
     kwargs = {
         "session_id": agent.session_id,
         "platform": platform or "cli",
         "hermes_home": str(get_hermes_home()),
         # platform="cron" (scheduler) / "subagent" (delegate_task) → providers skip writes (MemoryProvider.initialize).
         "agent_context": platform if platform in ("cron", "subagent") else "primary",
+        "status_callback": agent._emit_status,
     }
     if kwargs["platform"] == "cli":
         kwargs["warning_callback"] = agent._emit_warning
-        kwargs["status_callback"] = agent._emit_status
     # Session title (e.g. honcho derives chat-scoped session keys from it).
     if agent._session_db:
         with suppress(Exception):
