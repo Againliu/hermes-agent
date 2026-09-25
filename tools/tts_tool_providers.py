@@ -530,14 +530,25 @@ def _rewrite_gemini_tts_audio_tags(text: str, persona_prompt: str = "") -> str:
                                          fallback_label="untagged text", level=logging.WARNING)
 
 
-_GEMINI_38_EVENTS = re.compile(r"<(?:laugh|sigh|cough|breath|short pause)>", re.IGNORECASE)
+# The vocal-burst / pause tags Google documents for Gemini 3.8 TTS (speech-generation guide,
+# "Vocal bursts and non-speech sounds"). Anything else the auxiliary model emits is rejected.
+_GEMINI_38_EVENT_TAGS = (
+    "argh", "breath", "heavy breath", "exhales", "cackle", "cheer", "chuckle", "chuckles", "cough",
+    "cry", "gasp", "giggle", "groan", "growl", "grunt", "grr", "hiss", "laugh", "laughter", "moan",
+    "pant", "pff", "phew", "scream", "shout", "shriek", "sigh", "sighs", "sneeze", "snicker", "snort",
+    "sob", "throat-clearing", "tsk", "whimper", "whispers", "whispering", "yawn", "short pause",
+    "long pause",
+)
+_GEMINI_38_EVENTS = re.compile(
+    "<(?:" + "|".join(re.escape(tag) for tag in _GEMINI_38_EVENT_TAGS) + ")>", re.IGNORECASE)
 
 
 def _rewrite_gemini_38_events(text: str, style: str) -> str:
     """Insert only momentary vocal events, never rewrite spoken words or delivery style."""
     prompt = (
         "For Gemini 3.8 TTS, optionally insert point-in-time vocal events into the transcript. "
-        "The only permitted additions are <laugh>, <sigh>, <cough>, <breath>, and <short pause>. "
+        "The only permitted additions are these angle-bracket tags: "
+        + ", ".join(f"<{tag}>" for tag in _GEMINI_38_EVENT_TAGS) + ". "
         "Do not change any existing character, spoken word, punctuation, or whitespace. "
         "Do not add sustained delivery directions; those are supplied as style metadata. "
         "Return only the transcript, possibly with event tags."
