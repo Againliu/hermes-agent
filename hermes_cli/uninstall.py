@@ -766,6 +766,13 @@ def run_uninstall(args):
     project_root = get_project_root()
     hermes_home = get_hermes_home()
 
+    from hermes_cli.data_cleanup import guard_data_removal_home
+    try:
+        hermes_home = guard_data_removal_home(hermes_home, project_root)
+    except (OSError, ValueError, RuntimeError) as exc:
+        log_warn(str(exc))
+        raise SystemExit(1) from exc
+
     full_flag = bool(getattr(args, "full", False))
     if bool(getattr(args, "dry_run", False)):
         _print_uninstall_dry_run(
