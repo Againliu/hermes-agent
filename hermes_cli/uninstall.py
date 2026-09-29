@@ -915,6 +915,45 @@ def _rmtree_step(path: Path, *, indent: str = "", fully: bool = True) -> None:
             log_info("You may need to manually remove it")
 
 
+def _remove_default_data_preserving_profiles(hermes_home: Path) -> None:
+    """Remove the default profile's data without touching its named-profile subtree.
+
+    Named profiles live below ``<default>/profiles``, so deleting the default
+    home wholesale would override a declined profile-removal prompt.  Delete
+    the default home's other direct children in place instead; no profile data
+    is moved through a temporary or out-of-tree recovery location.
+    """
+    profiles_root = hermes_home / "profiles"
+    if not (profiles_root.exists() or profiles_root.is_symlink()):
+        _rmtree_step(hermes_home)
+        return
+
+    try:
+        children = list(hermes_home.iterdir())
+    except Exception as e:
+        log_warn(f"Could not inspect {hermes_home}: {e}")
+        log_info("You may need to manually remove its default-profile data")
+        return
+
+    failed = False
+    for child in children:
+        if child == profiles_root:
+            continue
+        try:
+            if child.is_symlink() or child.is_file():
+                child.unlink()
+            else:
+                shutil.rmtree(child)
+        except Exception as e:
+            failed = True
+            log_warn(f"Could not remove {child}: {e}")
+    if failed:
+        log_warn(f"Default-profile data was only partially removed from {hermes_home}")
+    else:
+        log_success(f"Removed default-profile data from {hermes_home}")
+    log_info(f"Preserved named profiles in {profiles_root}")
+
+
 def _macos_cache_leftover_dirs() -> list[Path]:
     """Cache dirs Electron/Chromium and the setup binary write OUTSIDE HERMES_HOME on
     macOS. Chromium splits the desktop app's HTTP/script caches under ``~/Library/Caches``
@@ -1113,7 +1152,10 @@ def _perform_uninstall(
                 lambda: _remove_each(_macos_cache_leftover_dirs(), _rmtree_if_exists), "Removed {}",
                 "No Electron or setup caches found")
         log_info("Removing configuration and data...")
-        _rmtree_step(hermes_home)
+        if not remove_profiles and _is_default_hermes_home(hermes_home):
+            _remove_default_data_preserving_profiles(hermes_home)
+        else:
+            _rmtree_step(hermes_home)
     else:
         log_info(f"Keeping configuration and data in {hermes_home}")
 
