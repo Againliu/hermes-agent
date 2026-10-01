@@ -922,25 +922,24 @@ def _rmtree_step(path: Path, *, indent: str = "", fully: bool = True) -> None:
             log_info("You may need to manually remove it")
 
 
-def _remove_default_data_preserving_profiles(hermes_home: Path) -> None:
-    """Remove the default profile's data without touching its named-profile subtree.
+def _remove_default_data_preserving_profiles(hermes_home: Path) -> bool:
+    """Remove default-profile data while retaining ``profiles/``.
 
-    Named profiles live below ``<default>/profiles``, so deleting the default
-    home wholesale would override a declined profile-removal prompt.  Delete
-    the default home's other direct children in place instead; no profile data
-    is moved through a temporary or out-of-tree recovery location.
+    Return whether every targeted entry was removed so a partial full uninstall
+    cannot be reported as complete.  Named profiles stay in place even when a
+    sibling removal fails.
     """
     profiles_root = hermes_home / "profiles"
     if not (profiles_root.exists() or profiles_root.is_symlink()):
         _rmtree_step(hermes_home)
-        return
+        return not hermes_home.exists()
 
     try:
         children = list(hermes_home.iterdir())
     except Exception as e:
         log_warn(f"Could not inspect {hermes_home}: {e}")
         log_info("You may need to manually remove its default-profile data")
-        return
+        return False
 
     failed = False
     for child in children:
@@ -959,6 +958,7 @@ def _remove_default_data_preserving_profiles(hermes_home: Path) -> None:
     else:
         log_success(f"Removed default-profile data from {hermes_home}")
     log_info(f"Preserved named profiles in {profiles_root}")
+    return not failed
 
 
 def _macos_cache_leftover_dirs() -> list[Path]:
@@ -1160,7 +1160,8 @@ def _perform_uninstall(
                 "No Electron or setup caches found")
         log_info("Removing configuration and data...")
         if not remove_profiles and _is_default_hermes_home(hermes_home):
-            _remove_default_data_preserving_profiles(hermes_home)
+            if not _remove_default_data_preserving_profiles(hermes_home):
+                raise SystemExit(1)
         else:
             _rmtree_step(hermes_home)
     else:

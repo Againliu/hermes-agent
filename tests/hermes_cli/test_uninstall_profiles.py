@@ -107,11 +107,36 @@ def test_full_uninstall_preserves_named_profiles_without_opt_in(
     assert not (install.home / "sessions").exists()
     assert set(install.home.iterdir()) == {install.home / "profiles"}
     assert [
-        (profile.path / "nested" / "keep.txt").read_text(encoding="utf-8")
+        (profile.path / "nested" / "keep.txt").read_text(encoding="utf-8-sig")
         for profile in install.profiles
     ] == ["work data", "personal data"]
-    assert all(alias.read_text(encoding="utf-8") == "profile alias" for alias in install.aliases)
+    assert all(alias.read_text(encoding="utf-8-sig") == "profile alias" for alias in install.aliases)
     assert install.service_calls == []
+
+
+def test_full_uninstall_reports_partial_default_cleanup(
+    profile_install, monkeypatch, capsys,
+):
+    install = profile_install
+    blocked = install.home / "sessions"
+    confined_rmtree = shutil.rmtree
+
+    def refuse_one_default_child(path, *args, **kwargs):
+        if Path(path) == blocked:
+            raise PermissionError("fixture holds sessions")
+        return confined_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", refuse_one_default_child)
+
+    with pytest.raises(SystemExit) as failure:
+        uninstall.run_uninstall(SimpleNamespace(dry_run=False, yes=True, full=True))
+
+    assert failure.value.code != 0
+    assert blocked.is_dir()
+    assert all((profile.path / "nested" / "keep.txt").is_file() for profile in install.profiles)
+    output = capsys.readouterr().out
+    assert "Default-profile data was only partially removed" in output
+    assert "Uninstall Complete" not in output
 
 
 def test_full_uninstall_profile_opt_in_cleans_services_aliases_and_data(

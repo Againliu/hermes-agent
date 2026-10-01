@@ -39,8 +39,8 @@ def test_full_uninstall_refuses_the_user_home_before_removing_anything(
         uninstall.main(["--mode", "full"])
 
     assert failure.value.code != 0
-    assert personal_sentinel.read_text(encoding="utf-8") == "keep"
-    assert code_sentinel.read_text(encoding="utf-8") == "keep"
+    assert personal_sentinel.read_text(encoding="utf-8-sig") == "keep"
+    assert code_sentinel.read_text(encoding="utf-8-sig") == "keep"
 
 
 def test_canonical_guard_rejects_unsafe_roots_aliases_and_directory_links(
