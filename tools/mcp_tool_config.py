@@ -21,12 +21,63 @@ logger = logging.getLogger("tools.mcp_tool")
 
 _mcp_stderr_log_fh: dict[str, Any] = {}  # profile home key -> handle
 _mcp_stderr_log_lock = threading.Lock()
+_MCP_STDERR_MAX_BYTES = 1024 * 1024
+_MCP_STDERR_BACKUP_COUNT = 2
+
+
+class _McpStderrLog:
+    """Secret-redacting, size-bounded MCP stderr log owned by one profile."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.closed = False
+        self._lock = threading.Lock()
+        self._fh = self._open()
+
+    def _open(self):
+        return open(self.path, "a", encoding="utf-8", errors="replace", buffering=1)
+
+    def _rotate(self) -> None:
+        self._fh.close()
+        oldest = Path(f"{self.path}.{_MCP_STDERR_BACKUP_COUNT}")
+        oldest.unlink(missing_ok=True)
+        for generation in range(_MCP_STDERR_BACKUP_COUNT - 1, 0, -1):
+            source = Path(f"{self.path}.{generation}")
+            if source.exists():
+                source.replace(Path(f"{self.path}.{generation + 1}"))
+        if self.path.exists():
+            self.path.replace(Path(f"{self.path}.1"))
+        self._fh = self._open()
+
+    def write(self, text: str) -> int:
+        from agent.redact import redact_sensitive_text
+
+        redacted = redact_sensitive_text(str(text), force=True)
+        encoded = redacted.encode("utf-8", errors="replace")[:_MCP_STDERR_MAX_BYTES]
+        redacted = encoded.decode("utf-8", errors="ignore")
+        with self._lock:
+            self._fh.flush()
+            size = self.path.stat().st_size if self.path.exists() else 0
+            if size and size + len(encoded) > _MCP_STDERR_MAX_BYTES:
+                self._rotate()
+            return self._fh.write(redacted)
+
+    def flush(self) -> None:
+        with self._lock:
+            self._fh.flush()
+
+    def close(self) -> None:
+        with self._lock:
+            if not self.closed:
+                self.closed = True
+                self._fh.close()
 
 
 def _get_mcp_stderr_log() -> Any:
     """Shared append-mode handle for MCP subprocess stderr, cached until shutdown PER PROFILE HOME (a
-    multiplexed gateway's secondary profile must log under ITS ``logs/``, not the launch profile's). Must
-    expose a real fd (asyncio wires the child's stderr to it); falls back to ``/dev/null``, then real stderr."""
+    multiplexed gateway's secondary profile must log under ITS ``logs/``, not the launch profile's).
+    The returned writer redacts and rotates before every disk write; opening failures fall back to
+    ``/dev/null``, then real stderr."""
     from hermes_constants import get_hermes_home, hermes_home_key, mkdir_under_hermes_home
     home_key = hermes_home_key()
     with _mcp_stderr_log_lock:
@@ -35,9 +86,8 @@ def _get_mcp_stderr_log() -> Any:
             try:
                 log_dir = get_hermes_home() / "logs"
                 mkdir_under_hermes_home(log_dir)
-                # Line-buffered so output lands promptly; errors="replace" tolerates garbled binary.
-                fh = open(log_dir / "mcp-stderr.log", "a", encoding="utf-8", errors="replace", buffering=1)
-                fh.fileno()  # confirm a real fd before committing
+                # All writes pass through the forced secret redactor and bounded rotator.
+                fh = _McpStderrLog(log_dir / "mcp-stderr.log")
             except Exception as exc:  # pragma: no cover — best-effort fallback
                 logger.debug("Failed to open MCP stderr log, using devnull: %s", exc)
                 try:
