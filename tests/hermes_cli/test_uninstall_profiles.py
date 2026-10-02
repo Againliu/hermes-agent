@@ -159,3 +159,74 @@ def test_full_uninstall_profile_opt_in_cleans_services_aliases_and_data(
         for profile in install.profiles
         for subcommand in ("stop", "uninstall")
     ]
+
+
+def _refuse_rmtree_of(monkeypatch, blocked: Path) -> None:
+    confined_rmtree = shutil.rmtree
+
+    def refuse(path, *args, **kwargs):
+        if Path(path) == blocked:
+            raise PermissionError("[WinError 5] Access is denied (fixture)")
+        return confined_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", refuse)
+
+
+def test_full_uninstall_with_profiles_opted_in_reports_failed_home_removal(
+    profile_install, monkeypatch, capsys,
+):
+    """The sibling branch (whole home, profiles included) must not claim success either."""
+    install = profile_install
+    _refuse_rmtree_of(monkeypatch, install.home)
+    answers = iter(["2", "yes", "yes"])
+    monkeypatch.setattr("builtins.input", lambda *_args: next(answers))
+
+    with pytest.raises(SystemExit) as failure:
+        uninstall.run_uninstall(SimpleNamespace(dry_run=False, yes=False, full=False))
+
+    assert failure.value.code != 0
+    assert (install.home / "config.yaml").is_file()
+    output = capsys.readouterr().out
+    assert "Uninstall did not finish" in output
+    assert "Uninstall Complete" not in output
+
+
+def test_full_uninstall_of_named_profile_home_reports_failed_removal(
+    profile_install, monkeypatch, capsys,
+):
+    """``hermes -p work uninstall --full`` erases a non-default home via the same branch."""
+    install = profile_install
+    work_home = install.profiles[0].path
+    monkeypatch.setenv("HERMES_HOME", str(work_home))
+    monkeypatch.setattr(uninstall, "get_hermes_home", lambda: work_home)
+    monkeypatch.setattr(uninstall, "_discover_named_profiles", lambda: [])
+    _refuse_rmtree_of(monkeypatch, work_home)
+
+    with pytest.raises(SystemExit) as failure:
+        uninstall.run_uninstall(SimpleNamespace(dry_run=False, yes=True, full=True))
+
+    assert failure.value.code != 0
+    assert (work_home / "nested" / "keep.txt").is_file()
+    output = capsys.readouterr().out
+    assert "Uninstall did not finish" in output
+    assert "Uninstall Complete" not in output
+
+
+@pytest.mark.parametrize("windows", [False, True])
+def test_rmtree_step_clears_read_only_bits_on_windows(tmp_path, monkeypatch, windows):
+    """Git objects are read-only; on Windows plain rmtree raises WinError 5 on them."""
+    target = tmp_path / "home"
+    (target / ".git" / "objects").mkdir(parents=True)
+    (target / ".git" / "objects" / "pack").write_text("ro", encoding="utf-8")
+    real_rmtree = shutil.rmtree
+
+    def windows_like_rmtree(path, *args, onerror=None, **kwargs):
+        if onerror is None:
+            raise PermissionError("[WinError 5] Access is denied (read-only git object)")
+        return real_rmtree(path, *args, onerror=onerror, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", windows_like_rmtree)
+    monkeypatch.setattr(uninstall, "_is_windows", lambda: windows)
+
+    assert uninstall._rmtree_step(target) is windows
+    assert target.exists() is not windows

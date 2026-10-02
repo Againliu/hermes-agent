@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -910,16 +911,34 @@ def _remove_step(label: str, remove, success_fmt: str, none_msg: str) -> None:
         log_info(none_msg)
 
 
-def _rmtree_step(path: Path, *, indent: str = "", fully: bool = True) -> None:
-    """Best-effort ``rmtree`` with the shared success/warning lines."""
+def _rmtree(path: Path) -> None:
+    """``shutil.rmtree`` that also clears Windows read-only bits.
+
+    Git stores objects read-only, and the Windows installer puts the checkout
+    inside HERMES_HOME, so a plain rmtree of the home fails there with WinError 5.
+    """
+    if _is_windows():
+        from hermes_cli.fs_utils import rmtree_force
+        rmtree_force(path)
+    else:
+        shutil.rmtree(path)
+
+
+def _rmtree_step(path: Path, *, indent: str = "", fully: bool = True) -> bool:
+    """Best-effort ``rmtree`` with the shared success/warning lines.
+
+    Return whether ``path`` is gone afterwards, so callers that promise a
+    complete removal can refuse to report success.
+    """
     try:
         if path.exists():
-            shutil.rmtree(path)
+            _rmtree(path)
             log_success(f"{indent}Removed {path}")
     except Exception as e:
         log_warn(f"{indent}Could not {'fully ' if fully else ''}remove {path}: {e}")
         if fully:
             log_info("You may need to manually remove it")
+    return not (path.exists() or path.is_symlink())
 
 
 def _remove_default_data_preserving_profiles(hermes_home: Path) -> bool:
@@ -931,8 +950,7 @@ def _remove_default_data_preserving_profiles(hermes_home: Path) -> bool:
     """
     profiles_root = hermes_home / "profiles"
     if not (profiles_root.exists() or profiles_root.is_symlink()):
-        _rmtree_step(hermes_home)
-        return not hermes_home.exists()
+        return _rmtree_step(hermes_home)
 
     try:
         children = list(hermes_home.iterdir())
@@ -947,9 +965,11 @@ def _remove_default_data_preserving_profiles(hermes_home: Path) -> bool:
             continue
         try:
             if child.is_symlink() or child.is_file():
+                if _is_windows() and not child.is_symlink():
+                    os.chmod(child, stat.S_IWRITE)
                 child.unlink()
             else:
-                shutil.rmtree(child)
+                _rmtree(child)
         except Exception as e:
             failed = True
             log_warn(f"Could not remove {child}: {e}")
@@ -1160,10 +1180,14 @@ def _perform_uninstall(
                 "No Electron or setup caches found")
         log_info("Removing configuration and data...")
         if not remove_profiles and _is_default_hermes_home(hermes_home):
-            if not _remove_default_data_preserving_profiles(hermes_home):
-                raise SystemExit(1)
+            removed_home = _remove_default_data_preserving_profiles(hermes_home)
         else:
-            _rmtree_step(hermes_home)
+            removed_home = _rmtree_step(hermes_home)
+        if not removed_home:
+            # The checkout and launchers are already gone: claiming success here
+            # would leave an orphaned home with no way to re-run the uninstall.
+            log_warn(f"Uninstall did not finish: Hermes data is still present in {hermes_home}")
+            raise SystemExit(1)
     else:
         log_info(f"Keeping configuration and data in {hermes_home}")
 
