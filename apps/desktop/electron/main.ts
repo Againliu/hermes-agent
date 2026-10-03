@@ -349,6 +349,7 @@ import {
 } from './linux-nvidia-egl-fallback'
 import { createLocalBackendLifecycle, waitForTeardown } from './local-backend-lifecycle'
 import { resolveIpcFileReadPath, resolveMediaStreamFile, resolvePreviewTargetPath } from './local-read-path'
+import { resolveDesktopClientVersion } from './local-runtime-version'
 import { localSkinProfileKey, readLocalSkinPayload } from './local-skin'
 import { ACTIVE_LOG_POLL_MS, planLogRotation, reclaimActiveLogIfOversized } from './log-rotation'
 import { registerMachineProfile } from './machine-profile'
@@ -17278,10 +17279,17 @@ function showAboutPanelFresh(): void {
 }
 
 ipcMain.handle('hermes:version', async (_event, scope?: { connectionId?: string; profile?: string }) => {
-  const [skew, version] = await Promise.all([detectRendererSkew(), resolveHermesVersion(scope)])
+  const [skew, version, clientVersion] = await Promise.all([
+    detectRendererSkew(),
+    resolveHermesVersion(scope),
+    resolveDesktopClientVersion(INSTALL_STAMP, resolveUpdateRoot(), HERMES_HOME, app.getVersion())
+  ])
 
   return {
     ...appVersionInfo(INSTALL_STAMP, version, app.getVersion()),
+    // Both sides, labelled: the backend the active connection runs, and this machine's install.
+    backendVersion: version,
+    clientVersion,
     electronVersion: process.versions.electron,
     nodeVersion: process.versions.node,
     platform: process.platform,
