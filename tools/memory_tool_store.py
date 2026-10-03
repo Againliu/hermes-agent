@@ -330,11 +330,24 @@ class MemoryStore:
         """A lone add over budget, legacy or one-item batch: the model has not consolidated yet,
         so the live entries come back (its prompt snapshot may predate other sessions' writes)."""
         over = len(ENTRY_DELIMITER.join(self._entries_for(target) + [content])) - limit
-        return self._failure_with_entries(target, (
+        return self._capacity_failure(target, (
             f"Memory at {self._char_count(target):,}/{limit:,} chars; adding this entry ({len(content)} chars) "
             f"would exceed the limit by {over:,} chars. Retry as ONE 'operations' batch that "
             f"removes or shortens (patch) stale entries from current_entries below to free at least "
             f"{over:,} chars AND adds this entry — the limit is checked only on the batch result."))
+
+    def _capacity_failure(self, target: str, message: str) -> dict[str, Any]:
+        """Offer bounded, advisory candidates without bypassing the retry limit."""
+        response = self._failure_with_entries(target, message)
+        if "current_entries" in response:
+            entries = response["current_entries"]
+            candidates = sorted(enumerate(entries), key=lambda item: (len(item[1]), item[0]))[:5]
+            response["candidates_for_eviction"] = [
+                {"index": index, "text": entry, "preview": entry[:120],
+                 "reason": "Shortest entries first; ties follow store order. Review relevance before removal."}
+                for index, entry in candidates
+            ]
+        return response
 
     def _batch_failure(self, target: str, message: str, failure_class: str,
                        closest_entries: Optional[list[str]] = None) -> dict[str, Any]:
@@ -504,7 +517,7 @@ class MemoryStore:
                 return replaced, "Entry removed.", {"removed_entry": entries[idx]}
             new_total = len(ENTRY_DELIMITER.join(replaced))
             if new_total > limit:
-                return self._failure_with_entries(target, (
+                return self._capacity_failure(target, (
                     f"Replacement {_over_limit(new_total, limit)}. Shorten the new content, or retry as ONE "
                     f"'operations' batch with this replace plus removes/shortenings of other stale entries "
                     f"(see current_entries below) — the limit is checked only on the batch result."))
