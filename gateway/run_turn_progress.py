@@ -106,8 +106,8 @@ def tool_log_line(ts: str, tool_name: str, preview: str | None) -> str:
     """One ``tool_progress: log`` line: ``<ts>  <tool>: "<preview>"``.
 
     The preview is JSON-encoded so an embedded ``"`` (a nested shell command, a Windows
-    path) cannot break the log's column structure, and a tool that has no preview (no
-    ``prepare_tool_preview`` branch: skill_manage, todo, memory) gets no dangling ``:``.
+    path) cannot break the log's column structure, and a tool with no preview gets no
+    dangling ``:``.
     """
     line = f"{ts}  {tool_name}"
     return f"{line}: {json.dumps(preview, ensure_ascii=False)}" if preview else line
