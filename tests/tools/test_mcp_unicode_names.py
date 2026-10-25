@@ -79,3 +79,10 @@ def test_unicode_tools_register_and_dispatch_original_names(monkeypatch, tmp_pat
         result = registry.dispatch(name, {"cityId": "example-city"})
         assert "weather data" in result
         assert rpc.await_args.args[:4] == (server, server_name, original, {"cityId": "example-city"})
+
+    # A schema cache written before the Unicode suffix existed holds the old utility name; the lazy
+    # path must register the name the live connection will publish, not the stale one.
+    stale = [{"schema": {"name": "mcp_______list_resources", "description": "", "parameters": {}},
+              "handler_key": "list_resources"}]
+    [utility] = mcp_tool_registration._utility_candidates("天气", stale, None)
+    assert utility.registry_name == utility.schema["name"] == mcp_prefixed_tool_name("天气", "list_resources")
