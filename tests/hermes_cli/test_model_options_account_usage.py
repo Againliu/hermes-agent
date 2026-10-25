@@ -23,22 +23,28 @@ def _snapshot(used: float) -> AccountUsageSnapshot:
 
 def test_picker_reads_cached_usage_and_refreshes_without_waiting(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-123")
-    release, called = threading.Event(), threading.Event()
+    release, called, answered = threading.Event(), threading.Event(), threading.Event()
+    fetch_started: list[float] = []
     answers = iter([_snapshot(92.0)])
 
     def slow_usage_api(_base_url, _api_key):
+        fetch_started.append(time.monotonic())
         called.set()
-        release.wait(10)
+        release.wait(60)  # hung until the test lets go: a picker that waits on it never returns first
+        answered.set()
         return next(answers)
 
     monkeypatch.setitem(account_usage._USAGE_FETCHERS, "openrouter", slow_usage_api)
     ctx = load_picker_context()
 
-    started = time.monotonic()
+    # Time only what follows the usage fetch's start: the rest of the open (cold catalogs, the
+    # Copilot `gh auth token` probe) is not the usage API, and its cost depends on the host.
     first = next(r for r in build_model_options_payload(ctx)["providers"] if r["slug"] == "openrouter")
-    assert time.monotonic() - started < 5, "the picker waited on the usage API"
+    returned = time.monotonic()
+    assert not answered.is_set(), "the picker waited on the usage API"
     assert "usage" not in first, "nothing cached yet, so nothing to show"
     assert called.wait(5), "opening the picker must start a background usage refresh"
+    assert returned - fetch_started[0] < 5, "the picker waited on the usage API"
 
     release.set()
     deadline = time.monotonic() + 5
