@@ -78,4 +78,4 @@ def test_unicode_tools_register_and_dispatch_original_names(monkeypatch, tmp_pat
         assert registry.get_schema(name)["parameters"]["required"] == ["cityId"]
         result = registry.dispatch(name, {"cityId": "example-city"})
         assert "weather data" in result
-        rpc.assert_awaited_with(server, server_name, original, {"cityId": "example-city"})
+        assert rpc.await_args.args[:4] == (server, server_name, original, {"cityId": "example-city"})
