@@ -282,11 +282,16 @@ def retry_invalid_response(
             agent._buffer_diagnostic_status(f"🔄 Codex soft failure ({_soft.reason.value}) — switched to the next pool credential, retrying...")
             return _verdict("continue")
     retry_count += 1
+    # A classified Codex failure goes to the fallback walk like the exception path's, so an outage
+    # benches the primary instead of restoring it next turn. ``unknown`` arms that bench only once
+    # the retry budget is spent on it, never on the eager switch.
+    _failover = {"reason": _soft.reason, "reset_at": _soft_ctx.get("reset_at")} if _soft is not None else {}
+    _eager_failover = {} if _failover.get("reason") is FailoverReason.unknown else _failover
 
     # Eager fallback: empty/malformed responses often mean rate limiting.
     if agent._fallback_index < len(agent._fallback_chain):
         agent._buffer_diagnostic_status("⚠️ Empty/malformed response — switching to fallback...")
-    if agent._try_activate_fallback():
+    if agent._try_activate_fallback(**_eager_failover):
         active_system_prompt = _arm_fallback_restart(
             agent, api_messages, active_system_prompt, _retry)
         retry_count = 0
@@ -304,7 +309,7 @@ def retry_invalid_response(
     if retry_count >= max_retries:
         if agent._has_pending_fallback():
             agent._buffer_diagnostic_status(f"⚠️ Max retries ({max_retries}) for invalid responses — trying fallback...")
-        if agent._try_activate_fallback():
+        if agent._try_activate_fallback(**_failover):
             active_system_prompt = _arm_fallback_restart(
                 agent, api_messages, active_system_prompt, _retry)
             retry_count = 0

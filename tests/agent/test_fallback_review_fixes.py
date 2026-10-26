@@ -60,3 +60,27 @@ def test_a_backup_rate_limit_keeps_the_primary_probe_owed():
                             _rate_limited_until=0)
     arm_primary_cooldown(agent, FailoverReason.rate_limit)
     assert agent._primary_outage_cooldown is True
+
+
+def test_a_codex_response_failed_outage_benches_the_primary():
+    """A Codex HTTP-200 ``status=failed`` server error fails over like a raised 5xx: the backup
+    holds through the outage cooldown instead of handing the next turn back to the dead primary."""
+    from agent.turn_response_check import retry_invalid_response
+    from agent.turn_retry_state import TurnRetryState
+    from tests.agent.test_fallback_outage_cooldown import _agent, _fallback_client, _restore_at
+
+    agent = _agent()
+    agent.api_mode, agent.provider = "codex_responses", "openai-codex"
+    failed = SimpleNamespace(status="failed", output=[], output_text="", error=SimpleNamespace(
+        code="server_error", message="An error occurred while processing your request."))
+    with patch("agent.auxiliary_client.resolve_provider_client", return_value=(_fallback_client(), "glm-5.2")), \
+            patch("agent.fallback_cooldown.time.monotonic", return_value=1000.0), \
+            patch("hermes_cli.config.load_config", return_value={}):
+        verdict = retry_invalid_response(
+            agent, response=failed, error_details=["response.status=failed"], _retry=TurnRetryState(),
+            thinking_spinner=None, messages=[], api_messages=[], api_kwargs=None, active_system_prompt=None,
+            conversation_history=None, retry_count=0, max_retries=3, compression_attempts=0, api_call_count=1,
+            api_request_id="r", api_start_time=0.0, api_duration=0.4, effective_task_id="t", turn_id="turn")
+    assert verdict.action == "break" and agent.model == "glm-5.2"
+    assert _restore_at(agent, 1000.0 + 120)[0] is False
+    assert agent.model == "glm-5.2"
