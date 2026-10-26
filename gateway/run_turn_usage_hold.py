@@ -68,9 +68,14 @@ def _rerun_settings(user_config: Any) -> tuple[bool, int]:
 
 
 def _rerunnable(ctx: Any) -> bool:
-    """A person's plain-text chat turn: what ``/retry`` can re-send faithfully."""
+    """A person's plain-text messaging-chat turn: what ``/retry`` can re-send faithfully. A LOCAL
+    route (one-shot, ``chat -q``, TUI attach) has no inbound handler to re-send into and its client
+    is gone by the reset; Desktop/TUI sessions own their rerun in ``tui_gateway``."""
+    from gateway.config import Platform
+
     return bool(
         ctx.session_key and ctx.session_id and ctx.message
+        and getattr(ctx.source, "platform", None) not in (None, Platform.LOCAL)
         and not ctx.scheduled_heartbeat and not ctx.persist_user_display_kind
         and isinstance(ctx.persist_user_message if ctx.persist_user_message is not None else ctx.message, str)
     )
@@ -116,11 +121,11 @@ def held_turn_result(runner: Any, ctx: Any, runtime_kwargs: dict[str, Any]) -> O
     hold = active_hold(runtime_kwargs.get("provider"), runtime_kwargs.get("base_url") or "")
     if hold is None or runner._refresh_fallback_model():
         return None
-    from agent.turn_failure_copy import limit_reset_copy, stamp_failure
+    from agent.turn_failure_copy import limit_reset_copy, provider_label_for, stamp_failure
 
     rerun_at = queue_rerun(ctx, hold)
-    lead = (f"{hold.get('provider') or 'This provider'} is at its usage limit, so this message was "
-            f"not sent to it. {limit_reset_copy(float(hold['until']))}").strip()
+    lead = (f"{provider_label_for(hold.get('provider')) or 'This provider'} is at its usage limit, so this "
+            f"message was not sent to it. {limit_reset_copy(float(hold['until']))}").strip()
     result = {
         "final_response": lead, "messages": [], "api_calls": 0, "tools": [], "failed": True,
         "completed": False, "error": "provider usage limit hold", "failure_resets_at": float(hold["until"]),
@@ -159,20 +164,26 @@ def _tail_is_held_turn(transcript: list[dict[str, Any]], entry: dict[str, Any]) 
 
 async def _rerun_target(runner: Any, entry: dict[str, Any]) -> tuple[str, Any, Any]:
     """``(verdict, adapter, source)``: ``run``, ``wait`` (adapter offline: keep it pending) or a
-    drop reason (the turn identity no longer holds)."""
+    drop reason (the turn identity no longer holds). Every identity check runs after the last
+    await, so nothing can start a newer turn between the checks and the dispatch."""
     key = entry["session_key"]
+    session = _session_entry(runner, key)
+    source = runner._restored_source(session) if session is not None else None
+    if source is None:
+        return "no session or origin to reply to", None, None
+    async with runner._async_profile_scope_for_source(source):
+        transcript = await runner.async_session_store.load_transcript(session.session_id)
     session = _session_entry(runner, key)
     if session is None or session.session_id != entry.get("session_id"):
         return "session changed", None, None
     if runner._is_session_running(key):
         return "a newer turn is running", None, None
-    source = runner._restored_source(session)
-    if source is None:
-        return "no origin to reply to", None, None
-    async with runner._async_profile_scope_for_source(source):
-        transcript = await runner.async_session_store.load_transcript(session.session_id)
     if not _tail_is_held_turn(transcript or [], entry):
         return "the conversation moved on", None, None
+    if runner._session_key_for_source(source) != key:
+        # A re-sent /retry from this origin would open another session (per-delivery webhook
+        # routes): it could only answer "no previous message", never rerun this turn.
+        return "the origin no longer routes to this session", None, None
     adapter = runner._delivery_adapter_for(source)
     if adapter is None:
         return "wait", None, None

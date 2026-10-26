@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent.usage_hold import record_hold
+from gateway.config import Platform
 from gateway import run_turn_usage_hold as uh
 
 
@@ -28,6 +29,7 @@ def home(tmp_path, monkeypatch):
 def _ctx(*, opted_in=True, max_attempts=2, **over):
     cfg = {"desktop": {"quota_resume": {"enabled": opted_in, "max_attempts": max_attempts}}}
     base = dict(session_key="agent:main:telegram:dm:1", session_id="sess-1", message="summarize the doc",
+                source=SimpleNamespace(platform=Platform.TELEGRAM),
                 scheduled_heartbeat=False, persist_user_display_kind=None, persist_user_message=None,
                 user_config=cfg)
     base.update(over)
@@ -78,6 +80,8 @@ def test_opted_in_turn_is_queued_once_per_session_and_bounded(home):
     hold = {"until": now + 600, "provider": "custom"}
     assert uh.queue_rerun(_ctx(persist_user_message=[{"type": "image_url"}]), hold) is None
     assert uh.queue_rerun(_ctx(persist_user_display_kind="cron_delivery"), hold) is None
+    # A LOCAL one-shot has no inbound handler to re-send into: told the reset, never promised a rerun.
+    assert uh.queue_rerun(_ctx(source=SimpleNamespace(platform=Platform.LOCAL)), hold) is None
 
 
 class _Store:
@@ -98,7 +102,8 @@ class _Adapter:
         self.sent.append(event.text)
 
 
-def _rerun_runner(transcript, *, session_id="sess-1", adapter=None, running=False):
+def _rerun_runner(transcript, *, session_id="sess-1", adapter=None, running=False,
+                  route_key="agent:main:telegram:dm:1"):
     entry = SimpleNamespace(session_id=session_id, origin=SimpleNamespace(platform="telegram"))
 
     async def load_transcript(_sid):
@@ -116,6 +121,7 @@ def _rerun_runner(transcript, *, session_id="sess-1", adapter=None, running=Fals
         _async_profile_scope_for_source=scope,
         _delivery_adapter_for=lambda _s: adapter,
         _resume_owner_authorized=lambda _k, _s: True,
+        _session_key_for_source=lambda _s: route_key,
     )
 
 
@@ -141,14 +147,15 @@ def test_rerun_fires_exactly_once_and_survives_a_restart(home):
     assert adapter.sent == ["/retry"]
 
 
-@pytest.mark.parametrize("change", ["new_session", "moved_on", "running"])
+@pytest.mark.parametrize("change", ["new_session", "moved_on", "running", "origin_reroutes"])
 def test_rerun_is_dropped_when_the_turn_identity_changed(home, change):
     tail, at = _queued(home)
     adapter = _Adapter()
     if change == "moved_on":
         tail = tail + [{"role": "user", "content": "never mind"}, {"role": "assistant", "content": "ok"}]
     runner = _rerun_runner(tail, adapter=adapter, session_id="sess-2" if change == "new_session" else "sess-1",
-                           running=change == "running")
+                           running=change == "running",
+                           route_key="agent:main:webhook:other" if change == "origin_reroutes" else "agent:main:telegram:dm:1")
     assert asyncio.run(uh.rerun_due(runner, [home], now=at)) == 0
     assert adapter.sent == []
     assert json.loads((home / uh.QUEUE_FILE).read_text(encoding="utf-8-sig")) == {}
