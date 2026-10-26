@@ -157,10 +157,9 @@ def merge_sections(soul: str, sections: dict[str, str]) -> str:
 
 
 def _mcp_names(profile_dir: Path) -> list[str]:
-    from hermes_cli.config import read_user_config_raw
-    from hermes_cli.config_backend import config_exists
-    cfg_path = profile_dir / "config.yaml"
-    servers = (read_user_config_raw(cfg_path) or {}).get("mcp_servers") if config_exists(cfg_path) else None
+    """MCP servers the profile's runtime would see: its own config.yaml plus the managed overlay."""
+    from hermes_cli.config_effective import load_user_config_effective
+    servers = load_user_config_effective(profile_dir / "config.yaml").get("mcp_servers")
     return sorted(str(n) for n in servers) if isinstance(servers, dict) else []
 
 
@@ -171,8 +170,10 @@ def _toolset_names() -> list[str]:
 
 
 def build_catalog(profile_dir: Path) -> Catalog:
-    """Installed skills + configured MCP servers of ``profile_dir`` and this install's toolsets.
-    Read by explicit path, so no profile scope needs binding."""
+    """Installed skills + configured MCP servers of ``profile_dir`` (read by explicit path) and the
+    toolsets of the CURRENT profile scope: plugin toolsets are discovered per profile home, so
+    callers bind ``profile_dir``'s scope around this call (and only this call — the aux model
+    call that follows bills the caller)."""
     from hermes_cli.profile_describer import _collect_skills, _sample_skills
     try:
         toolsets = _toolset_names()

@@ -15,6 +15,16 @@ def _catalog_source(args) -> Path:
     return Path(get_profile_dir(getattr(args, "clone_from", None) or get_active_profile_name()))
 
 
+def _source_catalog(source: Path):
+    """The catalog under ``source``'s home, so plugin toolsets are the ones installed THERE."""
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    token = set_hermes_home_override(source)
+    try:
+        return build_catalog(source)
+    finally:
+        reset_hermes_home_override(token)
+
+
 def render_draft(name: str, draft: ProfileDraft) -> str:
     lines = [f"Name:        {name}", f"Title:       {draft.title or '(none)'}",
              f"Description: {draft.description or '(none)'}", "", "SOUL.md", "-------", draft.soul.rstrip(), ""]
@@ -37,7 +47,7 @@ def confirm_draft(args, die) -> Optional[ProfileDraft]:
     if not interactive and not getattr(args, "yes", False):
         die("Error: --from-prompt shows a draft and asks before creating; re-run in a terminal or add --yes.")
     print("Drafting the profile with the auxiliary model…", flush=True)
-    draft = draft_profile(args.from_prompt, catalog=build_catalog(_catalog_source(args)))
+    draft = draft_profile(args.from_prompt, catalog=_source_catalog(_catalog_source(args)))
     if not draft.ok:
         die(f"Error: could not draft the profile: {draft.reason}")
     print("\n" + render_draft(args.profile_name, draft) + "\n")

@@ -455,8 +455,10 @@ def _(rid, params: dict) -> dict:
             profile_dir = Path(get_profile_dir(str(params.get("source") or "default").strip() or "default"))
         except ValueError as e:
             return _err(rid, 4064, str(e))
+    with _hermes_home_scope(profile_dir):
+        catalog = profile_draft.build_catalog(profile_dir)
     draft = profile_draft.draft_profile(
-        str(params.get("description") or ""), catalog=profile_draft.build_catalog(profile_dir),
+        str(params.get("description") or ""), catalog=catalog,
         current=current, note=str(params.get("note") or ""), only=str(params.get("only") or "").strip())
     out = draft.to_wire()
     if previous is not None:

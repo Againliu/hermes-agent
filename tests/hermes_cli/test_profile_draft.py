@@ -112,7 +112,8 @@ def home(tmp_path, monkeypatch):
 
 
 def _tree(root: Path) -> dict:
-    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    # Empty ``*.lock`` files are the read-side flock of the auth store, not profile content.
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file() and p.suffix != ".lock"}
 
 
 def test_rpc_drafts_from_the_target_catalog_and_writes_nothing(home, llm):
@@ -154,3 +155,74 @@ def test_cli_from_prompt_refuses_without_a_tty_unless_yes(home, llm, monkeypatch
     created = home / "profiles" / "mailbot"
     assert profile_draft.split_soul((created / "SOUL.md").read_text(encoding="utf-8")) == REPLY["sections"]
     assert "Sorts new mail" in (created / "profile.yaml").read_text(encoding="utf-8")
+
+
+# ── review round: round trips, saved-profile edits, publish-time identity, target-scoped catalog ──
+
+
+def test_rpc_result_sent_back_as_current_keeps_every_other_section(home, llm):
+    from tui_gateway import server
+    first = server._methods["profiles.draft"](1, {"description": "triage my inbox"})["result"]
+    llm.reply = json.dumps(REPLY | {"title": "Changed", "sections": {k: "NEW" for k in REPLY["sections"]}})
+
+    voice = server._methods["profiles.draft"](2, {"description": "triage my inbox", "current": first,
+                                                  "note": "friendlier", "only": "voice"})["result"]
+    title = server._methods["profiles.draft"](3, {"description": "triage my inbox", "current": first,
+                                                  "note": "shorter", "only": "title"})["result"]
+
+    texts = {s["key"]: s["text"] for s in voice["sections"]}
+    assert texts == {k: ("NEW" if k == "voice" else v) for k, v in REPLY["sections"].items()}
+    assert title["ok"] and title["title"] == "Changed" and title["sections"] == first["sections"]
+
+
+def test_edit_mode_keeps_saved_text_and_capabilities_the_draft_cannot_see(home, llm):
+    from tui_gateway import server
+    skill = home / "profiles" / "scout" / "skills" / "email" / "himalaya"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: himalaya\n---\n", encoding="utf-8")
+
+    edit = server._methods["profiles.draft"](1, {"name": "scout", "description": "x", "note": "terse",
+                                                 "only": "voice"})["result"]
+
+    # The model saw the whole saved file, and the proposed SOUL keeps the custom section.
+    assert "Keep me." in llm.calls[0]["messages"][1]["content"]
+    assert "## Messaging other agents\n\nKeep me." in edit["soul"]
+    assert "## Voice\n\nShort and plain." in edit["soul"] and "Old role." in edit["soul"]
+    # Only the voice was asked for: the enabled capabilities come back unchanged.
+    assert edit["skills"] == edit["previous"]["skills"] == ["himalaya"]
+    assert edit["toolsets"] == edit["previous"]["toolsets"]
+
+
+def test_cli_from_prompt_publishes_the_profile_with_the_draft_identity(home, llm, monkeypatch):
+    from hermes_cli import profile_cmd, profiles
+    seen = {}
+
+    def snapshot(canon):
+        d = home / "profiles" / canon
+        seen["soul"] = (d / "SOUL.md").read_text(encoding="utf-8-sig")
+        seen["meta"] = (d / "profile.yaml").read_text(encoding="utf-8-sig")
+    monkeypatch.setattr(profiles, "_notify_multiplexer", snapshot)
+
+    profile_cmd._profile_create(_create_args(yes=True))
+
+    assert profile_draft.split_soul(seen["soul"]) == REPLY["sections"]
+    assert "Sorts new mail" in seen["meta"] and "Inbox Triage" in seen["meta"]
+
+
+def test_catalog_lists_managed_mcp_servers_and_the_targets_toolsets(home, llm, tmp_path, monkeypatch):
+    from hermes_cli import managed_scope
+    from hermes_constants import get_hermes_home
+    from tui_gateway import server
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    (managed / "config.yaml").write_text("mcp_servers:\n  corp:\n    command: corp-mcp\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed))
+    managed_scope.invalidate_managed_cache()
+    homes = []
+    monkeypatch.setattr(profile_draft, "_toolset_names", lambda: homes.append(get_hermes_home()) or ["web"])
+
+    llm.reply = json.dumps(REPLY | {"mcp_servers": ["corp"]})
+    result = server._methods["profiles.draft"](1, {"description": "triage", "source": "scout"})["result"]
+
+    assert result["mcp_servers"] == ["corp"]  # scout has no config.yaml; the managed server still counts
+    assert homes == [home / "profiles" / "scout"]
