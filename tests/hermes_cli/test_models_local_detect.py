@@ -280,27 +280,37 @@ async def test_a_gateway_session_picking_a_detected_row_runs_on_that_server(serv
     assert runtime["base_url"].rstrip("/") == f"http://127.0.0.1:{srv.port}/v1"
 
 
-def _raw_server(reply) -> int:
-    """A loopback port whose every connection gets ``reply(conn)`` after the request arrives."""
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    sock.listen()
+@pytest.fixture
+def raw_server():
+    """Factory for loopback ports whose every connection gets ``reply(conn)`` after the request
+    arrives; each listener closes at teardown, which also ends its accept thread."""
+    listeners: list[socket.socket] = []
 
-    def serve():
-        while True:
-            try:
-                conn, _ = sock.accept()
-            except OSError:
-                return
-            with conn:
-                conn.recv(65536)
+    def start(reply) -> int:
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        sock.listen()
+        listeners.append(sock)
+
+        def serve():
+            while True:
                 try:
-                    reply(conn)
+                    conn, _ = sock.accept()
                 except OSError:
-                    pass
+                    return
+                with conn:
+                    conn.recv(65536)
+                    try:
+                        reply(conn)
+                    except OSError:
+                        pass
 
-    threading.Thread(target=serve, daemon=True).start()
-    return sock.getsockname()[1]
+        threading.Thread(target=serve, daemon=True).start()
+        return sock.getsockname()[1]
+
+    yield start
+    for sock in listeners:
+        sock.close()
 
 
 def _point(monkeypatch, kind: str, port: int) -> None:
@@ -309,16 +319,16 @@ def _point(monkeypatch, kind: str, port: int) -> None:
     monkeypatch.setattr(detect, "_KIND_BY_NAME", {k.kind: k for k in known})
 
 
-def test_a_port_speaking_broken_http_does_not_fail_the_scan(servers, monkeypatch):
+def test_a_port_speaking_broken_http_does_not_fail_the_scan(servers, raw_server, monkeypatch):
     """Whatever listens on a scanned port may not speak HTTP; that port yields no row and the other
     servers are still offered (the scan used to raise and the picker lost every row)."""
     servers("ollama", {"/v1/models": _models(["llama3.2:3b"], "library")})
-    _point(monkeypatch, "vllm", _raw_server(lambda conn: conn.sendall(b"SSH-2.0-OpenSSH_9.6\r\n\r\n")))
+    _point(monkeypatch, "vllm", raw_server(lambda conn: conn.sendall(b"SSH-2.0-OpenSSH_9.6\r\n\r\n")))
 
     assert [s.kind for s in detect.detect_local_servers(refresh=True)] == ["ollama"]
 
 
-def test_a_server_dripping_bytes_cannot_hold_a_probe(servers, monkeypatch):
+def test_a_server_dripping_bytes_cannot_hold_a_probe(servers, raw_server):
     """Each byte arrives under the socket timeout, so only a total deadline ends the probe."""
     def drip(conn):
         conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n")
@@ -326,7 +336,7 @@ def test_a_server_dripping_bytes_cannot_hold_a_probe(servers, monkeypatch):
             conn.sendall(b" ")
             time.sleep(0.05)  # health: allow HX013 -- the drip delay is the behaviour under test
 
-    port = _raw_server(drip)
+    port = raw_server(drip)
     started = time.monotonic()
     assert detect.probe_port(port, expected=detect._Kind("vllm", "vLLM", port), timeout=0.4) is None
     assert time.monotonic() - started < 2
