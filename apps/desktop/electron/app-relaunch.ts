@@ -64,26 +64,30 @@ export function createAppRelauncher(
     exit: code => {
       exiting = true
 
-      if (pendingArgs) {
-        const strategy = relaunchStrategy(execPath, env)
-        // The new process skips `hermes desktop`: it needs the launcher's short socket TMPDIR,
-        // not the long one main.ts restored after the lock (linux-sandbox-relaunch.ts).
-        const childEnv = { ...env }
-        restoreLaunchTmpdir(childEnv)
-        // relaunchNow's detached start (lock dropped first) serves this executable as well as an image.
-        const detached: RelaunchStrategy = strategy.kind === 'appimage' ? strategy : { kind: 'appimage', image: execPath }
+      try {
+        if (pendingArgs) {
+          const strategy = relaunchStrategy(execPath, env)
+          // The new process skips `hermes desktop`: it needs the launcher's short socket TMPDIR,
+          // not the long one main.ts restored after the lock (linux-sandbox-relaunch.ts).
+          const childEnv = { ...env }
+          restoreLaunchTmpdir(childEnv)
+          // relaunchNow's detached start (lock dropped first) serves this executable as well as an image.
+          const detached: RelaunchStrategy =
+            strategy.kind === 'appimage' ? strategy : { kind: 'appimage', image: execPath }
 
-        if (canRelaunch(detached, 'relaunching through Electron instead', childEnv)) {
-          relaunchNow(app, pendingArgs, detached, childEnv)
-        } else {
-          // The backend is already down: Electron's relauncher is the last way back.
-          app.relaunch({ args: pendingArgs })
+          if (canRelaunch(detached, 'relaunching through Electron instead', childEnv)) {
+            relaunchNow(app, pendingArgs, detached, childEnv)
+          } else {
+            // The backend is already down: Electron's relauncher is the last way back.
+            app.relaunch({ args: pendingArgs })
+          }
+
+          pendingArgs = null
         }
-
-        pendingArgs = null
+      } finally {
+        // A synchronous spawn throw (E2BIG) must not leave the app running with its lock released.
+        app.exit(code)
       }
-
-      app.exit(code)
     }
   }
 }
