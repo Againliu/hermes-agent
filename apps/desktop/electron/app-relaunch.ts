@@ -50,14 +50,20 @@ export function createAppRelauncher(
   }
 
   let pendingArgs: string[] | null = null
+  // JS keeps running for a moment after app.exit(); a relaunch requested then would start a second child.
+  let exiting = false
 
   return {
     commandLine: app.commandLine,
     releaseSingleInstanceLock: () => app.releaseSingleInstanceLock(),
     relaunch: options => {
-      pendingArgs = options.args ?? process.argv.slice(1)
+      if (!exiting) {
+        pendingArgs = options.args ?? process.argv.slice(1)
+      }
     },
     exit: code => {
+      exiting = true
+
       if (pendingArgs) {
         const strategy = relaunchStrategy(execPath, env)
         // The new process skips `hermes desktop`: it needs the launcher's short socket TMPDIR,
@@ -67,7 +73,7 @@ export function createAppRelauncher(
         // relaunchNow's detached start (lock dropped first) serves this executable as well as an image.
         const detached: RelaunchStrategy = strategy.kind === 'appimage' ? strategy : { kind: 'appimage', image: execPath }
 
-        if (canRelaunch(detached)) {
+        if (canRelaunch(detached, 'relaunching through Electron instead', childEnv)) {
           relaunchNow(app, pendingArgs, detached, childEnv)
         } else {
           // The backend is already down: Electron's relauncher is the last way back.
