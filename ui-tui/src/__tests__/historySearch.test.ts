@@ -3,6 +3,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { getOverlayState, patchOverlayState, resetFlowOverlays, resetOverlayState } from '../app/overlayStore.js'
 import { historyPreview, searchHistory } from '../lib/historySearch.js'
 
 describe('searchHistory', () => {
@@ -16,6 +17,14 @@ describe('searchHistory', () => {
 
   it('previews a multi-line entry on one line', () => {
     expect(historyPreview('first line\n  second line')).toBe('first line ⏎ second line')
+  })
+
+  it('stays open, query intact, across a turn completing', () => {
+    patchOverlayState({ historySearch: { query: 'deploy' } })
+    resetFlowOverlays()
+
+    expect(getOverlayState().historySearch).toEqual({ query: 'deploy' })
+    resetOverlayState()
   })
 })
 
