@@ -100,3 +100,14 @@ def test_frozen_worker_masks_its_snapshot_without_opening_profile_files(tmp_path
     assert result.returncode == 0, result.stdout + result.stderr
     probe = json.loads(result.stdout.strip().splitlines()[-1])
     assert probe == {"out": f"echo {MARKER} {MARKER}", "opens": []}
+
+
+def test_a_live_connections_values_survive_eviction_until_its_pin_is_dropped(tmp_path):
+    live = "liveConnection" + "Cred5521qq"
+    pin = known.register_secret_values([live], home=tmp_path)
+    newer = [f"rotatedValue{i:06d}xx" for i in range(known._RUNTIME_MAX_PER_PROFILE + 5)]
+    known.register_secret_values(newer, home=tmp_path)
+    assert redact_known_secret_values(f"echo {live}", home=tmp_path) == f"echo {MARKER}"
+    del pin  # the connection ended: the value ages out like any other
+    known.register_secret_values(["afterRelease" + "Value9911zz"], home=tmp_path)
+    assert redact_known_secret_values(f"echo {live}", home=tmp_path) == f"echo {live}"

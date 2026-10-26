@@ -12,9 +12,10 @@ URL-encoded form:
 - ``config.yaml`` credential fields (``api_key``, ``token``, …) at any depth, every MCP
   server's ``headers`` values, credential-named ``env`` values and ``url`` query values;
 - MCP OAuth tokens under ``mcp-tokens/``;
-- values registered at runtime (:func:`register_secret_value`), e.g. the rendered
+- values registered at runtime (:func:`register_secret_values`), e.g. the rendered
   ``${VAR}`` env/headers an MCP server was spawned with. These stay registered after
-  the config is edited, so a still-running child cannot print the old value unmasked.
+  the config is edited (pinned for as long as the connection lives), so a still-running
+  child cannot print the old value unmasked.
 
 One process serves many profiles, so everything is keyed by profile home: profile A's
 values never mask (or confirm the existence of) bytes in profile B's output. Values
@@ -29,6 +30,7 @@ import os
 import re
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, quote_plus
@@ -194,7 +196,7 @@ def _forms(value: str) -> set:
 
 
 class _Profile:
-    __slots__ = ("checked_at", "file_values", "forms", "load_lock", "loaded", "runtime", "signature")
+    __slots__ = ("checked_at", "file_values", "forms", "load_lock", "loaded", "pins", "runtime", "signature")
 
     def __init__(self):
         self.checked_at = 0.0
@@ -203,7 +205,17 @@ class _Profile:
         self.signature = None
         self.file_values: frozenset = frozenset()
         self.runtime: OrderedDict = OrderedDict()
+        self.pins: weakref.WeakSet = weakref.WeakSet()
         self.forms: tuple = ()
+
+    def evict(self) -> None:
+        """Oldest runtime values first, past the cap, skipping any a live pin holds."""
+        excess = len(self.runtime) - _RUNTIME_MAX_PER_PROFILE
+        if excess <= 0:
+            return
+        pinned = frozenset().union(*(pin.values for pin in list(self.pins)))
+        for value in [v for v in self.runtime if v not in pinned][:excess]:
+            del self.runtime[value]
 
     def rebuild_forms(self) -> None:
         forms = set()
@@ -224,21 +236,36 @@ def _scope(home) -> tuple[str, Path]:
     return hermes_home_key(path), path
 
 
-def register_secret_value(value, *, home=None) -> None:
-    """Mask *value* in this profile's output for the rest of the process (bounded, LRU)."""
-    if not _usable(value):
-        return
+class SecretPin:
+    """Keeps the values it was registered with from LRU eviction while something references it."""
+
+    __slots__ = ("__weakref__", "values")
+
+    def __init__(self, values: frozenset):
+        self.values = values
+
+
+def register_secret_values(values, *, home=None) -> SecretPin:
+    """Mask *values* in this profile's output for the rest of the process. The registry is bounded
+    (LRU), but never evicts a value whose returned pin is still alive: a live connection holds its
+    pin, so a long-running child cannot echo its credential unmasked after 256 newer registrations
+    pushed it out and the config edit removed it from the files."""
     key, _ = _scope(home)
-    value = value.strip()
+    pin = SecretPin(frozenset(v.strip() for v in values if _usable(v)))
     with _LOCK:
         profile = _PROFILES.setdefault(key, _Profile())
-        if value in profile.runtime:
-            profile.runtime.move_to_end(value)
-            return
-        profile.runtime[value] = None
-        while len(profile.runtime) > _RUNTIME_MAX_PER_PROFILE:
-            profile.runtime.popitem(last=False)
-        profile.rebuild_forms()
+        profile.pins.add(pin)
+        added = False
+        for value in pin.values:
+            if value in profile.runtime:
+                profile.runtime.move_to_end(value)
+            else:
+                profile.runtime[value] = None
+                added = True
+        if added:
+            profile.evict()
+            profile.rebuild_forms()
+    return pin
 
 
 _LOADING = threading.local()
