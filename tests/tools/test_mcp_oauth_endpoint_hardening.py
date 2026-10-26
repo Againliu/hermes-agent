@@ -160,9 +160,9 @@ def test_token_error_body_is_capped_before_any_reader(fake_dns, tmp_path, monkey
             return httpx.Response(400, content=_huge())
         return httpx.Response(401)
     httpx, drive = _drive_through_mcp_transport(provider, _handler)
-    with pytest.raises(Exception):
+    with pytest.raises(OAuthEndpointRefused, match="exceeds"):
         asyncio.run(drive())
-    assert len(pulled) <= 2
+    assert len(pulled) == 2
 
 
 def test_oversized_oauth_response_is_refused(fake_dns):
