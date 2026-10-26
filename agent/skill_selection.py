@@ -145,38 +145,43 @@ def shortlist(query: Any, docs: tuple[tuple[str, str, tuple[str, ...]], ...]) ->
 
 
 @lru_cache(maxsize=4096)
-def _skill_file_doc(path: str, _sig: tuple) -> tuple[tuple[str, ...], str, tuple[str, ...]]:
-    """``(names it answers to, full description, situations)`` for one SKILL.md, cached per file signature."""
+def _skill_file_doc(path: str, _sig: tuple) -> tuple[str, str, tuple[str, ...]]:
+    """``(declared or directory name, full description, situations)`` for one SKILL.md, cached per
+    file signature; an unreadable file has no name."""
     from agent.skill_utils import _config_str_list, _hermes_metadata, _normalize_skill_description, parse_frontmatter
     try:
         frontmatter, _ = parse_frontmatter(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeDecodeError):
-        return (), "", ()
+        return "", "", ()
     meta = _hermes_metadata(frontmatter)
     # Retrieval-only (the index never renders either); a malformed value (``triggers: true``) reads
     # as no phrases instead of raising and silencing every suggestion.
     phrases = [p for key in ("situations", "triggers") for p in _config_str_list(meta.get(key, frontmatter.get(key)))]
-    names = (str(frontmatter.get("name") or "").strip(), Path(path).parent.name)
-    return tuple(n for n in names if n), _normalize_skill_description(frontmatter), tuple(phrases)
+    name = str(frontmatter.get("name") or "").strip() or Path(path).parent.name
+    return name, _normalize_skill_description(frontmatter), tuple(phrases)
 
 
-def skill_docs_from_roots(roots: Iterable[Path], index: dict[str, str]) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
-    """A document for every skill ``index`` (``{name: index row}``) offers. Skills not found under
-    ``roots`` (plugin skills) fall back to their index row."""
-    from agent.skill_utils import iter_skill_index_files
+def skill_docs_from_roots(roots: Iterable[tuple[int, Path]], index: dict[str, str]) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    """A document for every skill ``index`` (``{name: index row}``) offers. The files under ``roots``
+    (``(tier, dir)``) are resolved by the shared ``resolve_skill_catalog``, so each document sits under
+    the ``load_name`` the index lists — a same-tier duplicate's exact path included. Skills with no
+    file (plugin skills) fall back to their index row."""
+    from agent.skill_utils import TIER_PROJECT, iter_project_skill_files, iter_skill_index_files, resolve_skill_catalog
     from utils import file_signature
-    found: dict[str, tuple[str, tuple[str, ...]]] = {}
-    for root in roots:
+    scanned: list[dict[str, Any]] = []
+    for tier, root in roots:
         if not root.is_dir():
             continue
-        for skill_file in iter_skill_index_files(root, "SKILL.md"):
+        files = iter_project_skill_files(root) if tier == TIER_PROJECT else iter_skill_index_files(root, "SKILL.md")
+        for skill_file in files:
             try:
                 sig = tuple(file_signature(skill_file.stat()))
             except OSError:
                 continue
-            file_names, desc, situations = _skill_file_doc(str(skill_file), sig)
-            for n in file_names:
-                found.setdefault(n, (desc, situations))
+            name, desc, situations = _skill_file_doc(str(skill_file), sig)
+            if name:
+                scanned.append({"name": name, "tier": tier, "root": root, "path": skill_file, "doc": (desc, situations)})
+    found = {e["load_name"]: e["doc"] for e in resolve_skill_catalog(scanned) if e["load_name"]}
     return tuple(
         (name, *found.get(name, (row.split(": ", 1)[1] if ": " in row else "", ())))
         for name, row in sorted(index.items())
@@ -227,17 +232,19 @@ def stage_skill_shortlist_note(agent: Any, prompt: Any, conversation_history: An
     the sidecar the once-per-session check reads back."""
     from agent.skill_utils import _skills_cfg, get_skill_search_roots
     from agent.skills_index_delta import index_entries
-    from agent.system_prompt import _agent_skills_dir
+    from agent.system_prompt import _agent_skills_dir, _skills_prompt
     if selection_mode(_skills_cfg()) != SELECTION_SHORTLIST or getattr(agent, "_persist_disabled", False):
         return False
     if getattr(agent, "provider", None) == "moa" or getattr(agent, "api_mode", None) == "codex_app_server":
         return False
-    index = index_entries(prompt)
-    if not index:
+    if not index_entries(prompt):
         return False
     try:
+        # What the session can load NOW (the index stage_skills_index_note compares the prompt
+        # with), so a skill removed since the prompt was built is never suggested.
+        index = index_entries(_skills_prompt(agent))
         loaded = _loaded_skills(conversation_history)
-        roots = [d for _t, d in get_skill_search_roots(_agent_skills_dir(agent))]
+        roots = get_skill_search_roots(_agent_skills_dir(agent))
         docs = tuple(d for d in skill_docs_from_roots(roots, index) if d[0] not in loaded)
         names = shortlist(user_message, docs)
     except Exception:

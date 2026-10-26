@@ -23,14 +23,15 @@ sys.path.insert(0, str(REPO))
 def catalog(roots: list[Path]) -> tuple[dict[str, str], tuple]:
     """``(index rows, shortlist docs)`` for every skill under ``roots``, shaped like the live index."""
     from agent.skill_selection import skill_docs_from_roots
-    from agent.skill_utils import extract_skill_description, iter_skill_index_files, parse_frontmatter
+    from agent.skill_utils import TIER_LOCAL, extract_skill_description, iter_skill_index_files, parse_frontmatter
     index: dict[str, str] = {}
     for root in roots:
         for skill_file in iter_skill_index_files(root, "SKILL.md"):
             frontmatter, _ = parse_frontmatter(skill_file.read_text(encoding="utf-8-sig"))
             name = str(frontmatter.get("name") or skill_file.parent.name)
             index.setdefault(name, f"    - {name}: {extract_skill_description(frontmatter)}")
-    return index, skill_docs_from_roots(roots, index)
+    # Root order is precedence, as setdefault above: each root its own (non-project) tier.
+    return index, skill_docs_from_roots([(TIER_LOCAL + i, root) for i, root in enumerate(roots)], index)
 
 
 def evaluate(cases: dict, docs: tuple, verbose: bool = False) -> dict:

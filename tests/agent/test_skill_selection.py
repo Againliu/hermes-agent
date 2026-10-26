@@ -75,3 +75,24 @@ def test_malformed_situations_in_one_skill_do_not_silence_the_others(tmp_path, m
                    encoding="utf-8")
     note = _turn(_agent(tmp_path), prompt, [], "my pull request has merge conflicts again, can you sort it out")
     assert "    - merge-repair:" in note
+
+
+def test_ranks_the_resolved_catalog_the_session_can_load_now(tmp_path, monkeypatch):
+    """A same-tier name collision is listed by exact path and still ranks on its situations; a skill
+    deleted after the prompt was built is never suggested from the prompt's stale row."""
+    _setup(tmp_path, monkeypatch, "shortlist")
+    skills = tmp_path / "skills"
+    for category in ("ops", "infra"):
+        path = skills / category / "rollout" / "SKILL.md"
+        path.parent.mkdir(parents=True)
+        situation = "my kubernetes canary is stuck halfway" if category == "infra" else "ship the release"
+        path.write_text(f"---\nname: rollout\ndescription: {category} rollouts.\nmetadata:\n  hermes:\n"
+                        f"    situations:\n      - {situation}\n---\nBody.\n", encoding="utf-8")
+    pb.clear_skills_system_prompt_cache()
+    prompt = "Identity.\n\n" + pb.build_skills_system_prompt()
+    assert "- infra/rollout:" in prompt
+    assert "    - infra/rollout:" in _turn(_agent(tmp_path), prompt, [], "the kubernetes canary is stuck halfway again")
+
+    (skills / "devops" / "merge-repair" / "SKILL.md").unlink()
+    pb.clear_skills_system_prompt_cache()
+    assert _turn(_agent(tmp_path), prompt, [], "my pull request has merge conflicts again, can you sort it out") == ""
