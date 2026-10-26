@@ -1,14 +1,14 @@
 ---
-title: "Requesting Code Review — Pre-commit review: security scan, quality gates, auto-fix"
+title: "Requesting Code Review — Read-only review by default; commit only if authorized"
 sidebar_label: "Requesting Code Review"
-description: "Pre-commit review: security scan, quality gates, auto-fix"
+description: "Read-only review by default; commit only if authorized"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Requesting Code Review
 
-Pre-commit review: security scan, quality gates, auto-fix.
+Read-only review by default; commit only if authorized.
 
 ## Skill metadata
 
@@ -16,11 +16,11 @@ Pre-commit review: security scan, quality gates, auto-fix.
 |---|---|
 | Source | Bundled (installed by default) |
 | Path | `skills/software-development/requesting-code-review` |
-| Version | `2.1.0` |
+| Version | `2.2.0` |
 | Author | Hermes Agent (adapted from obra/superpowers + MorAlekss) |
 | License | MIT |
 | Platforms | linux, macos, windows |
-| Tags | `code-review`, `security`, `verification`, `quality`, `pre-commit`, `auto-fix` |
+| Tags | `code-review`, `security`, `verification`, `quality`, `pre-commit`, `auto-fix`, `read-only` |
 | Related skills | [`subagent-driven-development`](../../optional/software-development/software-development-subagent-driven-development.md), [`test-driven-development`](../../bundled/software-development/software-development-test-driven-development.md), [`github`](../../bundled/software-development/software-development-github.md) |
 
 ## Reference: full SKILL.md
@@ -36,12 +36,30 @@ quality gates, an independent reviewer subagent, and an auto-fix loop.
 
 **Core principle:** No agent should verify its own work. Fresh context finds what you miss.
 
+**Mutation principle:** Review-only is **read-only**. Auto-fix and commit run only
+after explicit authorization (see When to Use). Unauthorized success still
+reports and stops.
+
 ## When to Use
 
-- After implementing a feature or bug fix, before `git commit` or `git push`
-- When user says "commit", "push", "ship", "done", "verify", or "review before merge"
-- After completing a task with 2+ file edits in a git repo
-- After each task in subagent-driven-development (the two-stage review)
+**Review-only** (default when the user did not authorize mutation):
+- User asks to review / verify / inspect / audit / report
+- Independent check of a diff without asking to land it
+- Review-only is **read-only**: report findings and stop. Do not auto-fix,
+  `git add`, or `git commit`.
+
+**Pre-commit / authorized mutation** — only when one of these is true:
+- User explicitly says "commit", "push", "ship", "commit after review", or
+  "verify then commit"
+- User explicitly asks to apply fixes / auto-fix / "fix issues"
+- An outer workflow (e.g. subagent-driven-development's task-completion gate)
+  already authorized verify-then-commit
+
+**Also use after** (path still follows the authorization gate above):
+- Implementing a feature or bug fix, before an *authorized* `git commit` or
+  `git push`
+- Completing a task with 2+ file edits in a git repo
+- Each task in subagent-driven-development (the two-stage review)
 
 **Skip for:** documentation-only changes, pure config tweaks, or when user says "skip verification".
 
@@ -54,10 +72,12 @@ quality gates, an independent reviewer subagent, and an auto-fix loop.
 git diff --cached
 ```
 
-If empty, try `git diff` then `git diff HEAD~1 HEAD`.
-
-If `git diff --cached` is empty but `git diff` shows changes, tell the user to
-`git add <files>` first. If still empty, run `git status` — nothing to verify.
+If empty, review the unstaged work with `git diff` instead; do not stage it
+yourself. If both are empty, run `git status`: there is nothing local to verify.
+To review a branch rather than the working tree, diff it against its merge-base
+(`git diff "$(git merge-base origin/main HEAD)"...HEAD`). Never fall back to
+`git diff HEAD~1 HEAD` silently: the last commit may not be the change the user
+asked about, and it fails on a repository's first commit.
 
 If the diff exceeds 15,000 characters, split by file:
 ```bash
@@ -88,9 +108,23 @@ git diff --cached | grep "^+" | grep -E "execute\(f\"|\.format\(.*SELECT|\.forma
 
 ## Step 3 — Baseline tests and linting
 
-Detect the project language and run the appropriate tools. Capture the failure
-count BEFORE your changes as **baseline_failures** (stash changes, run, pop).
+Detect the project language and run the appropriate tools on the working tree.
 Only NEW failures introduced by your changes block the commit.
+
+**Pre-existing or new?** For each failing test, rerun just that test at the
+merge-base in a detached worktree, so your uncommitted work is never touched:
+
+```bash
+base=$(git merge-base origin/main HEAD)   # or HEAD for uncommitted-only work
+git worktree add --detach ../baseline-check "$base"
+(cd ../baseline-check && python -m pytest path/to/test_file.py::test_name -q)
+git worktree remove --force ../baseline-check
+```
+
+Fails there too → **pre_existing** (report it, it does not block). Passes there →
+**introduced** by this change. Never stash-run-pop to get a baseline: `git stash`
+skips untracked files unless told otherwise, a conflicting `pop` leaves the tree
+half-restored, and `refs/stash` is shared by every worktree of the repository.
 
 **Test frameworks** (auto-detect by project files):
 ```bash
@@ -200,9 +234,19 @@ Return ONLY this JSON:
 
 Combine results from Steps 2, 3, and 5.
 
-**All passed:** Proceed to Step 8 (commit).
+**All passed:**
+- **Review-only** (no explicit commit/push/ship/fix authorization): report the
+  verdict and stop. Do **not** proceed to Step 7 or Step 8.
+- **Commit authorized** (user asked to commit/push/ship / "commit after review"
+  / "verify then commit", or an outer workflow already authorized
+  verify-then-commit): proceed to Step 8.
 
-**Any failures:** Report what failed, then proceed to Step 7 (auto-fix).
+**Any failures:**
+- Report what failed (template below).
+- **Review-only:** stop after the report. Do **not** run Step 7 (auto-fix
+  mutates the working tree).
+- **Fix authorized** (user asked to fix / auto-fix / apply fixes, or an outer
+  workflow authorized repairs): proceed to Step 7.
 
 ```
 VERIFICATION FAILED
@@ -215,6 +259,11 @@ Suggestions (non-blocking): [list]
 ```
 
 ## Step 7 — Auto-fix loop
+
+**Authorization gate:** Run this step only when the user explicitly requested
+fix / auto-fix / apply fixes, or an outer workflow authorized repairs.
+On review-only requests, skip this step — report issues and stop. Do not
+modify files.
 
 **Maximum 2 fix-and-reverify cycles. Interactive sessions only (see Step 5).**
 
@@ -243,20 +292,32 @@ Fix each issue precisely. Describe what you changed and why.""",
 ```
 
 After the fix agent completes, re-run Steps 1-6 (full verification cycle).
-- Passed: proceed to Step 8
+- Passed and commit authorized: proceed to Step 8
+- Passed and review-only: report results and stop (do not commit)
 - Failed and attempts &lt; 2: repeat Step 7
-- Failed after 2 attempts: escalate to user with the remaining issues and
-  suggest `git stash` or `git reset` to undo
+- Failed after 2 attempts: escalate to user with the remaining issues and the
+  `git diff` of what the fix agent changed; let the user decide what to keep.
+  Never `git stash`, `git reset` or `git checkout --` their tree yourself.
 
 ## Step 8 — Commit
 
-If verification passed:
+**Authorization gate:** Commit only when the user explicitly requested
+commit / push / ship / "commit after review" / "verify then commit", or an
+outer workflow already authorized verify-then-commit.
+
+Review-only is read-only: do not `git add` or `git commit`.
+
+If authorization is present and verification passed, stage **intended paths
+only** (the files this change is meant to land — never the entire working
+tree):
 
 ```bash
-git add -A && git commit -m "[verified] <description>"
+git add -- <intended paths>
+git commit -m "[verified] <description>"
 ```
 
-The `[verified]` prefix indicates an independent reviewer approved this change.
+Do not stage unrelated files. The `[verified]` prefix indicates an
+independent reviewer approved this change.
 
 ## Reference: Common Patterns to Flag
 
@@ -293,6 +354,8 @@ tests exist, tests pass, no regressions.
 
 ## Pitfalls
 
+- **Review-only request** — report and stop; do not auto-fix or commit without
+  explicit authorization
 - **Empty diff** — check `git status`, tell user nothing to verify
 - **Not a git repo** — skip and tell user
 - **Large diff (>15k chars)** — split by file, review each separately

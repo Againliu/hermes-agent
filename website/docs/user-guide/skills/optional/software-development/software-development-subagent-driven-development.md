@@ -95,7 +95,7 @@ delegate_task(
     3. Write minimal implementation
     4. Run: pytest tests/models/test_user.py -v (verify PASS)
     5. Run: pytest tests/ -q (verify no regressions)
-    6. Commit: git add -A && git commit -m "feat: add User model with password hashing"
+    6. Commit: git add src/models/user.py tests/models/test_user.py && git commit -m "feat: add User model with password hashing"
 
     PROJECT CONTEXT:
     - Python 3.11, Flask app in src/app.py
@@ -201,8 +201,8 @@ pytest tests/ -q
 # Review all changes
 git diff --stat
 
-# Final commit if needed
-git add -A && git commit -m "feat: complete [feature name] implementation"
+# Final commit if needed: stage the files this feature touched, by path
+git add <paths from git diff --stat> && git commit -m "feat: complete [feature name] implementation"
 ```
 
 ## Task Granularity
