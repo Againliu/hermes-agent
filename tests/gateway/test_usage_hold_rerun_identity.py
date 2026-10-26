@@ -220,3 +220,16 @@ def test_terminal_frame_carries_the_rerun_verdict_in_the_declared_shape():
     assert frame["quota_resume"] == plan
     # The declared wire shape (``message.complete.quota_resume``) admits every field the plan carries.
     assert QuotaResume.model_validate(frame["quota_resume"]).scope == "model"
+
+
+def test_an_unwritable_queue_keeps_the_provider_refusal_and_promises_nothing(home, monkeypatch):
+    def full_disk(*_a, **_k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(uh, "atomic_json_write", full_disk)
+    plan = {"eligible": True, "resume_at": time.time() + 600, "provider": "custom", "source": "provider_error"}
+    result = {"failed": True, "final_response": "limit hit", "quota_resume": plan,
+              "messages": [{"role": "user", "content": ASK}]}
+    uh.schedule_failed_turn(_runner(), _ctx(_source("bob")), result)
+    assert plan["scheduled"] is False and "failed_turn_notice" not in result
+    assert result["final_response"] == "limit hit"

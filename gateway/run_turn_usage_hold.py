@@ -136,23 +136,28 @@ def queue_rerun(runner: Any, ctx: Any, hold: dict[str, Any], *, now: Optional[fl
     if resume_at - now > DEFAULT_MAX_WAIT_SECONDS:
         return None
     path = get_hermes_home() / QUEUE_FILE
-    with _LOCK:
-        data = _load(path)
-        prior = data.get(ctx.session_key) or {}
-        # A held rerun is the same request held again: count it, so a wall that keeps moving ends.
-        attempt = int(prior.get("attempt", 0)) + 1 if prior.get("state") == "claimed" else 1
-        if attempt > max_attempts:
-            data.pop(ctx.session_key, None)
+    try:
+        with _LOCK:
+            data = _load(path)
+            prior = data.get(ctx.session_key) or {}
+            # A held rerun is the same request held again: count it, so a wall that keeps moving ends.
+            attempt = int(prior.get("attempt", 0)) + 1 if prior.get("state") == "claimed" else 1
+            if attempt > max_attempts:
+                data.pop(ctx.session_key, None)
+                atomic_json_write(path, data)
+                return None
+            data[ctx.session_key] = {
+                "session_key": ctx.session_key, "session_id": ctx.session_id, "state": "pending",
+                "resume_at": resume_at, "queued_at": now, "attempt": attempt,
+                "provider": str(hold.get("provider") or ""),
+                # The rerun's text and its author, never re-derived from the session at the reset.
+                "text": _rerun_request(prior, ctx), "sender": ctx.source.to_dict(),
+            }
             atomic_json_write(path, data)
-            return None
-        data[ctx.session_key] = {
-            "session_key": ctx.session_key, "session_id": ctx.session_id, "state": "pending",
-            "resume_at": resume_at, "queued_at": now, "attempt": attempt,
-            "provider": str(hold.get("provider") or ""),
-            # The rerun's text and its author, never re-derived from the session at the reset.
-            "text": _rerun_request(prior, ctx), "sender": ctx.source.to_dict(),
-        }
-        atomic_json_write(path, data)
+    except OSError:
+        # A full disk or unwritable home must not replace the turn's own failure and reset time.
+        logger.warning("Usage limit: could not queue the rerun for %s", ctx.session_key, exc_info=True)
+        return None
     logger.info("Usage limit: queued session %s to rerun at %s (attempt %d/%d)", ctx.session_key,
                 time.strftime("%H:%M", time.localtime(resume_at)), attempt, max_attempts)
     return resume_at
