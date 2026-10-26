@@ -91,6 +91,18 @@ def test_a_number_never_matches_a_boolean_inside_an_object_item(home, capsys):
     assert "is not in custom_providers" in out and "already contains" in out
 
 
+def test_output_masks_saved_credentials_in_the_list(home, capsys):
+    secret = "opaque-saved-token-0123456789abcdef"
+    (home / "config.yaml").write_text(
+        f"custom_providers:\n  - name: a\n    api_key: {secret}\n", encoding="utf-8")
+
+    _hermes("add", "--json", "custom_providers", '{"name": "b", "base_url": "https://b.example"}')
+    _hermes("add", "--json", "custom_providers", f'{{"name": "a", "api_key": "{secret}"}}')  # no change
+
+    assert secret not in capsys.readouterr().out
+    assert _saved(home)["custom_providers"][0]["api_key"] == secret
+
+
 def test_administrator_managed_list_is_refused(home, tmp_path_factory, monkeypatch, capsys):
     from hermes_cli import managed_scope
 

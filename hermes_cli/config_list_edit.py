@@ -128,7 +128,8 @@ def edit_config_list(key: str, raw_value: str, *, remove: bool = False, as_json:
         config_mod._exit_invalid(unknown_subkey_refusal(key, suggestion, force_hint=False))
 
     config_path = config_mod.get_config_path()
-    shown = json.dumps(value, ensure_ascii=False) if as_json else repr(value)
+    # Saved list items can carry credentials (``custom_providers[].api_key``); print masked copies.
+    shown = json.dumps(config_mod.redact_config_value(value), ensure_ascii=False) if as_json else repr(value)
     with _locked_plugin_state(config_path), config_mod._CONFIG_LOCK:
         user_config = config_mod.require_readable_config_before_write(config_path)
         _refuse_path_through_missing_list(user_config, key)
@@ -152,7 +153,7 @@ def edit_config_list(key: str, raw_value: str, *, remove: bool = False, as_json:
     if env_var:
         config_mod.save_env_value(env_var, config_mod._terminal_env_value(items))
     print(f"✓ {'Removed' if remove else 'Added'} {shown} {'from' if remove else 'to'} {key} in {config_path}")
-    print(f"  {key} = {json.dumps(items, ensure_ascii=False)}")
+    print(f"  {key} = {json.dumps(config_mod.redact_config_value(items), ensure_ascii=False)}")
     if not is_known:
         from hermes_cli.config_key_notices import print_unknown_key_notice
         print_unknown_key_notice(key, suggestion, force_hint=False)
