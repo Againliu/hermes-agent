@@ -491,7 +491,6 @@ import {
   type ActiveWork,
   backendOwnedByApp,
   mergeActiveWork,
-  NO_ACTIVE_WORK,
   normalizeActiveWork,
   quitPromptFor,
   shouldGuardWindowClose
@@ -617,10 +616,12 @@ import {
   applyUpdatesWhenIdle,
   type BusyApplyResult,
   busyApplyResult,
+  cancelUpdateWhenIdle,
   createUpdateReadinessGate,
   updateApplyMode,
   type UpdateFreeze
 } from './update-readiness-gate'
+import { normalizeWorkOwners, type OwnedChat, updateWorkSources } from './update-work-owners'
 import {
   resolveUpdaterMechanism,
   type UpdaterApplyResultWire,
@@ -4421,6 +4422,7 @@ async function applyUpdates(payload?: unknown): Promise<UpdaterApplyResultWire> 
     applyGated: stillWanted => applyUpdatesGated(false, stillWanted),
     emitWaiting: (reasons, deadlineAt) =>
       emitUpdateProgress({ stage: 'waiting', message: '', waitingFor: reasons, deadlineAt }),
+    emitEnded: emitUpdateProgress,
     log: rememberLog
   })
 }
@@ -16574,6 +16576,8 @@ ipcMain.handle('hermes:stopPreviewFileWatch', (_event, id) => stopPreviewFileWat
 // Each renderer reports the turns it has in flight; the quit guard reads the
 // merged picture. Keyed by webContents id so a closed window stops counting.
 const activeWorkByWebContents = new Map<number, ActiveWork>()
+// Beside each window's report: who runs each working chat (an update ignores chats on a URL/cloud remote).
+const activeWorkOwnersByWebContents = new Map<number, OwnedChat[]>()
 
 // Synchronous, webContents-independent cache of the most recent active-work
 // summary we heard from *any* renderer. The per-webContents map above is
@@ -16606,41 +16610,25 @@ function isAnyTurnInFlight() {
   return mergeActiveWork(activeWorkByWebContents.values()).count > 0
 }
 
-// Connected local backends, never starting one: a backend still dialling
-// after the bound has no turn to protect yet. Remote/cloud backends are not
-// restarted by a local update, so their work is not ours to wait for.
-async function localBackendsForUpdate() {
-  const pending = [backendConnectionState.getPromise(), ...[...backendPool.values()].map(entry => entry?.connectionPromise)]
-  const bound = new Promise(resolve => setTimeout(resolve, 5000, null))
-  const settled = await Promise.all(pending.filter(Boolean).map(promise => Promise.race([promise.catch(() => null), bound])))
-  const seen = new Set<string>()
+// What a local update interrupts: the local backend (restarted) and SSH-managed ones (stopped with
+// the app). A remote-served app's turns survive the update unless a backend the app manages goes down.
+const updateWork = updateWorkSources({
+  connections: () => [backendConnectionState.getPromise(), ...[...backendPool.values()].map(entry => entry?.connectionPromise)],
+  reports: () => [...activeWorkByWebContents].map(([id, work]) => ({ ...work, sessions: activeWorkOwnersByWebContents.get(id) })),
+  remoteOnly: () => globalRemoteActive() && !quitStopsBackendWork(),
+  registryConnections: () => readDesktopConnectionsRegistry().connections,
+  profileRouteKind: profile =>
+    resolveDesktopRemoteRoute({
+      config: readDesktopConnectionConfig(),
+      env: { token: process.env.HERMES_DESKTOP_REMOTE_TOKEN, url: process.env.HERMES_DESKTOP_REMOTE_URL },
+      profile,
+      registry: readDesktopConnectionsRegistry()
+    })?.kind
+})
 
-  return settled.filter((connection: any) => {
-    if (!connection?.baseUrl || connection.mode === 'remote' || seen.has(connection.baseUrl)) {
-      return false
-    }
-
-    seen.add(connection.baseUrl)
-
-    return true
-  }) as any[]
-}
-
-// A remote-served app's turns survive the update (it only replaces this
-// client), unless a backend the app manages goes down with it.
-function activeWorkInterruptedByUpdate(): ActiveWork {
-  if (globalRemoteActive() && !quitStopsBackendWork()) {
-    return NO_ACTIVE_WORK
-  }
-
-  // Live window reports only: lastActiveWorkSeen is the quit-time fallback and stays busy after
-  // the window that reported a turn closes; the backends' idle proofs cover work without a window.
-  return mergeActiveWork(activeWorkByWebContents.values())
-}
-
-const updateReadiness = createUpdateReadinessGate({
-  activeWork: activeWorkInterruptedByUpdate,
-  localBackends: localBackendsForUpdate,
+const updateReadiness = createUpdateReadinessGate<any>({
+  activeWork: updateWork.activeWork,
+  localBackends: updateWork.localBackends,
   request: (backend, path, opts) => fetchJsonForBackend(backend, path, opts),
   log: rememberLog
 })
@@ -16666,6 +16654,7 @@ ipcMain.on('hermes:active-work', (event, payload) => {
       event.sender.off('destroyed', forget)
       event.sender.off('render-process-gone', forget)
       activeWorkByWebContents.delete(id)
+      activeWorkOwnersByWebContents.delete(id)
       updateStreamThrottleFromActiveWork()
     }
 
@@ -16680,6 +16669,13 @@ ipcMain.on('hermes:active-work', (event, payload) => {
   activeWorkByWebContents.set(id, work)
   lastActiveWorkSeen = work
   updateStreamThrottleFromActiveWork()
+})
+
+// Sent right after 'hermes:active-work' (same ordered channel), so its window's forget handler exists.
+ipcMain.on('hermes:active-work-owners', (event, payload) => {
+  if (activeWorkByWebContents.has(event.sender.id)) {
+    activeWorkOwnersByWebContents.set(event.sender.id, normalizeWorkOwners(payload))
+  }
 })
 
 ipcMain.on('hermes:titlebar-theme', (_event, payload) => {
@@ -17223,7 +17219,7 @@ ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
   }))
 )
 
-ipcMain.handle('hermes:updates:cancel-when-idle', () => ({ cancelled: updateWhenIdle.cancel() }))
+ipcMain.handle('hermes:updates:cancel-when-idle', () => cancelUpdateWhenIdle(updateWhenIdle, emitUpdateProgress))
 
 // About ▸ Updates channel selector; source checkouts only (packages bake their channel).
 ipcMain.handle('hermes:updates:channel:set', async (_event, name: unknown): Promise<UpdaterStatusWire> => {

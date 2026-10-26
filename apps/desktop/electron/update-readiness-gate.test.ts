@@ -4,7 +4,13 @@ import { test } from 'vitest'
 
 import { type ActiveWork, NO_ACTIVE_WORK } from './quit-guard'
 import { mergeUpdateReadiness, UpdateWhenIdle } from './update-readiness'
-import { applyUpdatesWhenIdle, busyApplyResult, createUpdateReadinessGate } from './update-readiness-gate'
+import {
+  applyUpdatesWhenIdle,
+  busyApplyResult,
+  cancelUpdateWhenIdle,
+  createUpdateReadinessGate,
+  type UpdateWaitEnding
+} from './update-readiness-gate'
 
 interface FakeBackend {
   baseUrl: string
@@ -17,9 +23,14 @@ function backend(idle: unknown, fence: FakeBackend['fence'] = 'grant', baseUrl =
   return { baseUrl, idle, fence, calls: [] }
 }
 
-function gateFor(backends: FakeBackend[], work: () => ActiveWork = () => NO_ACTIVE_WORK) {
+function gateFor(
+  backends: FakeBackend[],
+  work: () => ActiveWork = () => NO_ACTIVE_WORK,
+  every?: (ms: number, tick: () => void) => () => void
+) {
   return createUpdateReadinessGate<FakeBackend>({
     activeWork: work,
+    every,
     localBackends: async () => backends,
     log: () => undefined,
     request: async (b, path, opts) => {
@@ -129,6 +140,7 @@ test('update-when-idle fires only after the turn ends and readiness holds twice'
       return { ok: true, handedOff: true }
     },
     emitWaiting: reasons => published.push(reasons),
+    emitEnded: () => undefined,
     log: () => undefined,
     pollMs: 1000,
     maxWaitMs: 60_000,
@@ -150,6 +162,7 @@ test('a busy answer from the final gate keeps waiting instead of handing off', a
     read: async () => ({ ready: true, reasons: [] }),
     applyGated: async () => gate.shift()!,
     emitWaiting: () => undefined,
+    emitEnded: () => undefined,
     log: () => undefined,
     pollMs: 1000,
     maxWaitMs: 60_000,
@@ -173,6 +186,7 @@ test('cancel stops the wait without ever handing off', async () => {
       return { ok: true }
     },
     emitWaiting: () => undefined,
+    emitEnded: () => undefined,
     log: () => undefined,
     pollMs: 5,
     maxWaitMs: 60_000
@@ -197,6 +211,7 @@ test('the wait is bounded: still busy at the deadline gives up and names what he
       return { ok: true }
     },
     emitWaiting: () => undefined,
+    emitEnded: () => undefined,
     log: () => undefined,
     pollMs: 1000,
     maxWaitMs: 10_000,
@@ -228,6 +243,7 @@ test('a wait whose idle read lands past the deadline never hands off', async () 
       return { ok: true }
     },
     emitWaiting: () => undefined,
+    emitEnded: () => undefined,
     log: () => undefined,
     pollMs: 1000,
     maxWaitMs: 60_000,
@@ -258,6 +274,7 @@ test('cancel during the final gate reaches the hand-off before it tears anything
       return { ok: true }
     },
     emitWaiting: () => undefined,
+    emitEnded: () => undefined,
     log: () => undefined,
     pollMs: 1000,
     maxWaitMs: 60_000,
@@ -266,4 +283,81 @@ test('cancel during the final gate reaches the hand-off before it tears anything
 
   assert.equal(tornDown, false)
   assert.deepEqual(result, { ok: false, error: 'cancelled' })
+})
+
+test('a held fence is renewed while the hand-off prepares, and release stops renewing before it reopens', async () => {
+  const b = backend(IDLE, 'grant', 'http://a')
+  const ticks: Array<() => void> = []
+  let stopped = false
+
+  const freeze = await gateFor([b], undefined, (_ms, tick) => {
+    ticks.push(tick)
+
+    return () => {
+      stopped = true
+    }
+  }).freeze()
+
+  assert.equal(freeze.ok, true)
+  assert.equal(ticks.length, 1)
+
+  // A long download: three heartbeats, each renewing the permit it holds.
+  for (let i = 0; i < 3; i++) {
+    ticks[0]()
+  }
+
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(b.calls.filter(call => call === '/api/health/retirement:renew:tok-http://a').length, 3)
+
+  await freeze.release() // the download failed or the user cancelled
+
+  assert.equal(stopped, true)
+  assert.ok(b.calls.includes('/api/health/retirement:cancel:tok-http://a'))
+})
+
+test('every window hears a wait end: cancel broadcasts at once, the deadline broadcasts its reasons', async () => {
+  const endings: UpdateWaitEnding[] = []
+  const scheduler = new UpdateWhenIdle<{ ok: boolean }>()
+
+  assert.deepEqual(
+    cancelUpdateWhenIdle(scheduler, ending => endings.push(ending)),
+    { cancelled: false }
+  )
+  assert.deepEqual(endings, [])
+
+  const pending = applyUpdatesWhenIdle({
+    scheduler,
+    read: async () => ({ ready: false, reasons: [{ kind: 'delegation' }] }),
+    applyGated: async () => ({ ok: true }),
+    emitWaiting: () => undefined,
+    emitEnded: ending => endings.push(ending),
+    log: () => undefined,
+    pollMs: 5,
+    maxWaitMs: 60_000
+  })
+
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.deepEqual(
+    cancelUpdateWhenIdle(scheduler, ending => endings.push(ending)),
+    { cancelled: true }
+  )
+  assert.deepEqual(endings, [{ stage: 'idle' }])
+  await pending
+
+  endings.length = 0
+  await applyUpdatesWhenIdle({
+    scheduler: new UpdateWhenIdle(),
+    read: async () => ({ ready: false, reasons: [{ kind: 'cron', jobs: ['backup'] }] }),
+    applyGated: async () => ({ ok: true }),
+    emitWaiting: () => undefined,
+    emitEnded: ending => endings.push(ending),
+    log: () => undefined,
+    pollMs: 1000,
+    maxWaitMs: 10_000,
+    ...clock()
+  })
+
+  assert.equal(endings.length, 1)
+  assert.equal(endings[0].stage, 'error')
+  assert.deepEqual((endings[0] as { waitingFor?: unknown }).waitingFor, [{ kind: 'cron', jobs: ['backup'] }])
 })

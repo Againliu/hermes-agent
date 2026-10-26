@@ -400,6 +400,7 @@ declare global {
       watchDirectory?: (dir: string) => Promise<HermesPreviewWatch>
       stopPreviewFileWatch: (id: string) => Promise<boolean>
       setActiveWork?: (payload: HermesActiveWork) => void
+      setActiveWorkOwners?: (payload: readonly HermesActiveWorkOwner[]) => void
       setTitleBarTheme?: (payload: HermesTitleBarTheme) => void
       setNativeTheme?: (mode: 'dark' | 'light' | 'system') => void
       /** Main-process fact: this OS can back glass with a native material. */
@@ -1118,6 +1119,12 @@ export interface HermesTitleBarTheme {
 export interface HermesActiveWork {
   count: number
   titles: string[]
+}
+
+/** Per working chat: the backend that runs it, so a local update ignores chats on a URL/cloud remote. */
+export interface HermesActiveWorkOwner {
+  title: string
+  owner: null | { connectionId?: string; profile?: string }
 }
 
 export interface HermesWindowState {

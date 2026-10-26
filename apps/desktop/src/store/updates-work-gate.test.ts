@@ -16,13 +16,13 @@ const CHAT = { kind: 'chats' as const, count: 1, titles: ['Refactor auth'] }
 
 let apply: ReturnType<typeof vi.fn>
 let cancelWhenIdle: ReturnType<typeof vi.fn>
-let progress: ((payload: DesktopUpdateProgress) => void) | null
+let progress: ((payload: DesktopUpdateProgress) => void) | null = null
 
 beforeEach(() => {
   resetUpdateApplyState()
   apply = vi.fn()
   cancelWhenIdle = vi.fn().mockResolvedValue({ cancelled: true })
-  progress = null
+  // `progress` survives tests: the poller subscribes once per module.
   ;(globalThis as unknown as { window: unknown }).window = {
     addEventListener: () => undefined,
     hermesDesktop: {
@@ -78,5 +78,33 @@ describe('in-app update while agent work runs', () => {
     await applyUpdates({ mode: 'when-idle' })
 
     expect($updateApply.get()).toMatchObject({ applying: false, stage: 'error', error: 'idle-timeout' })
+  })
+
+  it('a window watching a wait another window started follows its cancel and its timeout', () => {
+    startUpdatePoller()
+    const waiting = { message: '', percent: null, error: null, at: 1, waitingFor: [CHAT], deadlineAt: 9 }
+
+    // This window never called apply: it only sees the broadcast wait.
+    progress?.({ stage: 'waiting', ...waiting })
+    expect($updateApply.get().stage).toBe('waiting')
+
+    progress?.({ stage: 'idle', message: '', percent: null, error: null, at: 2 })
+    expect($updateApply.get()).toMatchObject({ applying: false, stage: 'idle' })
+
+    progress?.({ stage: 'waiting', ...waiting })
+    progress?.({
+      stage: 'error',
+      message: 'Hermes stayed busy',
+      percent: null,
+      error: 'idle-timeout',
+      at: 3,
+      waitingFor: [CHAT]
+    })
+    expect($updateApply.get()).toMatchObject({
+      applying: false,
+      stage: 'error',
+      error: 'idle-timeout',
+      waitingFor: [CHAT]
+    })
   })
 })

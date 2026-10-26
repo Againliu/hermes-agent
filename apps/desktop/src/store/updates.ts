@@ -738,7 +738,8 @@ function applyStartState(opts: DesktopUpdateApplyOptions): UpdateApplyState {
 // Agent work is running (or "when idle" ran out its bound / was cancelled):
 // nothing was touched. True when the overlay now shows that outcome.
 function handledByWorkGate(result: DesktopUpdateApplyResult | undefined): boolean {
-  const outcome = result?.error && Object.hasOwn(WORK_GATE_OUTCOMES, result.error) ? WORK_GATE_OUTCOMES[result.error] : undefined
+  const outcome =
+    result?.error && Object.hasOwn(WORK_GATE_OUTCOMES, result.error) ? WORK_GATE_OUTCOMES[result.error] : undefined
   outcome?.(result!)
 
   return Boolean(outcome)
@@ -1327,7 +1328,32 @@ async function runEverythingUpdate(): Promise<void> {
   }
 }
 
+// How an "update when idle" wait ended, broadcast to every window (not only the one that started it).
+function ingestWaitEnding(payload: DesktopUpdateProgress): boolean {
+  if ($updateApply.get().stage !== 'waiting') {
+    return false
+  }
+
+  if (payload.stage === 'idle') {
+    $updateApply.set(IDLE)
+
+    return true
+  }
+
+  if (payload.stage === 'error' && payload.error === 'idle-timeout') {
+    WORK_GATE_OUTCOMES['idle-timeout']({ ok: false, error: 'idle-timeout', waitingFor: payload.waitingFor })
+
+    return true
+  }
+
+  return false
+}
+
 function ingestProgress(payload: DesktopUpdateProgress): void {
+  if (ingestWaitEnding(payload)) {
+    return
+  }
+
   const current = $updateApply.get()
   const log = [...current.log, { stage: payload.stage, message: payload.message, at: payload.at }].slice(-50)
 

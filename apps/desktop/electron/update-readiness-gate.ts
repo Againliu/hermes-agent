@@ -16,6 +16,8 @@ import {
 } from './update-readiness'
 
 const IDLE_PROBE_TIMEOUT_MS = 5000
+// The backend's admission permit lives 30 s; a hand-off still downloading/verifying renews it well inside that.
+export const UPDATE_FENCE_RENEW_MS = 10_000
 export const UPDATE_WHEN_IDLE_POLL_MS = 5000
 // Long enough for a delegated research run to finish, short enough that a
 // forgotten wait does not fire hours later into a session the user just began.
@@ -57,9 +59,20 @@ export interface UpdateReadinessHost<B extends LocalBackend> {
   localBackends: () => Promise<B[]>
   request: (backend: B, path: string, opts: { method?: string; body?: unknown; timeoutMs?: number }) => Promise<unknown>
   log: (line: string) => void
+  /** Run `tick` every `ms` until the returned stop is called (tests pass a manual clock). */
+  every?: (ms: number, tick: () => void) => () => void
 }
 
-/** `ok`: admission is frozen until `release` (call it when the hand-off does not happen). Otherwise `reasons` name the work. */
+function everyInterval(ms: number, tick: () => void): () => void {
+  const timer = setInterval(tick, ms)
+
+  return () => clearInterval(timer)
+}
+
+/**
+ * `ok`: admission is frozen (and its permits renewed) until `release`; call it whenever the hand-off
+ * does not happen (cancel, failure). Otherwise `reasons` name the work.
+ */
 export interface UpdateFreeze {
   ok: boolean
   reasons: UpdateBusyReason[]
@@ -103,6 +116,21 @@ export function createUpdateReadinessGate<B extends LocalBackend>(host: UpdateRe
     return mergeUpdateReadiness(host.activeWork(), answers)
   }
 
+  async function renewFence(backend: B, token: string): Promise<void> {
+    const answer = (await host
+      .request(backend, '/api/health/retirement', {
+        method: 'POST',
+        body: { action: 'renew', token },
+        timeoutMs: IDLE_PROBE_TIMEOUT_MS
+      })
+      .catch((error: unknown) => ({ ok: false, error: String(error) }))) as { ok?: boolean; error?: string }
+
+    if (!answer?.ok) {
+      // A backend older than renew, or one that restarted: its 30 s permit is all the hand-off has.
+      host.log(`[updates] admission permit for ${backend.baseUrl} could not be renewed: ${answer?.error ?? 'refused'}`)
+    }
+  }
+
   async function cancelFence(backend: B, token: string): Promise<void> {
     await host
       .request(backend, '/api/health/retirement', { method: 'POST', body: { action: 'cancel', token } })
@@ -112,8 +140,9 @@ export function createUpdateReadinessGate<B extends LocalBackend>(host: UpdateRe
   /**
    * The last check before a hand-off. Re-reads readiness, then asks every
    * local backend to freeze admission and prove idle in one step (the
-   * backend's retirement fence holds new turns, cron ticks and delegations for
-   * its 30 s permit). Busy anywhere releases the fences already taken and
+   * backend's retirement fence holds new turns, messaging turns included, cron
+   * ticks and delegations; the 30 s permit is renewed every
+   * UPDATE_FENCE_RENEW_MS until `release`). Busy anywhere releases the fences already taken and
    * answers the reasons. `release` reopens admission when the hand-off does
    * not happen. A backend that predates the fence route falls back to the
    * idle read alone.
@@ -126,8 +155,10 @@ export function createUpdateReadinessGate<B extends LocalBackend>(host: UpdateRe
     }
 
     const held: Array<[B, string]> = []
+    let stopRenewing = () => undefined as void
 
     const release = async () => {
+      stopRenewing()
       await Promise.all(held.splice(0).map(([backend, token]) => cancelFence(backend, token)))
     }
 
@@ -172,6 +203,13 @@ export function createUpdateReadinessGate<B extends LocalBackend>(host: UpdateRe
       return busyFreeze(mergeUpdateReadiness(work, []).reasons)
     }
 
+    // Held until the hand-off stops these backends (or `release`): a long download must not outlive the permit.
+    stopRenewing = (host.every ?? everyInterval)(UPDATE_FENCE_RENEW_MS, () => {
+      for (const [backend, token] of held) {
+        void renewFence(backend, token)
+      }
+    })
+
     return { ok: true, reasons: [], release }
   }
 
@@ -187,11 +225,31 @@ export interface WhenIdleApplyDeps<R> {
    */
   applyGated: (stillWanted: () => boolean) => Promise<R | BusyApplyResult>
   emitWaiting: (reasons: UpdateBusyReason[], deadlineAt: number) => void
+  /** Every window shows the wait, so every window hears how it ended (not only the one that started it). */
+  emitEnded: (ending: UpdateWaitEnding) => void
   log: (line: string) => void
   pollMs?: number
   maxWaitMs?: number
   sleep?: (ms: number) => Promise<void>
   now?: () => number
+}
+
+/** Broadcast to every window when a wait ends without a hand-off; `idle` returns the overlay to its idle view. */
+export type UpdateWaitEnding =
+  { stage: 'idle' } | { stage: 'error'; error: 'idle-timeout'; message: string; waitingFor: UpdateBusyReason[] }
+
+/** The cancel IPC: stop the wait and tell every window at once (the loop itself notices at its next wake). */
+export function cancelUpdateWhenIdle(
+  scheduler: Pick<UpdateWhenIdle<unknown>, 'cancel'>,
+  emitEnded: (ending: UpdateWaitEnding) => void
+): { cancelled: boolean } {
+  const cancelled = scheduler.cancel()
+
+  if (cancelled) {
+    emitEnded({ stage: 'idle' })
+  }
+
+  return { cancelled }
 }
 
 function isBusyResult(result: unknown): result is BusyApplyResult {
@@ -239,10 +297,14 @@ export async function applyUpdatesWhenIdle<R>(
 
   deps.log(`[updates] update-when-idle gave up after its bound: ${describeUpdateBusy(outcome.reasons)}`)
 
-  return {
-    ok: false,
-    error: 'idle-timeout',
+  const timedOut = {
+    ok: false as const,
+    error: 'idle-timeout' as const,
     message: `Hermes stayed busy (${describeUpdateBusy(outcome.reasons)}). Nothing was updated.`,
     waitingFor: outcome.reasons
   }
+
+  deps.emitEnded({ stage: 'error', error: timedOut.error, message: timedOut.message, waitingFor: timedOut.waitingFor })
+
+  return timedOut
 }
