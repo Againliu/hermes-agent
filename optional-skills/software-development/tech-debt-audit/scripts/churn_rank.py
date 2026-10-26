@@ -52,9 +52,10 @@ def churn(repo: Path, since: str | None, scope: str | None) -> Counter:
 
 def rank(repo: Path, since: str | None, top: int, scope: str | None) -> dict:
     counts = churn(repo, since, scope)
-    live = [(p, n, _lines(repo / p)) for p, n in counts.most_common() if (repo / p).is_file()]
     tracked = _paths(_git(repo, "ls-files", "-z", *(["--", scope] if scope else [])))
-    sizes = sorted(((p, _lines(repo / p)) for p in tracked), key=lambda t: t[1] or 0, reverse=True)
+    loc = {p: _lines(repo / p) for p in {*counts, *tracked}}  # each file read once for both rankings
+    live = [(p, n, loc[p]) for p, n in counts.most_common() if (repo / p).is_file()]
+    sizes = sorted(((p, loc[p]) for p in tracked), key=lambda t: t[1] or 0, reverse=True)
     return {
         "repo": str(repo),
         "since": since,
