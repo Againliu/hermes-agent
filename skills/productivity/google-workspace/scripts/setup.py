@@ -30,6 +30,7 @@ Agent workflow:
 from __future__ import annotations  # allow PEP 604 `X | None` on Python 3.9+
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -458,10 +459,10 @@ def get_auth_url(services: str | None = None, output_format: str = "text"):
     _ensure_deps()
     auth_url = _start_auth_session(resolved)
     if output_format == "json":
-        print(json.dumps({"auth_url": auth_url, "services": resolved}))
-    else:
-        # Print just the URL so the agent can extract it cleanly
-        print(auth_url)
+        return {"auth_url": auth_url, "services": resolved}
+    # Print just the URL so the agent can extract it cleanly
+    print(auth_url)
+    return None
 
 
 def exchange_auth_code(code: str, output_format: str = "text"):
@@ -511,16 +512,15 @@ def exchange_auth_code(code: str, output_format: str = "text"):
             or list(ALL_SERVICES)
         )
         if output_format == "json":
-            print(json.dumps({
+            return {
                 "status": "error",
                 "error": "token_exchange_failed",
                 "message": str(e),
                 "fresh_auth_url": fresh_url,
-            }))
-        else:
-            print(f"ERROR: Token exchange failed: {e}")
-            print("The code may have expired or been used already. Send the user this fresh URL:")
-            print(fresh_url)
+            }
+        print(f"ERROR: Token exchange failed: {e}")
+        print("The code may have expired or been used already. Send the user this fresh URL:")
+        print(fresh_url)
         sys.exit(1)
 
     creds = flow.credentials
@@ -546,14 +546,14 @@ def exchange_auth_code(code: str, output_format: str = "text"):
     TOKEN_PATH.write_text(json.dumps(token_payload, indent=2), encoding="utf-8")
     PENDING_AUTH_PATH.unlink(missing_ok=True)
     if output_format == "json":
-        print(json.dumps({
+        return {
             "status": "ok",
             "token_path": str(TOKEN_PATH),
             "services": _granted_services(token_payload),
-        }))
-        return
+        }
     print(f"OK: Authenticated. Token saved to {TOKEN_PATH}")
     print(f"Profile-scoped token location: {display_hermes_home()}/google_token.json")
+    return None
 
 
 def revoke():
@@ -591,6 +591,26 @@ def revoke():
     print(f"Deleted {TOKEN_PATH}")
 
 
+def _json_result(args) -> tuple[dict, int]:
+    """Run the selected --format json action; return its payload and exit code."""
+    if args.auth_url:
+        return get_auth_url(args.services, "json"), 0
+    if args.auth_code:
+        payload = exchange_auth_code(args.auth_code, "json")
+        return payload, 0 if payload["status"] == "ok" else 1
+    if args.check:
+        ok = check_auth(requested_services=args.services)
+        status = "authenticated" if ok else "unauthenticated"
+    else:
+        ok = check_auth_live()
+        status = "ok" if ok else "failed"
+    return {
+        "status": status,
+        "token_path": str(TOKEN_PATH),
+        "services": _granted_services(_load_token_payload(TOKEN_PATH)),
+    }, 0 if ok else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description="Google Workspace OAuth setup for Hermes")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -626,24 +646,18 @@ def main():
             print(f"ERROR: {e}")
             sys.exit(2)
 
+    if args.format == "json" and (args.check or args.check_live or args.auth_url or args.auth_code):
+        # One output boundary: the JSON document alone on stdout, every status
+        # or warning line the helpers print goes to stderr.
+        result_out = sys.stdout
+        with contextlib.redirect_stdout(sys.stderr):
+            payload, code = _json_result(args)
+        print(json.dumps(payload), file=result_out)
+        sys.exit(code)
     if args.check:
-        ok = check_auth(requested_services=args.services)
-        if args.format == "json":
-            print(json.dumps({
-                "status": "authenticated" if ok else "unauthenticated",
-                "token_path": str(TOKEN_PATH),
-                "services": _granted_services(_load_token_payload(TOKEN_PATH)),
-            }))
-        sys.exit(0 if ok else 1)
-    if getattr(args, "check_live", False):
-        ok = check_auth_live()
-        if args.format == "json":
-            print(json.dumps({
-                "status": "ok" if ok else "failed",
-                "token_path": str(TOKEN_PATH),
-                "services": _granted_services(_load_token_payload(TOKEN_PATH)),
-            }))
-        sys.exit(0 if ok else 1)
+        sys.exit(0 if check_auth(requested_services=args.services) else 1)
+    if args.check_live:
+        sys.exit(0 if check_auth_live() else 1)
     elif args.client_secret:
         store_client_secret(args.client_secret)
     elif args.auth_url:

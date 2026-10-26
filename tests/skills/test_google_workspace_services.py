@@ -55,12 +55,26 @@ def test_auth_url_json_requests_only_the_chosen_services(setup_module, monkeypat
     }
     setup_module.CLIENT_SECRET_PATH.write_text(json.dumps(secret), encoding="utf-8")
 
-    setup_module.get_auth_url("email,calendar", "json")
+    monkeypatch.setattr("sys.argv", ["setup.py", "--auth-url", "--services", "email,calendar", "--format", "json"])
+    with pytest.raises(SystemExit) as exit_info:
+        setup_module.main()
 
+    assert exit_info.value.code == 0
     payload = json.loads(capsys.readouterr().out)
     query = urllib.parse.parse_qs(urllib.parse.urlparse(payload["auth_url"]).query)
     assert set(query["scope"][0].split()) == GMAIL_CALENDAR
     assert (tmp_path / "google_oauth_last_url.txt").read_text(encoding="utf-8").strip() == payload["auth_url"]
+
+
+def test_check_json_keeps_status_lines_off_stdout(setup_module, monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["setup.py", "--check", "--format", "json"])
+    with pytest.raises(SystemExit) as exit_info:
+        setup_module.main()
+
+    out, err = capsys.readouterr()
+    assert exit_info.value.code == 1
+    assert json.loads(out)["status"] == "unauthenticated"
+    assert "NOT_AUTHENTICATED" in err
 
 
 def test_contacts_only_live_probe_names_the_people_resource(setup_module, monkeypatch):
