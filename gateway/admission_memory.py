@@ -213,6 +213,8 @@ class MemoryGate:
     _seq: Any = field(default_factory=itertools.count)
     _sample: tuple = (0.0, None)
     _published: Optional[tuple] = None
+    _pending_write: Optional[dict] = None  # newest status snapshot not yet written
+    _writer_running: bool = False
 
     def _reading(self) -> Optional[MemoryReading]:
         sampled_at, reading = self._sample
@@ -228,6 +230,9 @@ class MemoryGate:
         return sum(size for _, size in self._reservations)
 
     def _first_in_line(self, waiter: Optional[_Waiter], kind: str) -> bool:
+        """People FIFO among people, ahead of every background waiter; background FIFO behind them."""
+        if kind == BACKGROUND and any(other.kind == PERSON for other in self._waiters):
+            return False
         for other in self._waiters:
             if other is waiter:
                 return True
@@ -298,14 +303,37 @@ class MemoryGate:
         if key == self._published:
             return
         self._published = key
-        try:
-            from hermes_constants import mkdir_under_hermes_home
-            from utils import atomic_json_write
+        # The write (with its fsync) happens on one writer thread, outside this lock and off the
+        # event loop; a burst of changes coalesces into its newest snapshot, written in order.
+        self._pending_write = snap
+        if not self._writer_running:
+            self._writer_running = True
+            threading.Thread(target=self._write_status, name="memory-guard-status", daemon=True).start()
 
-            mkdir_under_hermes_home(self.status_path.parent)
-            atomic_json_write(self.status_path, snap)
-        except OSError:
-            logger.debug("memory guard: status file write failed", exc_info=True)
+    def _write_status(self) -> None:
+        from hermes_constants import mkdir_under_hermes_home
+        from utils import atomic_json_write
+
+        while True:
+            with self._lock:
+                snap, self._pending_write = self._pending_write, None
+                if snap is None:
+                    self._writer_running = False
+                    return
+            try:
+                mkdir_under_hermes_home(self.status_path.parent)
+                atomic_json_write(self.status_path, snap)
+            except OSError:
+                logger.debug("memory guard: status file write failed", exc_info=True)
+
+    def flush_status(self, timeout: float = 5.0) -> None:
+        """Wait until every published snapshot is on disk (tests, shutdown)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                if not self._writer_running:
+                    return
+            time.sleep(0.01)
 
 
 _gate = MemoryGate()
@@ -322,31 +350,35 @@ def configure(config: Any, home: Path) -> MemoryGate:
     return _gate
 
 
-def read_status(home: Path) -> Optional[dict[str, Any]]:
-    """The gateway's last published status, or None when no live gateway wrote one."""
+def read_status(home: Path, gateway_pid: Optional[int]) -> Optional[dict[str, Any]]:
+    """The queue statistics the running gateway (``gateway_pid``, from verified discovery)
+    published, or None: no gateway, nothing published yet, or a file another process wrote."""
     from gateway.lifecycle_ledger import _read_json
 
     data = _read_json(home.joinpath(*STATE_FILE))
-    pid = data.get("pid") if data else None
-    if not isinstance(pid, int):
-        return None
-    from gateway.status import _pid_exists
+    return data if gateway_pid is not None and data and data.get("pid") == gateway_pid else None
 
-    return data if _pid_exists(pid) else None
+
+def _running_gateway_pid(home: Path) -> Optional[int]:
+    """The gateway of ``home``, verified against its lock and live process (never a reused PID)."""
+    from gateway.status import get_running_pid
+
+    return get_running_pid(home / "gateway.pid", cleanup_stale=False)
 
 
 def status_line(config: Any, home: Path) -> str:
     """One line for ``hermes status``: level, headroom and the waiting count of the live gateway
     (read through the gateway's own cgroup, which under systemd differs from this shell's)."""
     settings = resolve_settings(config)
-    published = read_status(home)
-    reading = (read_memory(published["pid"]) if published else None) or read_memory()
+    gateway_pid = _running_gateway_pid(home)
+    published = read_status(home, gateway_pid) or {}
+    reading = (read_memory(gateway_pid) if gateway_pid else None) or read_memory()
     level = level_for(reading, settings)
     parts = [level]
     if reading is not None:
         ceiling = f" of {reading.ceiling_bytes // _MB} MB" if reading.ceiling_bytes else ""
         parts.append(f"{reading.available_bytes // _MB} MB free{ceiling} ({reading.source})")
-    if published:
+    if gateway_pid is not None:  # an idle gateway may not have published anything yet: 0 waiting
         people, background = published.get("waiting_people", 0), published.get("waiting_background", 0)
         parts.append(f"{people} waiting" + (f" + {background} background" if background else ""))
     else:
