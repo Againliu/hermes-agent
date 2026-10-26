@@ -219,9 +219,12 @@ hermes -z "What's the capital of France?"
 # Parent scripts can cleanly capture the response:
 answer=$(hermes -z "What's the capital of France?")
 
-# Read the prompt body from stdin explicitly with '-':
+# PROMPT '-' reads the whole prompt from stdin (a literal PROMPT never reads stdin):
 answer=$(hermes -z - < /path/to/prompt.txt)
+git diff | hermes -z -
 ```
+
+`hermes -z -` exits 2 without starting a run when stdin is a terminal or the piped prompt is empty.
 
 Per-run overrides (no mutation to `~/.hermes/config.yaml`):
 
