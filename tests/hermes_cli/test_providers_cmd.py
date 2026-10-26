@@ -142,3 +142,19 @@ def test_unknown_provider_errors_on_stderr_with_empty_stdout(monkeypatch, capsys
     out = capsys.readouterr()
     assert exc.value.code == 2
     assert out.out == "" and "unknown or unavailable provider: nope" in out.err
+
+
+def test_live_rows_report_registry_auth_type_and_endpoint_key_env(monkeypatch, capsys):
+    """Live picker rows carry no auth fields; the JSON must still match what --offline reports."""
+    monkeypatch.setattr("hermes_cli.inventory.build_models_payload", lambda *_a, **_kw: {"model": "", "provider": "", "providers": [
+        {"slug": "openai-codex", "name": "OpenAI Codex", "is_current": False, "is_user_defined": False,
+         "models": ["gpt-5"], "total_models": 1, "source": "built-in", "authenticated": True},
+        {"slug": "gateway", "name": "Gateway", "is_current": False, "is_user_defined": True,
+         "models": ["m"], "total_models": 1, "source": "user-config", "api_url": "https://gw.example.test/v1"}]})
+    monkeypatch.setattr("hermes_cli.config.load_config", lambda: {
+        "providers": {"gateway": {"name": "Gateway", "base_url": "https://gw.example.test/v1", "key_env": "GW_KEY"}}})
+    args = _parser().parse_args(["providers", "list", "--json"])
+    assert args.func(args) == 0
+    by_id = {row["id"]: row for row in json.loads(capsys.readouterr().out)["providers"]}
+    assert by_id["openai-codex"]["auth_type"] == "oauth_external"
+    assert by_id["gateway"]["env_vars"] == ["GW_KEY"]

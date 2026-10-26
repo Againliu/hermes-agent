@@ -41,23 +41,41 @@ def _inventory_payload(args) -> dict[str, Any]:
             context, include_unconfigured=bool(args.all), picker_hints=True, canonical_order=True,
             probe_custom_providers=False, probe_current_custom_provider=True,
         )
+    key_envs = _endpoint_key_envs(context.custom_providers)
     return {
-        "providers": [_serialize_provider(row) for row in raw["providers"]],
+        "providers": [_serialize_provider(row, key_envs) for row in raw["providers"]],
         "model": str(raw.get("model") or ""),
         "provider": str(raw.get("provider") or ""),
     }
 
 
-def _serialize_provider(row: dict[str, Any]) -> dict[str, Any]:
-    """Picker row -> the documented public row. Variable NAMES only, never values."""
+def _endpoint_key_envs(custom_providers: list) -> dict[str, str]:
+    """``key_env`` of each configured endpoint under every identity its picker row may carry: live
+    endpoint rows do not repeat it, so it is read from the normalized provider view."""
+    from hermes_cli.providers import custom_provider_aliases
+
+    key_envs: dict[str, str] = {}
+    for entry in custom_providers:
+        if isinstance(entry, dict) and entry.get("key_env"):
+            for alias in custom_provider_aliases(str(entry.get("name") or ""), str(entry.get("provider_key") or "")):
+                key_envs.setdefault(alias, str(entry["key_env"]))
+    return key_envs
+
+
+def _serialize_provider(row: dict[str, Any], key_envs: dict[str, str]) -> dict[str, Any]:
+    """Picker row -> the documented public row. Variable NAMES only, never values. Live built-in rows
+    carry no ``auth_type``: the registry's is the provider's, as for unconfigured rows."""
+    from hermes_cli.inventory import _provider_auth_hint
+
     slug = str(row.get("slug") or "")
     models = [str(model) for model in row.get("models") or []]
+    key_env = str(row.get("key_env") or key_envs.get(slug.lower(), ""))
     return {
         "id": slug,
         "name": str(row.get("name") or slug),
         "auth_state": "configured" if row.get("authenticated") or row.get("is_user_defined") else "unconfigured",
-        "auth_type": str(row.get("auth_type") or "api_key"),
-        "env_vars": _provider_env_vars(slug, row),
+        "auth_type": str(row.get("auth_type") or _provider_auth_hint(slug)[0]),
+        "env_vars": _provider_env_vars(slug, key_env),
         "is_current": bool(row.get("is_current")),
         "is_user_defined": bool(row.get("is_user_defined")),
         "models": models,
@@ -66,13 +84,13 @@ def _serialize_provider(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _provider_env_vars(slug: str, row: dict[str, Any]) -> list[str]:
+def _provider_env_vars(slug: str, key_env: str) -> list[str]:
     from hermes_cli.auth import PROVIDER_REGISTRY
 
     config = PROVIDER_REGISTRY.get(slug)
     names = getattr(config, "api_key_env_vars", ()) if config else ()
-    if not names and isinstance(row.get("key_env"), str) and row["key_env"]:
-        names = (row["key_env"],)
+    if not names and key_env:
+        names = (key_env,)
     return [name for name in names if isinstance(name, str) and name]
 
 
