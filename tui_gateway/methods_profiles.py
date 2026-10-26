@@ -12,6 +12,7 @@ from .method_ctx import HandlerRegistry, bind_module
 
 _registry = HandlerRegistry()
 method = _registry.method
+_profile_scoped = _registry.profile_scoped
 
 # ext -> mime; iteration order is the on-disk lookup order for assets.
 _ASSET_EXTS = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
@@ -407,6 +408,50 @@ def _(rid, params: dict) -> dict:
     return _ok(rid, {"ok": all(applied.values()) if applied else True, "applied": applied,
                      **({"confirm_required": True, "confirm_message": confirm_message}
                         if confirm_message is not None else {})})
+
+
+def _saved_draft_base(name, profile_dir) -> dict:
+    """An existing profile as a draft (edit mode): what ``profiles.draft`` revises and diffs against."""
+    split_soul = _lazy("hermes_cli.profile_draft", "split_soul")
+    soul_path = profile_dir / "SOUL.md"
+    soul = _try(lambda: soul_path.read_text(encoding="utf-8", errors="replace") if soul_path.is_file() else "", "")
+    meta = _try(lambda: _lazy("hermes_cli.profiles", "read_profile_meta")(profile_dir), {})
+    ui_meta = _read_profile_yaml(profile_dir).get("ui_meta")
+    title = (_bots_title(ui_meta) if isinstance(ui_meta, dict) else None) or meta.get("display_name") or ""
+    return {"name": name, "title": str(title), "description": str(meta.get("description") or ""),
+            "soul": soul, "sections": split_soul(soul)}
+
+
+@method("profiles.draft")
+@_profile_scoped
+def _(rid, params: dict) -> dict:
+    """Draft a bot from a description on the auxiliary model — writes nothing (the dialog saves
+    through ``profiles.create`` / ``profiles.configure``). Runs in the caller's profile scope so
+    the aux call bills that profile; the catalog is read from the target profile's files."""
+    from hermes_cli import profile_draft
+    from hermes_cli.profiles import get_profile_dir
+    previous = None
+    current = params.get("current") if isinstance(params.get("current"), dict) else None
+    if str(params.get("name") or "").strip():
+        name, profile_dir, err = _resolve_profile(rid, params)
+        if err is not None:
+            return err
+        previous = _saved_draft_base(name, profile_dir)
+        current = current or previous
+    else:
+        try:
+            profile_dir = Path(get_profile_dir(str(params.get("source") or "default").strip() or "default"))
+        except ValueError as e:
+            return _err(rid, 4064, str(e))
+    draft = profile_draft.draft_profile(
+        str(params.get("description") or ""), catalog=profile_draft.build_catalog(profile_dir),
+        current=current, note=str(params.get("note") or ""), only=str(params.get("only") or "").strip())
+    out = draft.to_wire()
+    if previous is not None:
+        out["previous"] = {**{k: previous[k] for k in ("title", "description", "soul")},
+                           "sections": [{"key": k, "title": t, "text": previous["sections"].get(k, "")}
+                                        for k, t in profile_draft.SECTIONS]}
+    return _ok(rid, out)
 
 
 @_profile_handler("profiles.set_asset", 5065)

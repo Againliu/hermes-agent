@@ -201,6 +201,8 @@ def _profile_create(args):
     clone_config = clone or clone_from is not None
     cloned = clone_config or clone_all
     source_label = clone_from or get_active_profile_name()
+    from hermes_cli.profile_cmd_draft import apply_draft, confirm_draft
+    draft = confirm_draft(args, _die)
     try:
         profile_dir = create_profile(
             name=name, clone_from=clone_from, clone_all=clone_all, clone_config=clone_config,
@@ -210,6 +212,7 @@ def _profile_create(args):
     except (ValueError, FileExistsError, FileNotFoundError) as e:
         _die(f"Error: {e}")
     print(f"\nProfile '{name}' created at {profile_dir}")
+    apply_draft(profile_dir, draft, keep_description=bool(getattr(args, "description", None)))
     if cloned:
         if clone_all:
             print(f"Full copy from {source_label} (excluding session history, cron jobs, backups, and snapshots).")
