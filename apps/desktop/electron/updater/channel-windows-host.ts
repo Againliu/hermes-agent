@@ -1,7 +1,7 @@
 import { mkdir, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 
-import { downloadPinnedArtifact } from './artifact'
+import { downloadPinnedArtifact, PINNED_DOWNLOAD_POLICY, type PinnedDownloadProgress } from './artifact'
 import type { ChannelTarget } from './channel'
 import { type NativeCommandResult, runChannelPowerShell } from './channel-native'
 
@@ -9,7 +9,8 @@ import { type NativeCommandResult, runChannelPowerShell } from './channel-native
 export async function verifyPreparedChannelInstaller(
   file: string,
   target: ChannelTarget,
-  command: (script: string, input: string) => Promise<NativeCommandResult> = runChannelPowerShell
+  command: (script: string, input: string) => Promise<NativeCommandResult> = runChannelPowerShell,
+  onBytes?: PinnedDownloadProgress
 ): Promise<void> {
   const pkg = target.package
 
@@ -35,12 +36,17 @@ export async function verifyPreparedChannelInstaller(
 
   await mkdir(directory, { recursive: true, mode: 0o700 })
 
-  const artifact: string = await downloadPinnedArtifact(directory, {
-    url: target.artifactUrl,
-    sha256: pkg.artifact.sha256,
-    size: pkg.artifact.size,
-    format: pkg.artifact.key.endsWith('.msixbundle') ? 'msixbundle' : 'msix'
-  })
+  const artifact: string = await downloadPinnedArtifact(
+    directory,
+    {
+      url: target.artifactUrl,
+      sha256: pkg.artifact.sha256,
+      size: pkg.artifact.size,
+      format: pkg.artifact.key.endsWith('.msixbundle') ? 'msixbundle' : 'msix'
+    },
+    PINNED_DOWNLOAD_POLICY,
+    onBytes
+  )
 
   try {
     await command(
@@ -88,4 +94,14 @@ try {
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
+}
+
+/** `verifyPreparedChannelInstaller` with the real PowerShell, reporting the
+ *  pinned package's download progress to the update overlay. */
+export function verifyPreparedChannelDownload(
+  file: string,
+  target: ChannelTarget,
+  onBytes?: PinnedDownloadProgress
+): Promise<void> {
+  return verifyPreparedChannelInstaller(file, target, runChannelPowerShell, onBytes)
 }

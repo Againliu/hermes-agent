@@ -22,6 +22,9 @@ export interface PinnedDownloadPolicy {
 // transfer that stops moving fails, and a dropped one resumes where it stopped.
 export const PINNED_DOWNLOAD_POLICY: PinnedDownloadPolicy = { stallMs: 120_000, attemptsWithoutProgress: 3 }
 
+/** Bytes on disk so far and the pinned total, after every received chunk. */
+export type PinnedDownloadProgress = (received: number, total: number) => void
+
 export class PinnedDownloadStalledError extends Error {
   readonly code = 'stalled'
 }
@@ -79,7 +82,8 @@ async function transfer(
   artifact: PinnedArtifact,
   partial: Partial,
   offset: number,
-  policy: PinnedDownloadPolicy
+  policy: PinnedDownloadPolicy,
+  onBytes?: PinnedDownloadProgress
 ): Promise<number> {
   const controller = new AbortController()
   let stalled = false
@@ -120,9 +124,13 @@ async function transfer(
     } else {
       await unlink(partial.file).catch(ignoreMissing)
       handle = await open(partial.file, 'wx', 0o600)
-      await writeFile(partial.validatorFile, response.headers.get('etag') ?? response.headers.get('last-modified') ?? '', {
-        mode: 0o600
-      })
+      await writeFile(
+        partial.validatorFile,
+        response.headers.get('etag') ?? response.headers.get('last-modified') ?? '',
+        {
+          mode: 0o600
+        }
+      )
     }
 
     for await (const chunk of response.body) {
@@ -134,6 +142,7 @@ async function transfer(
       }
 
       await handle.writeFile(chunk)
+      onBytes?.(size, artifact.size)
     }
 
     await handle.sync()
@@ -160,7 +169,8 @@ async function transfer(
 export async function downloadPinnedArtifact(
   directory: string,
   artifact: PinnedArtifact,
-  policy: PinnedDownloadPolicy = PINNED_DOWNLOAD_POLICY
+  policy: PinnedDownloadPolicy = PINNED_DOWNLOAD_POLICY,
+  onBytes?: PinnedDownloadProgress
 ): Promise<string> {
   const file: string = path.join(directory, `destination.${artifact.format}`)
 
@@ -183,7 +193,7 @@ export async function downloadPinnedArtifact(
 
   while (size !== artifact.size) {
     try {
-      size = await transfer(artifact, partial, size, policy)
+      size = await transfer(artifact, partial, size, policy, onBytes)
 
       if (size !== artifact.size) {
         throw new Error('Pinned artifact download ended early')
