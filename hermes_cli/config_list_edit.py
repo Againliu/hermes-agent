@@ -22,8 +22,15 @@ from typing import Any
 
 
 def _same(item: Any, value: Any) -> bool:
-    # ``True == 1`` in Python; a bool and a number are different YAML items.
-    return item == value and isinstance(item, bool) is isinstance(value, bool)
+    # ``True == 1`` in Python; a bool and a number are different YAML items, at any depth
+    # (readers check flags like ``models_discovered`` with ``is True``).
+    if isinstance(item, bool) is not isinstance(value, bool):
+        return False
+    if isinstance(item, dict) and isinstance(value, dict):
+        return len(item) == len(value) and all(k in value and _same(v, value[k]) for k, v in item.items())
+    if isinstance(item, list) and isinstance(value, list):
+        return len(item) == len(value) and all(map(_same, item, value))
+    return item == value
 
 
 def _parse_value(key: str, value: str, as_json: bool) -> Any:

@@ -78,6 +78,19 @@ def test_non_list_targets_are_refused_and_nothing_is_written(home, capsys, argv,
     assert (home / "config.yaml").read_text(encoding="utf-8-sig") == saved if saved else not (home / "config.yaml").exists()
 
 
+def test_a_number_never_matches_a_boolean_inside_an_object_item(home, capsys):
+    (home / "config.yaml").write_text(
+        "custom_providers:\n  - name: x\n    models_discovered: true\n", encoding="utf-8")
+
+    _hermes("remove", "--json", "custom_providers", '{"name": "x", "models_discovered": 1}')
+    _hermes("add", "--json", "custom_providers", '{"name": "x", "models_discovered": 1}')
+    _hermes("add", "--json", "custom_providers", '{"models_discovered": true, "name": "x"}')  # same object
+    # ``True == 1`` in Python, so compare the stored types, not just the values.
+    assert [type(p["models_discovered"]) for p in _saved(home)["custom_providers"]] == [bool, int]
+    out = capsys.readouterr().out
+    assert "is not in custom_providers" in out and "already contains" in out
+
+
 def test_administrator_managed_list_is_refused(home, tmp_path_factory, monkeypatch, capsys):
     from hermes_cli import managed_scope
 
