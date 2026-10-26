@@ -532,6 +532,17 @@ def pause_gateway_for_update(home: Path, *, target: Optional[str] = None,
                                  timeout=timeout)
 
 
+def pause_gateway_if_idle(home: Path, *, target: Optional[str] = None,
+                          timeout: float = 8.0) -> Optional[dict[str, Any]]:
+    """Ask the gateway serving ``home`` to drain for an update only if it holds no work, checked and
+    paused in one step on its loop (``gateway.drain_control.pause_if_idle``). Returns
+    ``{"pausing": True, "pid"}`` when the drain began, ``{"busy": True, "active_work": [...], "pid"}``
+    when work is in flight (nothing changed), ``{"already_stopping": True, "pid"}`` when a drain had
+    already begun, or None when no gateway answers or it predates the verb."""
+    return query_gateway_control(home, "pause-if-idle", params={"target": target} if target else None,
+                                 timeout=timeout)
+
+
 def rescan_gateway_profiles(home: Path, *, timeout: float = 8.0) -> Optional[dict[str, Any]]:
     """Ask the multiplexer serving ``home`` to reconcile ``profiles/`` now (hot-serve a created profile,
     unroute a deleted one). Returns its ``{"served_profiles", "added", "removed", ...}`` answer, or None

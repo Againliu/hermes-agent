@@ -57,6 +57,10 @@ class PauseRefused(RuntimeError):
     """The pause could not be completed; everything it stopped was started again."""
 
 
+class GatewayBusy(RuntimeError):
+    """``--when-idle``: the gateway refused ``pause-if-idle`` because work arrived; nothing stopped."""
+
+
 def _empty_token() -> dict:
     return {"platform": "posix", "resume_needed": False, "profiles": {}, "unmapped_pids": [],
             "unmapped": [], "posix_units": []}
@@ -434,6 +438,20 @@ def _ask_to_drain(entry: dict) -> bool:
     return bool(ack and (ack.get("pausing") or ack.get("already_stopping")))
 
 
+def _busy_instead_of_pausing(entry: dict) -> str | None:
+    """``--when-idle``: ask the gateway to pause only if idle (checked and paused in one step on its
+    loop). The work it names when it refused; None when it paused, was already stopping, or cannot
+    answer the verb (an older gateway: the plain drain follows, as before)."""
+    from gateway.control_socket import pause_gateway_if_idle
+    from hermes_cli.update_cmd_when_idle import _work_summary
+    if not entry.get("home"):
+        return None
+    ack = pause_gateway_if_idle(Path(entry["home"]), target=(_RUN or {}).get("drain_target"))
+    if not (ack and ack.get("busy")):
+        return None
+    return _work_summary(ack.get("active_work") or []) or "work in flight"
+
+
 def update_target_label(git_cmd, root: Path, sha: str) -> str:
     """The release tag naming *sha*, else its short sha: what a draining gateway says it updates to."""
     from hermes_cli.update_cmd_check import _git
@@ -468,9 +486,13 @@ def _stop_gateways(token: dict, entries: list[dict]) -> None:
     survivor gets its supervisor's stop and a bare one SIGKILL, as the restart path escalates."""
     from hermes_cli import update_pause_record as pause_record
     from hermes_cli.update_cmd_drain_report import drain_progress_reporter
+    from hermes_cli.update_cmd_when_idle import pause_must_find_idle
     budget, waiting = _drain_budget(), []
-    for entry in entries:
+    for index, entry in enumerate(entries):
         pause_record.mark_stop_sent(token, entry["pid"])  # before the request: see _ask_to_drain
+        # Only before anything is stopped may a busy gateway call the pause off (one per host).
+        if index == 0 and pause_must_find_idle() and (busy := _busy_instead_of_pausing(entry)):
+            raise GatewayBusy(busy)
         if _ask_to_drain(entry):
             waiting.append(entry)
         else:
@@ -573,10 +595,10 @@ def _describe(token: dict) -> str:
 def pause_at_commit_point(target=None) -> str | None:
     """Stop this install's gateways before the first checkout move; once per run.
 
-    Never refuses the update: the pause is protection, not a gate. When it cannot complete
+    Never refuses a plain update: the pause is protection, not a gate. When it cannot complete
     (discovery or the durable record fails, a stop fails), the gateways run through the swap and
     the post-commit restart refreshes them, which is how POSIX updated before the pause existed.
-    Always ``None``; the caller's refusal branch stays for the contract it shares with Windows.
+    The one refusal: ``--when-idle``, whose gateway kept taking work until its bound ran out.
     *target* (called once, only when gateways may be paused) labels the drain each gateway publishes
     to its clients ("updating to <target>")."""
     token = _RUN
@@ -586,11 +608,31 @@ def pause_at_commit_point(target=None) -> str | None:
         with suppress(OSError, subprocess.SubprocessError):  # a label is courtesy: the pause runs regardless
             token.setdefault("drain_target", target())
     if "posix_pause_verdict" not in token:
-        token["posix_pause_verdict"] = _pause(token)
+        token["posix_pause_verdict"] = _pause_when_idle(token)
     return token["posix_pause_verdict"]
 
 
-def _pause(token: dict) -> str | None:
+def _pause_when_idle(token: dict) -> str | None:
+    """``_pause``, retried while a ``--when-idle`` gateway took work just before it could pause; past
+    the bound the update is refused before any checkout move (the one refusal this pause makes)."""
+    from hermes_cli import update_cmd_when_idle as when_idle
+    while isinstance(verdict := _pause(token), GatewayBusy):
+        if not when_idle.wait_again(str(verdict)):
+            return when_idle.BUSY_AT_PAUSE
+    return verdict
+
+
+def _roll_back_record(token: dict, before: dict) -> None:
+    """Put the record back as it was before this attempt: nothing it named was stopped."""
+    from hermes_cli import update_pause_record as pause_record
+    if token.get("pause_id") != before.get("pause_id"):
+        with suppress(Exception):
+            pause_record.discharge(token)
+    token.clear()
+    token.update(before)
+
+
+def _pause(token: dict) -> str | None | GatewayBusy:
     from hermes_cli import update_pause_record as pause_record
     try:
         units, jobs = _discover_systemd(), _discover_launchd()
@@ -624,11 +666,7 @@ def _pause(token: dict) -> str | None:
     except Exception as exc:  # health: allow BLE001 -- no durable record, no stop
         # Nothing was stopped: this attempt's id must not arm the checkout's tree gate, whose
         # required record write would then refuse the update. An adopted obligation stays as it was.
-        if token.get("pause_id") != before.get("pause_id"):
-            with suppress(Exception):
-                pause_record.discharge(token)
-        token.clear()
-        token.update(before)
+        _roll_back_record(token, before)
         print(f"  ⚠ Could not record the gateways to pause ({exc}); they keep running and are restarted after the update")
         return None
     # From here a refusal or a crash leaves the set owed: the command's own exit resume (registered
@@ -636,6 +674,11 @@ def _pause(token: dict) -> str | None:
     token["posix_stopped"] = True
     try:
         _stop_gateways(token, supervised + bare)
+    except GatewayBusy as busy:
+        _roll_back_record(token, before)
+        if before.get("pause_id"):
+            pause_record.sync(token)  # an adopted set is still owed, as recorded before this attempt
+        return busy
     except Exception as exc:  # health: allow BLE001 -- roll back: restart the stopped set, update unpaused
         print(f"  ⚠ Could not pause every gateway ({exc}); restarting them, the update continues without the pause")
         try:

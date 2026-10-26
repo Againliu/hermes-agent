@@ -16,10 +16,13 @@ import contextlib
 import functools
 import json
 import logging
+import os
 import re
+import threading
+import time
 from datetime import datetime, timezone, UTC
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from gateway.memory_status import _parse_iso
 from hermes_constants import get_hermes_home
@@ -53,6 +56,49 @@ def mark_update_drain(runner, target: Any = None) -> None:
         descriptor["drain_cause"] = UPDATE_DRAIN_CAUSE
         if isinstance(target, str) and TARGET_LABEL.fullmatch(target):
             descriptor["drain_target"] = target
+
+
+def pause_if_idle(runner, target: Any = None) -> dict[str, Any]:
+    """Begin the update drain only when *runner* holds no work. Call it ON the gateway loop.
+
+    The work read and the drain flag land in one loop step with no await between them. Every turn
+    admission reads ``_draining`` on this loop, or off it inside a ledger write that counts as work
+    until it returns (``tracked_write``), so no turn is admitted between "idle" and "paused".
+    ``{"pausing": True}``: the drain began. ``{"busy": True, "active_work": [...]}``: work is in
+    flight and nothing changed. ``{"already_stopping": True}``: a drain had already begun."""
+    if getattr(runner, "_draining", False) or getattr(runner, "_restart_task_started", False):
+        return {"pausing": False, "already_stopping": True}
+    from gateway.run_active_work_verb import _delegation_units
+    units = list(runner._describe_active_work()) + _delegation_units(time.time())
+    if units or runner._active_work_count() > 0:
+        return {"pausing": False, "busy": True, "active_work": units}
+    mark_update_drain(runner, target)
+    accepted = bool(runner.request_restart(detached=False, via_service=True))
+    return {"pausing": accepted, "already_stopping": not accepted}
+
+
+def pause_if_idle_verb(runner, loop) -> Callable[[dict], dict[str, Any]]:
+    """The ``pause-if-idle`` control verb: :func:`pause_if_idle` on *loop*, answered on the socket
+    thread. A loop that does not take the call within 5s answers busy, and the late call is dropped
+    (the first of the two to take the lock decides), so a slow answer never pauses behind the asker."""
+
+    def _handler(params: dict) -> dict[str, Any]:
+        gate, box, done = threading.Lock(), [], threading.Event()
+
+        def _decide() -> None:
+            with gate:
+                if not box:
+                    box.append(pause_if_idle(runner, params.get("target")))
+            done.set()
+
+        loop.call_soon_threadsafe(_decide)
+        done.wait(timeout=5.0)
+        with gate:
+            if not box:
+                box.append({"pausing": False, "busy": True, "active_work": [], "unanswered": True})
+        return {**box[0], "pid": os.getpid()}
+
+    return _handler
 
 
 def drain_status(runner, *, work: bool = True) -> Optional[dict[str, Any]]:

@@ -287,7 +287,8 @@ async def _start_gateway_start_control_socket(runner):
         )
         from gateway.run_plugin_rewire import reload_plugins_verb
         from gateway.run_active_work_verb import active_work_verb
-        from gateway.drain_control import RESTART_WAIT_REASON, drain_status, mark_update_drain
+        from gateway.drain_control import (RESTART_WAIT_REASON, drain_status, mark_update_drain,
+                                           pause_if_idle_verb)
         descriptor = runner.session_runtime_descriptor
 
         def _identify_runtime():
@@ -370,6 +371,9 @@ async def _start_gateway_start_control_socket(runner):
 
         _control_server = GatewayControlServer(
             verb_handlers={"pause-for-update": _pause_for_update_handler, "identify": _identify_runtime,
+                           # `hermes update --when-idle`: drain only if nothing is in flight, decided
+                           # in one loop step so no turn is admitted between the check and the pause.
+                           "pause-if-idle": pause_if_idle_verb(runner, _main_loop),
                            "rescan-profiles": _rescan_profiles_handler,
                            "migrate-profile-identity": migrate_profile_identity_verb(runner),
                            "unserve-profile": unserve_profile_verb(runner),

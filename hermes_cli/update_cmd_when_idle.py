@@ -30,6 +30,12 @@ _UNITS = {"s": 1, "m": 60, "h": 3600}
 #: Flags whose run reads, prints or records something and exits instead of installing.
 _NOT_AN_UPDATE = {"--check": "check", "--plan": "plan", "--list-venv-holders": "list_venv_holders",
                   "--set-channel": "set_channel", "--install-id": "install_id"}
+#: Monotonic end of the running ``--when-idle`` bound while its update runs: the commit-point pause
+#: asks each gateway to pause only if idle (``pause-if-idle``) and keeps waiting until then.
+_pause_deadline: Optional[float] = None
+_refused_busy = False
+BUSY_AT_PAUSE = ("the gateway took new work just before the update could pause it and stayed busy past "
+                 "the --when-idle bound; the checkout was not changed")
 _WORK_NOUNS = {"chat": "chat turn", "cron": "cron run", "delegation": "subagent", "api": "API run",
                "managed": "managed turn", "side_agent": "side agent", "deferred": "deferred task"}
 
@@ -129,6 +135,21 @@ def wait_until_idle(max_wait_s: float, *, probe: Callable[[], Optional[str]] = g
         sleep(min(poll_s if verdict["idle"] is not True else min(poll_s, 1.0), deadline - clock()))
 
 
+def pause_must_find_idle() -> bool:
+    """True while a ``--when-idle`` update runs: its pause may only take an idle gateway."""
+    return _pause_deadline is not None
+
+
+def wait_again(busy: str) -> bool:
+    """The gateway refused ``pause-if-idle`` (*busy*): wait for idle again within the bound's rest."""
+    global _refused_busy
+    print(f"→ The gateway took new work before the pause ({busy or 'work in flight'}); waiting for it...", flush=True)
+    if wait_until_idle(max(0.0, (_pause_deadline or 0.0) - time.monotonic()), probe=gateway_busy):
+        return True
+    _refused_busy = True
+    return False
+
+
 def _resolve_target(args) -> Optional[tuple[str, str]]:
     """``(target_sha, label)`` the update would move to, or None when HEAD already has it."""
     from hermes_cli import update_cmd as uc
@@ -196,17 +217,31 @@ def run_when_idle(args, cmd_update: Callable) -> None:
         print("  It is retried automatically once a newer version ships; run `hermes update` to retry it now.")
         return None
     max_wait = float(args.when_idle)
+    deadline = time.monotonic() + max_wait
     print(f"→ Update available: {label}. Waiting for the gateway to go idle (up to {int(max_wait // 60)}m).")
     if not wait_until_idle(max_wait):
-        print(f"✗ Still busy after {int(max_wait // 60)}m; not updating. Nothing was changed.")
-        print("  Run `hermes update` to update now (in-flight turns finish first).")
-        sys.exit(WHEN_IDLE_TIMEOUT_EXIT)
+        _give_up(max_wait)
     print("✓ Idle. Updating now.")
+    _apply_when_idle(args, cmd_update, target, label, deadline, max_wait)
+
+
+def _give_up(max_wait: float) -> None:
+    print(f"✗ Still busy after {int(max_wait // 60)}m; not updating. Nothing was changed.")
+    print("  Run `hermes update` to update now (in-flight turns finish first).")
+    sys.exit(WHEN_IDLE_TIMEOUT_EXIT)
+
+
+def _apply_when_idle(args, cmd_update: Callable, target: str, label: str, deadline: float, max_wait: float) -> None:
+    """Run the update with its commit-point pause bound to idle gateways until *deadline*."""
+    global _pause_deadline, _refused_busy
     from hermes_cli.update_cmd_commit import armed_move_targets
     already_armed = len(armed_move_targets())
+    _pause_deadline, _refused_busy = deadline, False
     try:
         cmd_update(args)
     except SystemExit as exc:
+        if _refused_busy:
+            _give_up(max_wait)  # the pause refused before any checkout move: retryable, nothing declined
         code = exc.code if isinstance(exc.code, int) else 1
         # Only a run that reached a checkout move tried a release; a refusal before it (another
         # updater holds the lock, a fetch failed) stays retryable. The commit it moved to is the one
@@ -218,3 +253,5 @@ def run_when_idle(args, cmd_update: Callable) -> None:
             print(f"  Recorded {label if tried == target else tried[:12]} as failed: "
                   "later --when-idle runs skip it until a newer version ships.")
         raise
+    finally:
+        _pause_deadline = None
