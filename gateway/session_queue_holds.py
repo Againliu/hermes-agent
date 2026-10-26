@@ -9,7 +9,9 @@ snapshot names the reason (``hold_reason``) so Desktop and ``/queue list`` can s
   every profile this runner serves) and refreshed on each poll, so a drain that stopped waiting
   (cancelled head, retirement) never keeps a slot from the others. The winner RESERVES the slot
   until its turn shows up as running (or ``_SLOT_RESERVE_S`` passes): its claim and turn start
-  await, and another drain polling meanwhile must not count the same slot as free.
+  await, and another drain polling meanwhile must not count the same slot as free. The owning drain
+  drops it when that turn ends or when it exits without one (``release_slot``), so a short turn no
+  other drain saw running never pins the slot.
 - ``editing``: a client is editing the row (``prompt.hold_queued``). The drain does not start it
   until the edit is saved or abandoned; the hold lapses after ``EDIT_HOLD_S`` so a crashed client
   cannot pin the FIFO. Each editor (connection + its holder token) holds separately: one editor
@@ -111,6 +113,14 @@ def _slot_blocked(authority, ref, live, row) -> bool:
         reserved[key] = (live.route, now + _SLOT_RESERVE_S)
         return False
     return True
+
+
+def release_slot(authority, ref) -> None:
+    """``ref``'s drain no longer needs its won slot reserved: its turn ended, or it exited without one."""
+    runner = getattr(authority, 'runner', None)  # an authority with no runner holds no reservations
+    reserved = vars(runner).get('_queue_slot_reserved') if runner is not None else None
+    if reserved:
+        reserved.pop((authority.profile_id, ref.session_id), None)
 
 
 def head_hold(authority, ref, live, row):

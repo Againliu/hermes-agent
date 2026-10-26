@@ -98,6 +98,25 @@ async def test_a_full_session_cap_queues_the_turn_and_names_why(tmp_path, monkey
     assert not _reasons(authority)
 
 
+@pytest.mark.asyncio
+async def test_a_finished_turn_frees_the_slot_it_won(tmp_path, monkeypatch):
+    db, authority = _authority(tmp_path, monkeypatch)
+    interactive(db)
+    authority.runner.config.max_concurrent_sessions = 1
+    authority.runner._is_session_running = lambda route: False
+    authority.runner._running_agent_count = lambda: 0
+    turn = Turn(monkeypatch)
+    with db:
+        await _submit(authority, 'short turn')
+        await asyncio.wait_for(turn.claimed.wait(), 30)
+        turn.release.set()
+        await asyncio.wait_for(authority.sessions['s'].task, 30)
+    # No other drain polled while it ran: the idle gateway's one slot is free for the next session.
+    other = SimpleNamespace(route='other', source=SimpleNamespace(platform=None))
+    row = {'principal_id': 'messaging:x', 'payload': {'text': 'hi'}}
+    assert not _slot_blocked(authority, SimpleNamespace(session_id='other'), other, row)
+
+
 def test_a_freed_slot_goes_to_a_person_before_automation():
     runner = SimpleNamespace(config=SimpleNamespace(max_concurrent_sessions=1),
                              _is_session_running=lambda route: False, _running_agent_count=lambda: 0)

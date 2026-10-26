@@ -453,6 +453,8 @@ class SessionAuthority:
             live.task.add_done_callback(_log_drain_failure)
             from gateway.session_runtime_workers import persist_work_count
             live.task.add_done_callback(lambda task: persist_work_count(self, task))
+            from gateway.session_queue_holds import release_slot
+            live.task.add_done_callback(lambda task: release_slot(self, ref))
 
     def wake_after_worker(self, session_id):
         """A worker execution on ``session_id`` (a logical owner or its compression continuation)
@@ -1240,6 +1242,8 @@ class SessionAuthority:
             finally:
                 with live.event_stream.lock:
                     self.executing.pop(ref.session_id, None)
+                from gateway.session_queue_holds import release_slot
+                release_slot(self, ref)
         except ManagedExecutionUnknown:
             with live.event_stream.lock:
                 live.event_stream.execution = {}
