@@ -34,7 +34,8 @@ identifier itself and fills the password through Hermes. Logins for other sites
 are only counted, never named, unless the agent searches them by site (`query`)
 or you ask what is saved (`all_sites`). Before a page is open, or with
 `all_sites`, a vault of more than 50 items is counted and the agent has to
-search it by site. The tool result it sees is
+search it by site. If a page is open but cannot be read, nothing is named and
+the agent has to search by site. The tool result it sees is
 `{filled_fields: 1, origin: "https://github.com"}`; the password is also
 registered with the redactor so a later page read cannot echo it back.
 
@@ -85,7 +86,7 @@ cannot spend. Address fills need no confirmation.
 While a filled card is on the page, screenshots of it are refused (a
 `browser_exec` capture is deleted instead of attached, `browser_cdp` screenshot
 methods and `vision_analyze` on a newer image refuse) until the form is
-submitted or the page navigates. Text reads show the card number as
+submitted or that tab navigates or closes, even after the agent moves to another tab. Text reads show the card number as
 `«redacted-card ••••4242»` in whatever grouping the page formats it, and the CVC
 is masked as a whole number only while that page is open.
 
