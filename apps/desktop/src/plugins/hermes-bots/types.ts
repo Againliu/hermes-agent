@@ -147,6 +147,7 @@ export type GroupMember = Pick<
   | 'display_name'
   | 'ghost'
   | 'handle'
+  | 'hermesHandleTaken'
   | 'installId'
   | 'name'
   | 'previous_names'
