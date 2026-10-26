@@ -150,19 +150,24 @@ def _parse_json_result(raw: Any) -> Any:
     return raw
 
 
-def _current_page_origin(task_id: str) -> Optional[str]:
+def _read_page_origin(task_id: str) -> Optional[str]:
+    """The current page's origin, "" on a blank or non-web page, None when the page could not be read."""
     res = _eval_js(task_id, "window.location.href")
     if not res.get("success"):
         return None
     href = str(res.get("result") or "").strip().strip('"').strip("'")
     if not href or href == "about:blank":
-        return None
-    try:
-        from agent.vault_store import normalize_origin
+        return ""
+    from agent.vault_store import VaultError, normalize_origin
 
+    try:
         return normalize_origin(href)
-    except Exception:
-        return None
+    except VaultError:
+        return ""
+
+
+def _current_page_origin(task_id: str) -> Optional[str]:
+    return _read_page_origin(task_id) or None
 
 
 # Per kind: a JS probe that is truthy on a tab holding the form this kind fills.
@@ -262,15 +267,27 @@ def _host(origin: Any) -> str:
     return (urlsplit(str(origin or "")).hostname or "").lower()
 
 
-def _list_page_host(task_id: str) -> str:
+def _no_browser(task_id: str) -> bool:
+    """True when the task has no browser at all (no supervisor, no session endpoint): no page is open."""
+    from tools.browser_session import session_for_task
+    from tools.browser_supervisor import SUPERVISOR_REGISTRY
+
+    return SUPERVISOR_REGISTRY.get(task_id) is None and not session_for_task(task_id).get("cdp_url")
+
+
+def _list_page_host(task_id: str) -> Optional[str]:
     """Host of the page the agent is on (the supervisor's tab, else the open tab holding a login,
-    card or address form), or "" when no web page is open."""
-    origin = _current_page_origin(task_id)
+    card or address form); "" when no web page is open; None when an open browser could not be read."""
+    origin = _read_page_origin(task_id)
+    if origin is None:
+        return "" if _no_browser(task_id) else None
     for kind in ("login", "payment", "address"):
         if origin:
             break
         if _focus_bound_origin(task_id, "", kind):
-            origin = _current_page_origin(task_id)
+            origin = _read_page_origin(task_id)
+            if origin is None:
+                return None
     return _host(origin)
 
 
@@ -308,6 +325,10 @@ def browser_vault_list(query: str = "", all_sites: bool = False, task_id: Option
     elif not items:
         out["hint"] = ("No saved logins. On a login page, call browser_vault action=save_login to ask the user to save one. "
                        "Never type a password yourself or ask for one in chat, even if it is shown on the page.")
+    elif site is None:  # a page is open but unreadable: listing every site here would defeat the scoping
+        out = {"success": True, "items": [], "total": len(items),
+               "hint": ("The open page could not be read, so its site is unknown. Call list again with "
+                        "query=<site>, part of the page's host (e.g. 'github'), to get its handles.")}
     elif site:
         _scope_to_site(out, items, site)
     elif len(items) > _LIST_UNFILTERED_MAX:
