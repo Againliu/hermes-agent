@@ -40,6 +40,42 @@ def open_restart_wait(runner) -> None:
         descriptor["drain_reason"] = RESTART_WAIT_REASON
 
 
+#: ``drain.reason`` an owner draining for ``hermes update`` publishes (``pause-for-update``). It sits
+#: beside ``drain_reason``, never in it: that field drives the restart wait's attach rule (#139041).
+UPDATE_DRAIN_CAUSE = "update"
+TARGET_LABEL = re.compile(r"[\w.+-]{1,64}")
+
+
+def mark_update_drain(runner, target: Any = None) -> None:
+    """Record that *runner* drains for an update to *target* (a release tag or short sha)."""
+    descriptor = getattr(runner, "session_runtime_descriptor", None)
+    if descriptor is not None:
+        descriptor["drain_cause"] = UPDATE_DRAIN_CAUSE
+        if isinstance(target, str) and TARGET_LABEL.fullmatch(target):
+            descriptor["drain_target"] = target
+
+
+def drain_status(runner, *, work: bool = True) -> Optional[dict[str, Any]]:
+    """Why and where to a draining *runner* goes, and what it still finishes; None when not draining.
+
+    ``reason`` is ``update`` for an update's drain, else the published ``drain_reason`` (``restart_wait``,
+    ``idle_exit``) or ``None`` for a drain that names nothing (``stop()``, a dashboard drain). Clients
+    render it ("Updating to v0.23.1, finishing 1 turn") instead of reading a dead owner.
+    ``waiting_for`` (*work*) counts the units the drain waits on by kind: read it on the gateway loop."""
+    descriptor = getattr(runner, "session_runtime_descriptor", None) or {}
+    if not (getattr(runner, "_draining", False) or descriptor.get("state") == "draining"):
+        return None
+    status: dict[str, Any] = {"reason": descriptor.get("drain_cause") or descriptor.get("drain_reason"),
+                              "target": descriptor.get("drain_target")}
+    if work:
+        kinds: dict[str, int] = {}
+        for unit in runner._describe_active_work():
+            kind = str(unit.get("kind") or "work")
+            kinds[kind] = kinds.get(kind, 0) + 1
+        status["waiting_for"] = kinds
+    return status
+
+
 def restart_wait_open(runner) -> bool:
     """True while *runner* is in a restart's after-turn wait (draining, not yet stopping)."""
     descriptor = getattr(runner, "session_runtime_descriptor", None) or {}

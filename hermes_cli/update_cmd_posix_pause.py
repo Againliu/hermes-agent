@@ -428,10 +428,17 @@ def _ask_to_drain(entry: dict) -> bool:
     if not entry.get("home"):
         return False
     try:
-        ack = pause_gateway_for_update(Path(entry["home"]))
+        ack = pause_gateway_for_update(Path(entry["home"]), target=(_RUN or {}).get("drain_target"))
     except Exception:  # health: allow BLE001 -- no answer is the pre-verb gateway: the fallback stop handles it
         return False
     return bool(ack and (ack.get("pausing") or ack.get("already_stopping")))
+
+
+def update_target_label(git_cmd, root: Path, sha: str) -> str:
+    """The release tag naming *sha*, else its short sha: what a draining gateway says it updates to."""
+    from hermes_cli.update_cmd_check import _git
+    tag = _git(git_cmd, root, ["describe", "--tags", "--exact-match", sha]).stdout.strip()
+    return tag or sha[:12]
 
 
 def _stop_at_once(entry: dict) -> None:
@@ -563,16 +570,21 @@ def _describe(token: dict) -> str:
 
 # --------------------------------------------------------------------------- the commit point
 
-def pause_at_commit_point() -> str | None:
+def pause_at_commit_point(target=None) -> str | None:
     """Stop this install's gateways before the first checkout move; once per run.
 
     Never refuses the update: the pause is protection, not a gate. When it cannot complete
     (discovery or the durable record fails, a stop fails), the gateways run through the swap and
     the post-commit restart refreshes them, which is how POSIX updated before the pause existed.
-    Always ``None``; the caller's refusal branch stays for the contract it shares with Windows."""
+    Always ``None``; the caller's refusal branch stays for the contract it shares with Windows.
+    *target* (called once, only when gateways may be paused) labels the drain each gateway publishes
+    to its clients ("updating to <target>")."""
     token = _RUN
     if token is None:
         return None
+    if target is not None and "posix_pause_verdict" not in token:
+        with suppress(OSError, subprocess.SubprocessError):  # a label is courtesy: the pause runs regardless
+            token.setdefault("drain_target", target())
     if "posix_pause_verdict" not in token:
         token["posix_pause_verdict"] = _pause(token)
     return token["posix_pause_verdict"]

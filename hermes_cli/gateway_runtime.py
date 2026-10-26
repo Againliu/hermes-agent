@@ -95,6 +95,25 @@ def _overlay_owner_home(home: Path) -> Path:
     return target.parent
 
 
+_DRAIN_WORK_NOUNS = {"chat": "turn", "cron": "cron run", "delegation": "subagent", "api": "API run"}
+
+
+def drain_detail(drain) -> str | None:
+    """"updating to v0.23.1, finishing 1 turn" from a draining owner's ``drain`` block, else None.
+
+    Built only from validated fields (the target label shape the gateway enforces, integer counts),
+    never raw peer text, so it is safe to print in any client error."""
+    if not isinstance(drain, dict) or drain.get("reason") != "update":
+        return None
+    from gateway.drain_control import TARGET_LABEL
+    target = drain.get("target")
+    text = f"updating to {target}" if isinstance(target, str) and TARGET_LABEL.fullmatch(target) else "updating"
+    work = drain.get("waiting_for") if isinstance(drain.get("waiting_for"), dict) else {}
+    parts = [f"{n} {_DRAIN_WORK_NOUNS.get(k, 'task')}{'' if n == 1 else 's'}"
+             for k, n in sorted(work.items()) if type(n) is int and n > 0]
+    return f"{text}, finishing {', '.join(parts)}" if parts else text
+
+
 def _endpoint(payload: dict, home: Path, control_home: Path | None = None) -> GatewayDiscovery:
     if type(payload.get("runtime_protocol")) is not int or payload["runtime_protocol"] != 1:
         return GatewayDiscovery("incompatible", reason_code="runtime_protocol")
@@ -118,7 +137,8 @@ def _endpoint(payload: dict, home: Path, control_home: Path | None = None) -> Ga
         # An auto-started gateway ending through its idle exit names that, so its clients wait
         # for it to go and start a fresh one instead of reporting a refusal.
         idle = state == "draining" and payload.get("drain_reason") == "idle_exit"
-        return GatewayDiscovery(state, reason_code="idle_exit" if idle else None)
+        return GatewayDiscovery(state, reason_code="idle_exit" if idle else None,
+                                detail=drain_detail(payload.get("drain")) if state == "draining" else None)
     if state != "ready" and not restart_wait:
         return GatewayDiscovery("inaccessible", reason_code="invalid_runtime_state")
     capabilities = payload.get("capabilities")
@@ -149,7 +169,8 @@ def _endpoint(payload: dict, home: Path, control_home: Path | None = None) -> Ga
         supervisor=supervisor, capabilities=frozenset(capabilities),
         control_home=str(control_home) if control_home is not None else None,
         code_sha=code_sha if isinstance(code_sha := payload.get("code_sha"), str) and code_sha else None,
-    ), reason_code=RESTART_WAIT_REASON if restart_wait else None)
+    ), reason_code=RESTART_WAIT_REASON if restart_wait else None,
+        detail=drain_detail(payload.get("drain")) if restart_wait else None)
 
 
 def control_home_for(home: Path, endpoint: GatewayEndpoint | None) -> Path:
