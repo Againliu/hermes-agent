@@ -35,10 +35,6 @@ import tempfile
 from pathlib import Path
 
 
-ERROR_VALUES = ("#NAME?", "#VALUE!", "#REF!", "#DIV/0!", "#N/A", "#NUM!",
-                "#NULL!", "Err:")
-
-
 def count_cached(path):
     """Formula cells, how many have a cached value, and which cache an error."""
     from openpyxl import load_workbook
@@ -52,11 +48,13 @@ def count_cached(path):
             for cell in row:
                 if isinstance(cell.value, str) and cell.value.startswith("="):
                     formulas += 1
-                    value = ws_v[cell.coordinate].value
-                    if value is not None:
+                    cached_cell = ws_v[cell.coordinate]
+                    if cached_cell.value is not None:
                         cached += 1
-                    if isinstance(value, str) and value.startswith(ERROR_VALUES):
-                        errors.append(f"{name}!{cell.coordinate}={value}")
+                    # The cell's error type, not its text: a formula may
+                    # legitimately return the string "#N/A".
+                    if cached_cell.data_type == "e":
+                        errors.append(f"{name}!{cell.coordinate}={cached_cell.value}")
     return formulas, cached, errors
 
 
