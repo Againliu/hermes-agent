@@ -59,6 +59,7 @@ class ToolEvent:
     is_check: bool  # a test/build/lint/CI command
     check_passed: bool  # is_check, and its own status was observed as 0
     paths: tuple[str, ...] = ()  # files a landed edit wrote
+    edit_failed: bool = False  # a file write/patch whose result came back without landing
 
 
 def _parse_json(raw: Any) -> Any:
@@ -119,6 +120,7 @@ def _event(call: Any, results: dict[str, Any]) -> ToolEvent:
         name=name, detail=detail, exit_code=exit_code if isinstance(exit_code, int) else None,
         is_edit=landed, is_check=is_check, check_passed=passed,
         paths=tuple(_extract_landed_file_mutation_paths(name, args, _result_text(raw_result))) if landed else (),
+        edit_failed=name in FILE_MUTATING_TOOL_NAMES and raw_result is not None and not landed,
     )
 
 

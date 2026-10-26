@@ -32,6 +32,8 @@ JUDGE_TOOL_ACTIVITY_BLOCK_TEMPLATE = (
 
 def _event_line(event: ToolEvent) -> str:
     line = f"- {event.name} {event.detail}".rstrip()
+    if event.edit_failed:
+        return line + " → FAILED (nothing written)"
     return line + (f" → exit {event.exit_code}" if event.exit_code is not None else "")
 
 

@@ -68,6 +68,17 @@ def test_check_in_an_earlier_turn_still_counts_and_a_failing_one_is_named(db):
     assert "NOT VERIFIED" not in block
 
 
+def test_failed_write_is_shown_as_failed(db):
+    from hermes_cli.goals_evidence import gather_tool_activity
+
+    db.ensure_session("sid-fail")
+    db.append_message("sid-fail", "user", "save the summary to notes.md")
+    db.append_message("sid-fail", "assistant", "", tool_calls=_calls(("w1", "write_file", {"path": "notes.md"})))
+    db.append_message("sid-fail", "tool", json.dumps({"error": "Permission denied"}), tool_call_id="w1")
+    db.append_message("sid-fail", "assistant", "Saved notes.md.")
+    assert "- write_file path=notes.md → FAILED (nothing written)" in gather_tool_activity("sid-fail")
+
+
 def test_session_without_tool_calls_leaves_the_judge_prompt_unchanged(db):
     from hermes_cli.goals_evidence import gather_tool_activity
 
