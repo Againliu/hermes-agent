@@ -96,6 +96,23 @@ def test_full_uninstall_fails_when_the_home_survives(profile_install, monkeypatc
     assert "Uninstall Complete" not in output
 
 
+@pytest.mark.platforms("posix")
+def test_full_uninstall_keeping_profiles_removes_a_stale_gateway_socket(profile_install, monkeypatch):
+    """A crashed gateway leaves its socket behind: neither file nor directory, it must still be unlinked."""
+    import socket
+
+    install = profile_install
+    monkeypatch.chdir(install.home)  # a relative bind path stays under the AF_UNIX length cap
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.bind("gateway.sock")
+    monkeypatch.chdir(install.home.parent)
+    monkeypatch.setattr("builtins.input", lambda *_args: pytest.fail("--yes --full must stay noninteractive"))
+
+    uninstall.run_uninstall(SimpleNamespace(dry_run=False, yes=True, full=True))
+
+    assert set(install.home.iterdir()) == {install.home / "profiles"}
+
+
 @pytest.mark.platforms("windows")
 def test_rmtree_step_removes_read_only_git_objects(tmp_path):
     """install.ps1 puts the git checkout, whose objects are read-only, inside HERMES_HOME."""

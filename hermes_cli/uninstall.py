@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from hermes_constants import get_hermes_home
+from pm.filesystem import is_junction
 
 from hermes_cli.colors import Colors, color
 
@@ -975,8 +976,12 @@ def _remove_default_data_preserving_profiles(hermes_home: Path) -> bool:
         if child == profiles_root:
             continue
         try:
-            if child.is_symlink() or child.is_file():
-                if _is_windows() and not child.is_symlink():
+            # lstat, as remove_data does: a stale gateway socket or FIFO is neither a file nor a directory.
+            mode = child.lstat().st_mode
+            if is_junction(child):
+                child.rmdir()  # the link itself, never its target
+            elif child.is_symlink() or not stat.S_ISDIR(mode):
+                if _is_windows() and stat.S_ISREG(mode):
                     os.chmod(child, stat.S_IWRITE)
                 child.unlink()
             else:
