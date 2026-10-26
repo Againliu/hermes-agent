@@ -22,11 +22,11 @@ config_schema:
 """
 
 
-@pytest.fixture
-def home(tmp_path):
+@pytest.fixture(params=["plugin.yaml", "plugin.yml"])
+def home(tmp_path, request):
     plugin = tmp_path / "plugins" / "dreamy"
     plugin.mkdir(parents=True)
-    (plugin / "plugin.yaml").write_text(PLUGIN_YAML, encoding="utf-8")
+    (plugin / request.param).write_text(PLUGIN_YAML, encoding="utf-8")
     (plugin / "__init__.py").write_text("def register(ctx):\n    pass\n", encoding="utf-8")
     with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
         yield tmp_path

@@ -36,18 +36,18 @@ _ENV_NAME_CLEAN_RE = re.compile(r"[^A-Z0-9]+")
 
 
 def _manifest_config_schema(plugin_dir: Optional[Path]) -> Mapping[str, Mapping[str, Any]]:
-    """``config_schema`` from ``<plugin_dir>/plugin.yaml``, or for a portable package from
-    ``plugin.json`` ``extensions.com.nousresearch.hermes.config_schema`` (Agent Plugins v1 forbids
-    unknown top-level fields, so Hermes-specific keys live in the vendor namespace); ``{}`` when
-    absent or malformed (the loader already warned about malformed entries at load time)."""
+    """``config_schema`` from ``<plugin_dir>/plugin.yaml`` (or ``plugin.yml``), or for a portable
+    package from ``plugin.json`` ``extensions.com.nousresearch.hermes.config_schema`` (Agent Plugins
+    v1 forbids unknown top-level fields, so Hermes-specific keys live in the vendor namespace); ``{}``
+    when absent or malformed (the loader already warned about malformed entries at load time)."""
     if plugin_dir is None:
         return {}
-    manifest = Path(plugin_dir) / "plugin.yaml"
+    from pm.plugin_declarations import native_manifest_file, read_native_manifest
+
     try:
-        if manifest.is_file():
-            from utils import fast_safe_load
-            data = fast_safe_load(manifest.read_text(encoding="utf-8-sig")) or {}
-            raw = data.get("config_schema") if isinstance(data, Mapping) else None
+        manifest = native_manifest_file(Path(plugin_dir))
+        if manifest is not None:
+            raw = read_native_manifest(manifest).get("config_schema")
         else:
             raw = _portable_config_schema(Path(plugin_dir))
     except Exception as exc:  # unreadable manifest: no settings surface, never a failed list
