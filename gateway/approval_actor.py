@@ -36,11 +36,11 @@ def approval_refusal(session_key: str, actor_id: Any, *, admin_ids: Iterable[str
     the resolver then reports "nothing pending" exactly as before. Adapters pass their platform
     ``extra`` block instead of *admin_ids*."""
     from gateway.slash_access import _coerce_id_list
-    from tools.approval import list_gateway_approvals
+    from tools.approval import list_gateway_approval_authority
 
     actor = str(actor_id or "").strip()
     admins = {str(a) for a in admin_ids} | admin_ids_from_extra(extra)
-    for pending in list_gateway_approvals(session_key):
+    for pending in list_gateway_approval_authority(session_key):
         if request_id and pending.get("request_id") != request_id:
             continue
         requester = str(pending.get("requester_id") or "")
