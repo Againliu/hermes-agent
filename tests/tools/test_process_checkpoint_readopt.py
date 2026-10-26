@@ -7,6 +7,7 @@ status was collected.
 """
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -216,3 +217,43 @@ class TestCheckpointReadopt:
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
+
+
+def test_a_readopted_process_keeps_its_scratch_entry_until_its_session_ends(registry, tmp_path, monkeypatch):
+    """A gateway crash frees the vouch its registry held for a background worker. The next gateway
+    re-adopts the worker from the checkpoint (same pid, same start time) and must vouch for it again,
+    so the prune keeps the worker and its idle entry; once the worker exits and the registry notices,
+    the vouch is released."""
+    from hermes_constants import get_scratch_dir, prune_scratch_dir
+    from hermes_constants_scratch_lock import live_owner_pids, owners_dir
+    from tests.waiting import wait_until
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    entry = get_scratch_dir(tmp_path, prune=False) / "bg-worker"
+    entry.mkdir()
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                            cwd=str(entry), stdin=subprocess.DEVNULL)
+    try:
+        checkpoint = tmp_path / "procs.json"
+        checkpoint.write_text(json.dumps([{
+            "session_id": "proc_readopt_owner", "command": "bg-worker", "pid": proc.pid, "pid_scope": "host",
+            "host_start_time": ProcessRegistry._safe_host_start_time(proc.pid), "task_id": "t1"}]))
+        monkeypatch.setattr("tools.process_registry.CHECKPOINT_PATH", checkpoint)
+        assert registry.recover_from_checkpoint() == 1
+        ancient = time.time() - 30 * 3600
+        os.utime(entry, (ancient, ancient))
+
+        prune_scratch_dir(entry.parent)
+
+        assert proc.poll() is None, "the re-adopted worker was reaped"
+        assert entry.exists(), "the re-adopted worker's entry was deleted"
+        proc.kill()
+        proc.wait()
+        wait_until(lambda: registry.poll("proc_readopt_owner")["status"] == "not_found",
+                   timeout=10, what="the registry notices the worker is gone")
+        assert proc.pid not in live_owner_pids(tmp_path)
+        assert not (owners_dir(tmp_path) / f"{proc.pid}.lock").exists()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()

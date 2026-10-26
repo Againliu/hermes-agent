@@ -6,6 +6,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from agent.redact import redact_sensitive_text
+from hermes_constants_scratch_lock import release_child, vouch_for_child
 
 logger = logging.getLogger("tools.process_registry")
 
@@ -14,6 +15,12 @@ class ProcessCheckpointMixin:
     def _detached_host_fate(self, pid: Optional[int], expected_start: Optional[int]) -> str:
         """Subclass supplies the live PID decision. See ProcessRegistry."""
         raise NotImplementedError
+
+    @staticmethod
+    def _release_readopted(session) -> None:
+        """Stop vouching for a re-adopted host process (recovery's owner lock); no-op otherwise."""
+        if session.detached and session.pid_scope == "host":
+            release_child(session.pid)
 
     # ----- Checkpoint (crash recovery) -----
 
@@ -108,6 +115,7 @@ class ProcessCheckpointMixin:
             # completion. A positive mismatch means the number was recycled:
             # do not adopt it and do not signal it.
             fate = self._detached_host_fate(pid, entry.get("host_start_time"))
+            same_process = fate == "running"
             # A worker spawn's output log and recorded exit outlive both the spawner and the PID,
             # so its reader decides the outcome (a recycled PID is never signalled: fate != running).
             log = adoptable_log(entry.get("output_log"))
@@ -138,6 +146,11 @@ class ProcessCheckpointMixin:
             # (and recorded exit) outlives its spawner, so tail it from the start.
             fields["output_log"] = log
             session = ProcessSession(id=entry["session_id"], detached=True, **fields)
+            if same_process:
+                # Re-adopted: Hermes-owned for the scratch prune again, exactly like a fresh spawn,
+                # until _release_readopted. Only on the registry's own same-process verdict,
+                # never when the output log alone decided the adoption.
+                vouch_for_child(pid)
             if session.output_log:
                 self._track_started(session, self._log_reader_loop, f"proc-log-reader-{session.id}")
             else:

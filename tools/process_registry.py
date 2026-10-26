@@ -1029,6 +1029,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                 session.exited_at = time.time()
                 self._running.pop(session.id, None)
             self._finished[session.id] = session
+        self._release_readopted(session)
         self._write_checkpoint()
         session._completion_event.set()
 
@@ -1046,6 +1047,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                 self._finished[session.id] = session
             else:
                 self._finished.pop(session.id, None)
+        self._release_readopted(session)
         self._write_checkpoint()
         session._completion_event.set()
         return session if session.systemd_unit else None
@@ -1575,6 +1577,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
 
     def _publish_finished(self, session: ProcessSession, was_running: bool) -> None:
         self._release_finished_handles(session)
+        self._release_readopted(session)
         self._write_checkpoint()
         if was_running and session.notify_on_complete:
             notification = {

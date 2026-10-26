@@ -53,6 +53,25 @@ child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(900)"],
 open(sys.argv[2], "w", encoding="utf-8").write(str(child.pid))
 '''
 
+REGISTRY = r'''
+import json, os, sys, time
+repo, lane, out, role = sys.argv[1:5]
+sys.path.insert(0, repo)
+from hermes_cli.process_identity import register_self
+from tools.process_registry import ProcessRegistry
+register_self("gateway")
+registry = ProcessRegistry()
+if role == "spawn":
+    info = {"worker": registry.spawn_local("sleep 900", cwd=lane).pid}
+else:
+    info = {"recovered": registry.recover_from_checkpoint(), "pids": [s.pid for s in registry._running.values()]}
+info["registry"] = os.getpid()
+with open(out + ".tmp", "w", encoding="utf-8") as f:
+    f.write(json.dumps(info))
+os.replace(out + ".tmp", out)
+time.sleep(900)
+'''
+
 
 class World:
     """A throwaway Hermes home with a scratch dir whose entries can be aged idle."""
@@ -64,6 +83,7 @@ class World:
         self.spawned: list[int] = []
         (tmp / "gateway.py").write_text(GATEWAY, encoding="utf-8")
         (tmp / "orphan.py").write_text(ORPHAN, encoding="utf-8")
+        (tmp / "registry.py").write_text(REGISTRY, encoding="utf-8")
 
     def entry(self, name):
         path = self.scratch / name
@@ -88,6 +108,17 @@ class World:
             wait_until(lambda: Path(str(out) + ".registered").exists(), timeout=90, what="gateway registered")
             return out
         return json.loads(wait_until(lambda: out.exists() and out.read_text(encoding="utf-8-sig"), timeout=90, what="gateway up"))
+
+    def registry(self, lane, role):
+        """A gateway-like process whose process registry spawns a background worker inside *lane*
+        (``spawn``) or recovers the workers recorded in the checkpoint (``recover``)."""
+        out = self.tmp / f"registry-{role}.json"
+        proc = subprocess.Popen([sys.executable, str(self.tmp / "registry.py"), REPO, str(lane), str(out), role],
+                                cwd=str(self.tmp), stdin=subprocess.DEVNULL, creationflags=NO_WINDOW,
+                                env={**os.environ, "HERMES_HOME": str(self.home)})
+        self.spawned.append(proc.pid)
+        return json.loads(wait_until(lambda: out.exists() and out.read_text(encoding="utf-8-sig"), timeout=90,
+                                     what=f"registry {role}"))
 
     def orphan(self, cwd):
         """A sleeper whose spawner exits right away (a leaked headless browser)."""
@@ -179,6 +210,23 @@ def test_gateway_killed_by_terminate_process_frees_its_shell_for_the_reap(world)
     world.prune()
     wait_until(lambda: gone(gw["shell"]), timeout=30, what="the orphaned shell reaped")
     assert not lane.exists()
+
+
+def test_a_background_worker_the_next_gateway_recovers_keeps_its_entry(world):
+    """A gateway's registry runs a background worker inside an entry, the gateway is terminated
+    (TerminateProcess, so its vouch is gone), and the next gateway re-adopts the worker from the
+    checkpoint. The worker is Hermes-owned again: neither it nor its idle entry may be pruned."""
+    lane = world.entry("lane")
+    first = world.registry(lane, "spawn")
+    world.spawned.append(first["worker"])
+    psutil.Process(first["registry"]).kill()
+    wait_until(lambda: gone(first["registry"]), timeout=30, what="first gateway terminated")
+    nxt = world.registry(lane, "recover")
+    assert nxt["recovered"] == 1 and first["worker"] in nxt["pids"], nxt
+    world.age()
+    world.prune()
+    assert alive(first["worker"]), f"the re-adopted worker was killed:\n{world.log()}"
+    assert lane.exists(), f"the re-adopted worker's entry was deleted:\n{world.log()}"
 
 
 def test_orphan_with_cwd_in_an_idle_entry_is_reaped_and_the_entry_removed(world):
