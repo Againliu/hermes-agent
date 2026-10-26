@@ -76,8 +76,10 @@ base commits.
   `git rebase --onto <new-base> <old-base> <branch>`.
 - Never compute the old base with `git merge-base` after the base was rewritten; it finds a commit
   the rewrite no longer contains and replays the base's commits onto itself.
-- Git 2.38+: `git rebase --update-refs <new-base>` from the top branch moves every intermediate
-  branch ref in one pass (still record old heads first).
+- Git 2.38+: `git rebase --update-refs --onto <new-base> <old-base> <top-branch>` restacks the
+  whole stack and moves every intermediate branch ref in one pass. Keep `--onto <old-base>`:
+  `--update-refs` only moves pointers, and without the recorded old base a squash-merged base's
+  original commits are replayed again.
 - Push each restacked branch with `--force-with-lease`, bottom-up.
 
 ## 7. Shared checkouts and worktrees
