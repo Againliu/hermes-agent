@@ -1689,8 +1689,8 @@ DEFAULT_CONFIG = {
         # Case-insensitive fnmatch globs against terminal commands; a match blocks even under --yolo / mode=off.
         # Quote in YAML when starting with * or containing {}/!/: e.g. "git push --force*".
         "deny": [],
-        # Chat user ids besides the requester and platform admins that may answer an exec approval; ["*"] = anyone.
-        "approvers": [],
+        # Who may answer a chat exec approval: ["*"] any admitted member; [] the requester + platform admins (+ listed ids).
+        "approvers": ["*"],
         # /reload-mcp confirms before rebuilding the MCP tool set (it invalidates the prompt cache). "Always Approve" → false.
         "mcp_reload_confirm": True,
         # /clear, /new, /reset, /undo confirm before discarding state (Approve Once / Always Approve

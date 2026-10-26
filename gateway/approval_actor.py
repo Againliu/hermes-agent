@@ -4,13 +4,14 @@ An approval belongs to the user whose message started the turn that raised it.
 ``tools.approval_gateway_wait`` records ``requester_id`` / ``requester_name`` and the
 profile's ``approvals.approvers`` on the pending entry (in the turn's profile scope).
 In a shared chat any admitted member sees the Allow/Deny buttons, so every surface
-that resolves an approval from a chat event (button callbacks, ``/approve`` and
-``/deny``, relay prompt responses) asks :func:`approval_refusal` first.
+that resolves an approval from a chat event (button callbacks, reactions, ``/approve``
+and ``/deny``, relay prompt responses) asks :func:`approval_refusal` first.
 
-Allowed: the requester; anyone in ``approvals.approvers`` (``"*"`` restores the
-old "any admitted user" behaviour); the platform's admins (``allow_admin_from`` /
-``group_allow_admin_from``). Local surfaces (CLI, TUI, Desktop) answer as the host
-and never come through here.
+``approvals.approvers`` defaults to ``["*"]``: any admitted member answers, as before.
+Narrowing it (``[]``, or a list of chat user ids) is the opt-in: then only the requester,
+the listed ids and the platform's admins (``allow_admin_from`` / ``group_allow_admin_from``)
+answer. Host surfaces (CLI, TUI, Desktop, the API server and the session authority's
+``session:approve`` principals) answer as the host and never come through here.
 """
 
 from __future__ import annotations
