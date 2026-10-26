@@ -859,8 +859,9 @@ class GatewayAgentCacheMixin:
         agent = _first_agent(evicted)
         # Never tear down an agent that's mid-turn — its client, sandbox and child subagents are in use.
         if agent is None or agent is _AGENT_PENDING_SENTINEL:
-            if commit_memory and session_key in self._evicted_browser_owner_map():
-                self._spawn_release_thread(self._release_stashed_browsers, (session_key,),
+            if commit_memory and (owners := self._take_browser_owners(session_key)):
+                from tools.browser_session_lifecycle import cleanup_conversation_browsers
+                self._spawn_release_thread(cleanup_conversation_browsers, (owners,),
                                            f"browser-release-{str(session_key)[:24]}", inline_fallback=True,
                                            session_key=session_key)
             return
@@ -869,7 +870,10 @@ class GatewayAgentCacheMixin:
                 state.turn.retired_agents.append(agent)
             return
         if commit_memory:
-            target, args = self._commit_then_release_soft, (agent, session_key, True)
+            # Taken now, not on the thread: the route is free for the next conversation, whose evicted
+            # agents stash their own task ids under the same key while this commit still runs.
+            owners = self._take_browser_owners(session_key, agent)
+            target, args = self._commit_then_release_soft, (agent, session_key, True, owners)
         else:
             self._stash_browser_owners(session_key, agent)
             target, args = self._release_evicted_agent_soft, (agent,)
@@ -945,16 +949,16 @@ class GatewayAgentCacheMixin:
         except Exception as _e:
             logger.debug("Pre-evict memory commit failed for %s: %s", key, _e)
 
-    def _commit_then_release_soft(self, agent: Any, key: str, boundary: bool = False) -> None:
+    def _commit_then_release_soft(self, agent: Any, key: str, boundary: bool = False,
+                                  browser_owners: frozenset = frozenset()) -> None:
         """Commit end-of-session memory (if warranted), then soft-release — on the daemon eviction
         thread. Order matters: commit needs the live memory manager before ``release_clients``. A boundary
-        (viewer /new or close, reset, compress) also closes the browsers its turns kept: the next turn runs
-        under another task id and could never reach them."""
+        (viewer /new or close, reset, compress) also closes the browsers of ``browser_owners``, the ended
+        conversation's task ids: the next turn runs under another task id and could never reach them."""
         self._commit_memory_before_soft_evict(agent, key, boundary)
-        if boundary:
-            from agent.client_lifecycle import release_session_browsers
-            release_session_browsers(agent)
-            self._release_stashed_browsers(key)
+        if browser_owners:
+            from tools.browser_session_lifecycle import cleanup_conversation_browsers
+            cleanup_conversation_browsers(browser_owners)
         self._release_evicted_agent_soft(agent)
 
     def _evicted_browser_owner_map(self) -> dict:
@@ -972,13 +976,11 @@ class GatewayAgentCacheMixin:
             while len(owners) > _EVICTED_BROWSER_OWNERS_MAX:
                 del owners[next(iter(owners))]
 
-    def _release_stashed_browsers(self, session_key: str) -> None:
-        """Close the browsers earlier (plain-evicted) agents of this conversation kept across turns."""
+    def _take_browser_owners(self, session_key: str, agent: Any = None) -> set:
+        """The ending conversation's task ids: its earlier (plain-evicted) agents' and ``agent``'s."""
         with getattr(self, "_agent_cache_lock", None) or nullcontext():
             ids = self._evicted_browser_owner_map().pop(session_key, set())
-        if ids:
-            from tools.browser_session_lifecycle import cleanup_conversation_browsers
-            cleanup_conversation_browsers(ids)
+        return ids | set(getattr(agent, "_process_owner_task_ids", ()) or ())
 
     def _release_evicted_agent_soft(self, agent: Any) -> None:
         """Soft cleanup for cache-evicted agents: unlike _cleanup_agent_resources, the session may

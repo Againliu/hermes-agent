@@ -137,6 +137,23 @@ def test_boundary_after_a_plain_evict_still_closes_the_kept_browser(sessions, mo
     assert set(active) == {"other-conversation"}
 
 
+def test_ended_conversations_slow_close_spares_the_next_conversations_browser(sessions, monkeypatch):
+    """A reset frees the route while the old conversation's memory commit still runs; the next conversation
+    browses and is plain-evicted (a /model) under the same key. The old close must take only its own ids."""
+    active = sessions("old-sid", "new-sid")
+    runner = _gateway_runner(monkeypatch)
+    deferred = []
+    monkeypatch.setattr(runner, "_spawn_release_thread",
+                        lambda target, args, name, *, inline_fallback, session_key=None: deferred.append((target, args)))
+    runner._agent_cache["route"] = (_cached_agent({"old-sid"}), "sig")
+    runner._evict_cached_agent_at_boundary("route")
+    runner._agent_cache["route"] = (_cached_agent({"new-sid"}), "sig")
+    runner._evict_cached_agent("route")
+    for target, args in deferred:
+        target(*args)
+    assert set(active) == {"new-sid"}
+
+
 def test_conversation_close_spares_a_named_session_another_conversation_took_over(sessions, monkeypatch):
     """The close scans, then another conversation drives the named browser before it is claimed: the
     claim re-checks the driver under the registry lock and leaves that browser running."""
