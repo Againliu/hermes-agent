@@ -201,8 +201,10 @@ class MemoryStore:
         return self.user_profile_enabled if target == "user" else self.memory_enabled
 
     def reset_consolidation_failures(self) -> None:
-        """Call at turn start."""
+        """Call at turn start; covers the group-chat store this one routes to (memory_tool_channel)."""
         self._consolidation_failures = 0
+        if (channel := getattr(self, "_channel_store", None)) is not None:
+            channel.reset_consolidation_failures()
 
     def _consolidation_failure(self, response: dict[str, Any]) -> dict[str, Any]:
         """Count a consolidation failure: under the per-turn cap return ``response``

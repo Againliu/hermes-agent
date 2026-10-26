@@ -61,3 +61,19 @@ def test_channel_notes_load_only_in_their_chat(mem_dir):
     finally:
         CHANNEL_MEMORY.reset(other)
     assert channel_prompt_block(Agent()) is None  # DM / CLI: no binding, no block
+
+
+def test_turn_start_gives_channel_writes_a_fresh_retry_budget(mem_dir):
+    store = mt.MemoryStore()
+    store.load_from_disk()
+    token = CHANNEL_MEMORY.set(ChannelMemoryBinding(scope="telegram/-1001", owner_writes=False, char_limit=20))
+    try:
+        for _ in range(4):  # past the per-turn cap: terminal "stop retrying"
+            last = _add(store, "memory", "x" * 30)
+        assert last.get("done") is True and "current_entries" not in last
+        store.reset_consolidation_failures()  # what agent/turn_context.py does at every turn start
+        fresh = _add(store, "memory", "x" * 30)
+    finally:
+        CHANNEL_MEMORY.reset(token)
+    assert "current_entries" in fresh and "Stop retrying" not in fresh["error"]
+
