@@ -74,7 +74,9 @@ export const $rosterSessionSignals = computed(
     }
 
     for (const [runtimeId, request] of Object.entries(clarifies)) {
-      const text = request.questions.map(q => q.question).find(Boolean)
+      // The question the bot still waits on: a batch answered one question at
+      // a time is waiting on its first UNLOCKED one, as the composer reads it.
+      const text = request.questions.find(q => q.question && request.lockedAnswers?.[q.qid] === undefined)?.question
 
       if (text) {
         claim(runtimeId, 'clarify', text)

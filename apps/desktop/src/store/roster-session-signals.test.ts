@@ -35,6 +35,22 @@ describe('$rosterSessionSignals', () => {
     expect($rosterSessionSignals.get().prompts['stored-1']).toBeUndefined()
   })
 
+  it('quotes the question a partly answered batch still waits on', () => {
+    $clarifyRequests.set({
+      'rt-1': {
+        requestId: 'r1',
+        sessionId: 'rt-1',
+        questions: [
+          { qid: 'q0', question: 'Which region?', choices: null, multiSelect: false },
+          { qid: 'q1', question: 'Which instance size?', choices: null, multiSelect: false }
+        ],
+        lockedAnswers: { q0: 'us-east-1' }
+      }
+    })
+
+    expect($rosterSessionSignals.get().prompts['rt-1']).toEqual({ kind: 'clarify', text: 'Which instance size?' })
+  })
+
   it('keeps a live prompt map by reference across an unrelated recompute', () => {
     setApprovalRequest({ sessionId: 'rt-1', command: 'terraform apply', description: 'dangerous' })
     const before = $rosterSessionSignals.get().prompts
