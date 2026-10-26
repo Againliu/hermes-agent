@@ -71,3 +71,29 @@ def test_update_with_no_desktop_running_swaps_now_and_supersedes_a_parked_build(
     assert _stamp(desktop_dir) == "NEW"
     assert not parked.exists()
     assert waiters == []
+
+
+def _park(desktop_dir, tag):
+    parked = main_desktop_pending.pending_dir(desktop_dir)
+    _pack(parked, tag)
+    (parked / main_desktop_pending.READY_MARKER).write_text("{}", encoding="utf-8")
+    return parked
+
+
+@pytest.mark.parametrize("product", ["desktop", "webapp"])
+def test_parking_a_build_keeps_the_desktop_build_receipts_current(tmp_path, monkeypatch, product):
+    from hermes_cli.source_build import source_product_current
+    from tests.hermes_cli.test_source_build import copy_freshness_scripts, stamp_product, use_host_node_as_pm_node
+
+    root = tmp_path / "repo"
+    (root / "apps/desktop/src").mkdir(parents=True)
+    (root / "apps/desktop/src/main.ts").write_text("export {}\n", encoding="utf-8")
+    copy_freshness_scripts(root)
+    use_host_node_as_pm_node(monkeypatch)
+    out = root / "apps/desktop/release/linux-unpacked/resources/app.asar.unpacked/dist"
+    out.mkdir(parents=True)
+    stamp_product(root, product, out)
+    assert source_product_current(root, product, out)
+
+    _park(root / "apps/desktop", "NEW")
+    assert source_product_current(root, product, out)
