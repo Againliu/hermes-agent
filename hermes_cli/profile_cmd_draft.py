@@ -49,16 +49,18 @@ def confirm_draft(args, die) -> Optional[ProfileDraft]:
     return draft
 
 
-def apply_draft(profile_dir: Path, draft: Optional[ProfileDraft], *, keep_description: bool) -> None:
-    """Write the confirmed draft's identity (an explicit ``--description`` wins); capabilities
-    stay printed suggestions — skills are already seeded, toolset/MCP changes are the user's call."""
+def draft_identity(draft: Optional[ProfileDraft], description: Optional[str]) -> dict:
+    """``create_profile`` kwargs: the confirmed draft's SOUL, description (an explicit
+    ``--description`` wins) and title go into the staging tree, so the profile is published
+    with them in one rename — never seeded first and rewritten after."""
     if draft is None:
-        return
-    from hermes_cli.profiles import write_profile_meta
-    (profile_dir / "SOUL.md").write_text(draft.soul, encoding="utf-8")
-    write_profile_meta(profile_dir, description=None if keep_description else draft.description,
-                       description_auto=None if keep_description else False, display_name=draft.title or None)
-    if draft.toolsets:
-        print(f"Suggested toolsets: {', '.join(draft.toolsets)} — enable with `hermes -p {profile_dir.name} tools`.")
-    if draft.mcp_servers:
-        print(f"Suggested MCP servers: {', '.join(draft.mcp_servers)} — add with `hermes -p {profile_dir.name} mcp`.")
+        return {"description": description}
+    return {"description": description or draft.description, "soul": draft.soul, "display_name": draft.title or None}
+
+
+def print_suggestions(name: str, draft: Optional[ProfileDraft]) -> None:
+    """Capabilities stay suggestions: skills are already seeded, toolset/MCP changes are the user's call."""
+    if draft and draft.toolsets:
+        print(f"Suggested toolsets: {', '.join(draft.toolsets)} — enable with `hermes -p {name} tools`.")
+    if draft and draft.mcp_servers:
+        print(f"Suggested MCP servers: {', '.join(draft.mcp_servers)} — add with `hermes -p {name} mcp`.")
