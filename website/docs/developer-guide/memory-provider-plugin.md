@@ -129,7 +129,8 @@ fields; callers may initialize a provider without an agent or a session database
 | `gateway_session_key` | Stable messaging-chat identity for per-chat session isolation. |
 | `user_id`, `user_id_alt`, `user_name`, `chat_id` | Gateway identity fields, included when present. |
 | `agent_identity` | Active profile name, when available. |
-| `agent_workspace`, `agent_context` | Runtime agent scope. `agent_workspace` is `hermes`; `agent_context` is `cron` for scheduler runs, `subagent` for `delegate_task` children, else `primary` — skip automatic writes for the non-primary values. |
+| `agent_workspace`, `agent_context` | Runtime agent scope. `agent_workspace` is `hermes`; `agent_context` is `cron` for scheduler runs, `subagent` for `delegate_task` children, `flush` for the gateway's temporary compaction agents (session hygiene and manual `/compress`), else `primary` — skip automatic writes for the non-primary values. A `flush` agent runs no turns and carries the conversation's own `platform` and gateway identity; it loads the provider only for `compression.checkpoint_required`, so a checkpoint provider must still honor `on_pre_compress(require_checkpoint=True)` there. |
+| `status_callback`, `warning_callback` | `callable(text)` on every surface (CLI, TUI, Desktop, messaging gateways). Status lines show as lifecycle status; warnings follow the user's `display.warning_notifications` setting. Safe to call from a background thread; a line emitted from `sync_turn` can land after the reply. Keep them rare (per-turn lines reach chat platforms as messages) and give users a provider setting to turn indicators off. |
 
 Do not assume `os.getcwd()` identifies the conversation's workspace: one Desktop
 or gateway backend can serve several sessions. If `cwd` is absent and directory
@@ -450,7 +451,30 @@ Hermes can't verify a provider's internals. A provider that keeps a process-wide
 
 ## Testing
 
-See `tests/agent/test_memory_provider.py` and adjacent memory tests (`tests/agent/test_memory_session_switch.py`, `tests/agent/test_memory_user_id.py`, `tests/agent/test_memory_provider_init.py`) for end-to-end patterns.
+Drive your provider through a real agent with `tests/plugins/memory/provider_harness.py`. It runs
+real turns (the `AIAgent` facade, the real `MemoryManager` and turn loop, with only the model
+faked), so hooks fire in the host's own order: `initialize`, then per turn `on_turn_start` →
+`prefetch` → `sync_turn` → `queue_prefetch`, then `on_session_end` and `shutdown`. Hand-ordered
+hook calls are how a provider ships green and blank: a test that calls `queue_prefetch` right
+before `prefetch` hides a cache that `on_turn_start` resets.
+
+```python
+from tests.plugins.memory.provider_harness import ProviderHarness
+
+def test_recall_reaches_the_model():
+    with ProviderHarness(MyProvider(), platform="telegram") as h:
+        h.turn("my cat is called Miso")
+        h.turn("what is my cat called?")
+        h.end_session()
+    assert "Miso" in h.prefetched[-1]   # prefetch returned it on turn 2
+    assert "Miso" in h.requests[-1]     # and it reached the model's input
+    print(h.hook_order, h.init_kwargs)  # what the provider saw, in order
+```
+
+Run it from a hermes-agent checkout with `scripts/run_tests.sh` (the suite isolates `HERMES_HOME`;
+the harness writes `memory.provider` to that home's config).
+
+Lower-level patterns: `tests/agent/test_memory_provider.py` and adjacent memory tests (`tests/agent/test_memory_session_switch.py`, `tests/agent/test_memory_user_id.py`, `tests/agent/test_memory_provider_init.py`) for end-to-end patterns.
 
 ```python
 from agent.memory_manager import MemoryManager
