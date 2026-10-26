@@ -1170,9 +1170,8 @@ def _apply_display_config(agent, _agent_cfg, platform):
 
 
 def _memory_provider_init_kwargs(agent, platform) -> dict[str, Any]:
-    """Scoping kwargs for ``MemoryManager.initialize_all``. The status/warning callbacks are the agent's
-    bound emitters, which resolve the surface callback at emission time, so a gateway/TUI that binds
-    ``agent.status_callback`` after construction still receives provider lines on every surface."""
+    """Scoping kwargs for ``MemoryManager.initialize_all``. Status/warning callbacks go only to surfaces
+    that render them out-of-band (CLI, TUI, Desktop): a messaging chat would get every line as a message."""
     kwargs = {
         "session_id": agent.session_id,
         "platform": platform or "cli",
@@ -1180,8 +1179,9 @@ def _memory_provider_init_kwargs(agent, platform) -> dict[str, Any]:
         # cron/subagent (from platform) and flush (explicit, compaction helpers) → providers skip writes.
         "agent_context": getattr(agent, "agent_context", None) or (
             platform if platform in ("cron", "subagent") else "primary"),
-        "status_callback": agent._emit_status, "warning_callback": agent._emit_warning,
     }
+    if kwargs["platform"] in ("cli", "tui", "desktop"):
+        kwargs.update(status_callback=agent._emit_status, warning_callback=agent._emit_warning)
     # Session title (e.g. honcho derives chat-scoped session keys from it).
     if agent._session_db:
         with suppress(Exception):
