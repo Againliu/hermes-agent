@@ -35,10 +35,10 @@ eval "$HERMES_TEST_UPDATE_BODY"
 
 def _process_alive(pid: int) -> bool:
     try:
-        os.kill(pid, 0)
+        os.kill(pid, 0)  # windows-footgun: ok -- posix-only module (skipif without /bin/bash)
     except ProcessLookupError:
         return False
-    stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], check=False, capture_output=True, text=True).stdout
+    stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], check=False, capture_output=True, text=True, encoding="utf-8").stdout
     return bool(stat.strip()) and not stat.strip().startswith("Z")
 
 

@@ -845,6 +845,31 @@ function backendActionProgress(status: Awaited<ReturnType<typeof getActionStatus
   ].join('\0')
 }
 
+/** The action's live deadline: inactivity (re-armed by every sign of progress
+ *  and by the backend coming back) under one overall ceiling. */
+class BackendActionDeadline {
+  private readonly ceiling = Date.now() + BACKEND_ACTION_MAX_MS
+  private until = Math.min(this.ceiling, Date.now() + BACKEND_ACTION_STALL_MS)
+  private progress = ''
+
+  get open(): boolean {
+    return Date.now() < this.until
+  }
+
+  observe(status: Awaited<ReturnType<typeof getActionStatus>>, returned: boolean): void {
+    const progress = backendActionProgress(status)
+
+    if (returned || progress !== this.progress) {
+      this.progress = progress
+      this.until = Math.min(this.ceiling, Date.now() + BACKEND_ACTION_STALL_MS)
+    }
+  }
+
+  lost(): void {
+    this.until = Math.min(this.ceiling, Date.now() + BACKEND_RETURN_MAX_MS)
+  }
+}
+
 /** The clock never decides alone: when a deadline expires, the receipt and
  *  then the backend's version give the verdict before anything says failed. */
 async function backendVerdictAtDeadline(
@@ -866,6 +891,34 @@ async function backendVerdictAtDeadline(
   }
 
   return null
+}
+
+/** The poll loop ended: an exited action failed; an expired deadline asks the
+ *  receipt and the version before reporting that progress stopped. */
+async function concludeBackendApply(
+  last: Awaited<ReturnType<typeof getActionStatus>> | null,
+  applyStartedAtMs: number,
+  actionId: string | undefined,
+  target: { sha: string | undefined; previousVersion: string | undefined }
+): Promise<DesktopUpdateApplyResult> {
+  if (last && last.exit_code !== null) {
+    return failBackendApply(
+      { shown: translateNow('updates.applyStatus.failed'), result: 'Backend update failed.' },
+      last,
+      actionId
+    )
+  }
+
+  const verdict = await backendVerdictAtDeadline(last, applyStartedAtMs, actionId, target)
+
+  return (
+    verdict ??
+    failBackendApply(
+      { shown: stalledUpdateMessage(), result: 'Backend update stopped reporting progress.' },
+      last,
+      actionId
+    )
+  )
 }
 
 // C3: a committed update succeeds even when post-commit steps are still owed,
@@ -1063,29 +1116,21 @@ async function runBackendUpdate(): Promise<DesktopUpdateApplyResult> {
 
     let last: Awaited<ReturnType<typeof getActionStatus>> | null = null
     // Backups, dependency repair, and builds can legitimately take several
-    // minutes. Keep the generous cap only as a guard against a stuck action.
-    const actionDeadline = Date.now() + BACKEND_ACTION_MAX_MS
-    let deadline = Math.min(actionDeadline, Date.now() + BACKEND_ACTION_STALL_MS)
+    // minutes: only inactivity (and a generous ceiling) ends the wait.
+    const deadline = new BackendActionDeadline()
     let reconnecting = false
-    let lastProgress = ''
 
-    while (Date.now() < deadline) {
+    while (deadline.open) {
       await new Promise(resolve => globalThis.setTimeout(resolve, BACKEND_ACTION_POLL_MS))
 
       try {
         last = await getActionStatus(started.name, 2000)
         ingestBackendActionStatus(last)
-
-        const progress = backendActionProgress(last)
-
-        if (reconnecting || progress !== lastProgress) {
-          lastProgress = progress
-          deadline = Math.min(actionDeadline, Date.now() + BACKEND_ACTION_STALL_MS)
-        }
+        deadline.observe(last, reconnecting)
       } catch {
         if (!reconnecting) {
           reconnecting = true
-          deadline = Math.min(actionDeadline, Date.now() + BACKEND_RETURN_MAX_MS)
+          deadline.lost()
           $backendUpdateApply.set({
             ...$backendUpdateApply.get(),
             applying: true,
@@ -1140,27 +1185,10 @@ async function runBackendUpdate(): Promise<DesktopUpdateApplyResult> {
       }
     }
 
-    if (last?.exit_code !== null && last?.exit_code !== undefined) {
-      return failBackendApply(
-        { shown: translateNow('updates.applyStatus.failed'), result: 'Backend update failed.' },
-        last,
-        started.action_id
-      )
-    }
-
-    const verdict = await backendVerdictAtDeadline(last, applyStartedAtMs, started.action_id, {
+    return await concludeBackendApply(last, applyStartedAtMs, started.action_id, {
       sha: requestedTargetSha,
       previousVersion
     })
-
-    return (
-      verdict ??
-      failBackendApply(
-        { shown: stalledUpdateMessage(), result: 'Backend update stopped reporting progress.' },
-        last,
-        started.action_id
-      )
-    )
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     $backendUpdateApply.set({
