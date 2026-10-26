@@ -173,6 +173,10 @@ The kept browser is closed when:
   closing the chat, or exiting Hermes.
 
 This applies to every backend: local Chromium, Lightpanda, and cloud providers.
+It covers the chat surfaces (CLI, TUI, desktop, messaging gateway, ACP). A
+Python `AIAgent.chat()` call or a Kanban task turn starts each turn on its own,
+so its browser still closes when the turn ends.
+
 It is off by default because a kept local Chromium holds memory between
 messages and a kept cloud session keeps billing until one of the above closes
 it.

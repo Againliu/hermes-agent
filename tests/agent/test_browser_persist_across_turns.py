@@ -52,6 +52,26 @@ def test_persist_across_turns_keeps_the_page_for_the_next_turn(sessions, home):
     assert set(active) == {"sid-1", "sid-1@p-home"}
 
 
+def test_turns_without_a_caller_task_id_do_not_pile_up_kept_browsers(sessions, home):
+    """chat() and Kanban turns omit task_id, so each turn gets a fresh one no later turn can reach: its
+    browser closes at turn end; a caller-supplied id (CLI, TUI, gateway, ACP) keeps the page."""
+    from agent.turn_context import _bind_turn_identity
+    agent = SimpleNamespace(verbose_logging=False, session_id="sid-1")
+    active = sessions("sid-1")
+    token = home("browser:\n  persist_across_turns: true\n")
+    try:
+        for _ in range(2):
+            generated, _turn = _bind_turn_identity(agent, None, None, None, None, None)
+            sessions(generated)
+            cleanup_task_resources(agent, generated)
+        assert set(active) == {"sid-1"}
+        supplied, _turn = _bind_turn_identity(agent, "sid-1", None, None, None, None)
+        cleanup_task_resources(agent, supplied)
+    finally:
+        reset_hermes_home_override(token)
+    assert set(active) == {"sid-1"}
+
+
 def test_default_still_closes_the_browser_at_turn_end(sessions, home):
     active = sessions("sid-1")
     _turn_end(home, "browser:\n  inactivity_timeout: 120\n", "sid-1")

@@ -2335,10 +2335,10 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
 def cleanup_task_resources(agent, task_id: str) -> None:
     """Per-turn VM + browser cleanup for a task. Skips ``cleanup_vm`` for persistent terminal envs
     (``_cleanup_inactive_envs`` reaps them after ``terminal.lifetime_seconds``) and ``cleanup_browser`` in headed
-    mode or with ``browser.persist_across_turns`` (the inactivity reaper and session end close those)."""
+    mode or with ``browser.persist_across_turns`` for a caller-supplied task id the next turn reuses."""
     def _keep_browser() -> bool:
         from tools.browser_session_cloud import is_headed_mode, persist_across_turns
-        return is_headed_mode() or persist_across_turns()
+        return is_headed_mode() or (persist_across_turns() and task_id != getattr(agent, "_generated_task_id", None))
 
     for label, skip, skip_what, cleanup in (
         ("VM", is_persistent_env, "cleanup_vm for persistent env", lambda: _ra().cleanup_vm(task_id)),
