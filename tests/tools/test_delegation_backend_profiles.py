@@ -99,7 +99,7 @@ def test_a_backend_plugin_enabled_after_discovery_is_named_with_the_load_fix(tmp
 
     assert provider is None
     assert "This profile enables lateplug, which this process has not loaded" in reason
-    assert "Restart Hermes (the gateway, when it serves this session) to load it" in reason
+    assert "If one of them provides 'lateplug', restart Hermes (the gateway, when it serves this session)" in reason
     assert "bplug" not in reason.split("enables", 1)[1]  # a plugin that loaded is not blamed
 
 
@@ -128,3 +128,17 @@ def test_an_alias_entry_and_a_disabled_entry_are_not_named_unloaded(tmp_path, mo
         _provider, reason = _status("ghost")
 
     assert "langfuse" not in reason and "bothplug" not in reason
+
+
+def test_an_unrelated_unloaded_plugin_keeps_the_install_advice_for_a_missing_backend(tmp_path, monkeypatch):
+    _root, profile_b = _two_profiles(tmp_path, monkeypatch)
+    with _profile(profile_b):
+        plugins_mod.discover_plugins()
+        _write_plugin(profile_b, "lateplug")
+        _write_config(profile_b, ["bplug", "lateplug"], "ghost")
+
+        provider, reason = _status("ghost")
+
+    assert provider is None
+    assert "Install or enable the plugin that does (`hermes plugins list`)" in reason
+    assert "This profile enables lateplug" in reason  # still named, as a possible cause
