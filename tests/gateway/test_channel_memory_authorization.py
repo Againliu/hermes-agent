@@ -48,3 +48,11 @@ def test_group_role_grant_does_not_count_as_dm_access():
     # A member admitted to the guild channel only by DISCORD_ALLOWED_ROLES cannot DM the bot by
     # default, so it must not write the owner's files either.
     assert channel_memory_binding(_Runner(), _group("member", role_authorized=True), {}).owner_writes is False
+
+
+def test_shared_session_keeps_even_the_owner_on_channel_memory():
+    # Other members steer a shared thread's running turn and its background review sees their
+    # messages: a turn-start grant would let their text reach MEMORY.md / USER.md.
+    runner = _Runner()
+    assert channel_memory_binding(runner, _group("owner"), {}, shared_session=True).owner_writes is False
+    assert channel_memory_binding(runner, _group("owner"), {}, shared_session=False).owner_writes is True

@@ -4,7 +4,9 @@ Who may write the owner's MEMORY.md / USER.md from a group: a sender the gateway
 let DM the agent. Those files already load in every DM that sender can open, so the write
 crosses no boundary. Anyone else (a member of an allowlisted group who could not DM the
 agent) writes the chat's channel memory instead; this is the cross-user write that used to
-land in the owner's files and then load in the owner's private DMs.
+land in the owner's files and then load in the owner's private DMs. A session several
+members share (a shared thread, ``group_sessions_per_user: false``) writes channel memory for
+everyone, the owner included.
 """
 
 from __future__ import annotations
@@ -52,8 +54,11 @@ def _sender_can_dm(runner: Any, source: Any) -> bool:
         return False
 
 
-def channel_memory_binding(runner: Any, source: Any, config: dict[str, Any]) -> Optional[ChannelMemoryBinding]:
-    """This turn's binding, or None for DMs, local sessions and when channel memory is off."""
+def channel_memory_binding(runner: Any, source: Any, config: dict[str, Any], *,
+                           shared_session: bool = False) -> Optional[ChannelMemoryBinding]:
+    """This turn's binding, or None for DMs, local sessions and when channel memory is off.
+    A session other members share never gets owner writes: they can steer its running turn and
+    its background review reads their messages, neither of which re-checks the sender."""
     from gateway.config import Platform
 
     cfg = channel_memory_config(config)
@@ -64,15 +69,16 @@ def channel_memory_binding(runner: Any, source: Any, config: dict[str, Any]) -> 
     key = _scope_key(source, str(cfg.get("scope") or "chat").lower())
     if key is None:
         return None
-    owner_writes = (is_truthy_value(cfg.get("owner_writes_from_groups"), default=True)
+    owner_writes = (not shared_session and is_truthy_value(cfg.get("owner_writes_from_groups"), default=True)
                     and _sender_can_dm(runner, source))
     return ChannelMemoryBinding(scope=safe_scope(source.platform.value, key), owner_writes=owner_writes,
                                 char_limit=channel_char_limit(config))
 
 
-def bind_channel_memory(runner: Any, source: Any) -> None:
+def bind_channel_memory(runner: Any, source: Any, *, shared_session: bool) -> None:
     """Set (or clear) the binding for the current turn. Always written, so a queued DM turn
     handled by the same task never inherits a previous group turn's binding."""
     from gateway.run import _load_gateway_config
 
-    CHANNEL_MEMORY.set(channel_memory_binding(runner, source, _load_gateway_config() or {}))
+    CHANNEL_MEMORY.set(channel_memory_binding(runner, source, _load_gateway_config() or {},
+                                              shared_session=shared_session))
