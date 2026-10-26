@@ -2,8 +2,9 @@ import os
 import subprocess
 import sys
 import textwrap
-import time
 from pathlib import Path
+
+from tests.waiting import wait_until
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -48,6 +49,7 @@ _WRITER = textwrap.dedent("""
     config._MCP_STDERR_BACKUP_COUNT = 400  # keep every generation: lost lines become visible
     tag, lines, go = sys.argv[1], int(sys.argv[2]), Path(sys.argv[3])
     log = config._get_mcp_stderr_log()
+    (go.parent / f"ready-{tag}").touch()
     while not go.exists():
         time.sleep(0.005)
     for i in range(lines):
@@ -67,7 +69,8 @@ def test_two_processes_rotating_one_profile_log_lose_nothing_and_stay_bounded(tm
     procs = [subprocess.Popen([sys.executable, "-c", _WRITER, tag, str(lines), str(go)],
                               cwd=REPO_ROOT, env=env)
              for tag in ("a", "b")]
-    time.sleep(1.0)  # let both children import and open the shared log
+    wait_until(lambda: all((tmp_path / f"ready-{tag}").exists() for tag in ("a", "b")), timeout=60,
+               what="both writers opened the shared log")
     go.touch()
     for proc in procs:
         assert proc.wait(timeout=120) == 0
@@ -77,7 +80,7 @@ def test_two_processes_rotating_one_profile_log_lose_nothing_and_stay_bounded(tm
     for path in logs:
         assert path.stat().st_size <= 4096, f"{path.name} grew past the bound"
     seen = [line.split(" ", 1)[0] for path in logs
-            for line in path.read_text().splitlines() if line]
+            for line in path.read_text(encoding="utf-8-sig").splitlines() if line]
     expected = {f"{tag}-{i:05d}" for tag in ("a", "b") for i in range(lines)}
     assert sorted(seen) == sorted(expected), "lines were lost or duplicated across rotation"
 
