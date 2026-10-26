@@ -96,11 +96,15 @@ class SessionReader:
     def recent(self, *, source: Optional[str] = None, limit: int = 20,
                include_archived: bool = False) -> list[dict[str, Any]]:
         """Top-level sessions, most recently started first (compression chains collapse to their
-        tip, as in ``hermes sessions list``); each row adds ``preview`` and ``last_active``."""
+        tip, as in ``hermes sessions list``); each row adds ``preview`` and ``last_active``. ``source``
+        means what ``hermes sessions list --source`` means: ``cli`` also matches a gateway row stored
+        as ``local`` that the CLI created."""
+        from hermes_cli.gateway_session_store import SurfaceLabelReader
+
         with self._db() as db:
             if db is None:
                 return []
-            rows = db.list_sessions_rich(source=source, limit=max(0, int(limit)), include_archived=include_archived)
+            rows = SurfaceLabelReader(db).list_sessions_rich(source=source, limit=max(0, int(limit)), include_archived=include_archived)
             return [project_session(r) for r in rows]
 
     def lineage(self, session_id: str) -> list[str]:

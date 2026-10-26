@@ -72,6 +72,17 @@ def test_subagents_and_usage_walk_compression_and_delegation_links_alike(tmp_pat
     assert sorted(tree["session_ids"]) == ["early", "early-2", "root", "tip"] and tree["input_tokens"] == 2
 
 
+def test_recent_cli_includes_a_gateway_row_the_cli_created(tmp_path):
+    """``source='cli'`` reads like ``hermes sessions list --source cli``: a gateway row stored as
+    ``local`` with ``created_source='cli'`` is a CLI session."""
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_session("gw", source="local")
+        db.append_message("gw", "user", "hi")
+        db.update_token_counts("gw", input_tokens=2, output_tokens=1, model="m", api_call_count=1, source="cli")
+        assert db.get_session("gw")["created_source"] == "cli"
+    assert [r["id"] for r in _ctx(tmp_path).sessions.recent(source="cli")] == ["gw"]
+
+
 def _run(capsys, *argv):
     parser = argparse.ArgumentParser()
     build_sessions_parser(parser.add_subparsers(), cmd_sessions=sessions_cmd.cmd_sessions)
