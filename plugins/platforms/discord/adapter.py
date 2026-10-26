@@ -6482,17 +6482,17 @@ def _define_discord_view_classes() -> None:
                 unauth_msg=_unauthorized(),
             ):
                 return
+            from gateway.approval_actor import approval_refusal, refusal_text
+            if requester := approval_refusal(self.session_key, interaction.user.id, admin_ids=self.admin_user_ids):
+                return await interaction.response.send_message(refusal_text(requester), ephemeral=True)
             label = t(label_key)
             self.resolved = True
-            # Unblock the waiting agent thread FIRST. A click after the approval
-            # wait timed out (count == 0) must not claim "Approved".
+            # Unblock the waiting agent thread FIRST; a click after the wait timed out (count == 0) is not "Approved".
             try:
                 from tools.approval import resolve_gateway_approval
                 count = resolve_gateway_approval(self.session_key, choice)
-                logger.info(
-                    "Discord button resolved %d approval(s) for session %s (choice=%s, user=%s)",
-                    count, self.session_key, choice, interaction.user.display_name,
-                )
+                logger.info("Discord button resolved %d approval(s) for session %s (choice=%s, user=%s)",
+                            count, self.session_key, choice, interaction.user.display_name)
             except Exception as exc:
                 logger.error("Failed to resolve gateway approval from button: %s", exc)
                 count = 0

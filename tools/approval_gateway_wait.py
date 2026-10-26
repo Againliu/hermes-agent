@@ -30,6 +30,12 @@ class _ApprovalEntry:
         self.event = threading.Event()
         self.data = dict(data)
         self.data.setdefault("request_id", uuid.uuid4().hex)
+        # Who started the turn that raised this approval: in a shared chat only they (or a
+        # configured approver) may answer it (gateway.approval_actor).
+        self.data.setdefault("requester_id", _ctx._session_env("HERMES_SESSION_USER_ID"))
+        self.data.setdefault("requester_name", _ctx._session_env("HERMES_SESSION_USER_NAME"))
+        # Read here, in the turn's profile scope; the click callbacks that check it are off-turn.
+        self.data.setdefault("approvers", _ctx._get_approval_config().get("approvers") or [])
         self.acknowledged = False
         # Surface hook run once when the wait ends by ANY path (answer, timeout, interrupt, /approve from
         # another client): the tui_gateway withdraws its open server→client request through it.
