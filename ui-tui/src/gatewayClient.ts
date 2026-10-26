@@ -872,19 +872,19 @@ export class GatewayClient extends EventEmitter {
     return this.isCanonical && this.runtimeCapabilities.includes('clarify-batch-v1')
   }
 
-  /** Re-read the owner's update drain: a session resume lands after the ready that announced it,
-   * and resets the very status and activity rows that carried it. */
+  /** Re-read the owner's description for its update drain: a session resume lands after the ready
+   * that announced it, and resets the very status and activity rows that carried it. */
   async refreshUpdateDrain(): Promise<null | UpdateDrain> {
     if (this.isCanonical) {
-      const description = await this.requestOverWebSocket<{ drain?: null | UpdateDrain }>('runtime.describe')
-      this.updateDrain = description?.drain?.reason === 'update' ? description.drain : null
+      this.describeFlight = undefined
+      await this.describeRuntime()
     }
 
     return this.updateDrain
   }
 
-  /** The owner's session.create contract. A failed read is not cached: the next
-   * session.create asks again instead of reporting an outdated gateway forever. */
+  /** The owner's description (session.create contract, capabilities, skin, update drain). A failed
+   * read is not cached: the next session.create asks again, never reporting an outdated gateway. */
   private describeRuntime(): Promise<void> {
     if (!this.describeFlight) {
       const flight: Promise<void> = this.requestOverWebSocket<{ capabilities?: unknown; drain?: null | UpdateDrain; session_create: CreationContract; skin?: Record<string, unknown> | null }>('runtime.describe').then(
