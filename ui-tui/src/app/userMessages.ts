@@ -65,9 +65,13 @@ export const backendGaveUpActivity = (): string => t('userMessages.backend.gaveU
 /** `runtime.describe.drain` of an owner finishing its turns before `hermes update` replaces it. */
 export interface UpdateDrain { reason: 'update'; target?: null | string; waiting_for?: Record<string, number> }
 
-export const backendUpdating = (drain: UpdateDrain): string =>
-  t('userMessages.backend.updating', drain.target ?? '',
-    String(Object.values(drain.waiting_for ?? {}).reduce((sum, n) => sum + (Number.isInteger(n) && n > 0 ? n : 0), 0)))
+/** Each part its own message, so a translation never prints an empty target or "0 turns". */
+export const backendUpdating = (drain: UpdateDrain): string => {
+  const turns = Object.values(drain.waiting_for ?? {}).reduce((sum, n) => sum + (Number.isInteger(n) && n > 0 ? n : 0), 0)
+  const head = drain.target ? t('userMessages.backend.updatingTo', drain.target) : t('userMessages.backend.updatingUnnamed')
+
+  return turns > 0 ? `${head} · ${t('userMessages.backend.updatingFinishing', String(turns))}` : `${head}…`
+}
 
 export const backendUpdatingActivity = (): string => t('userMessages.backend.updatingActivity')
 

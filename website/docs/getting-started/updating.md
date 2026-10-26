@@ -453,10 +453,19 @@ A target that fails under `--when-idle` is recorded (`logs/update_receipts/decli
 in the root Hermes home) and later `--when-idle` runs skip it, saying so, until a newer version
 ships. A plain `hermes update` always tries it, and once it succeeds the record no longer applies.
 
-While a gateway drains for an update, clients see why: its `503 gateway_not_ready` answers and
-its control-socket `identify` carry `state: "draining"` and
+On Linux and macOS the idle proof also holds at the moment the update pauses the gateway: the
+pause asks the gateway's control socket for `pause-if-idle`, which checks for work and begins the
+drain in one step on the gateway's loop, so a turn that arrived after the last poll is never put
+behind the update. A busy answer calls the pause off and the update keeps waiting within the same
+bound; past it, the update stops before the checkout moves and exits 75.
+
+While a gateway drains for an update, clients see why: its control-socket `identify` and the
+`runtime.describe` RPC carry `state: "draining"` and
 `drain: {"reason": "update", "target": "v0.23.1", "waiting_for": {"chat": 1}}`, and Python clients
-report "updating to v0.23.1, finishing 1 turn" instead of a bare `not_ready`.
+report "updating to v0.23.1, finishing 1 turn" instead of a bare `not_ready`. The REST API's
+`503 gateway_not_ready` answer names the cause and target (`drain: {"reason": "update", "target":
+"v0.23.1"}`) but not the counts: it answers without reading the gateway's work list, so read
+`runtime.describe` for `waiting_for`.
 
 ### Interrupted gateway restarts
 
