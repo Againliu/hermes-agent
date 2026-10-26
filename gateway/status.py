@@ -31,6 +31,7 @@ from hermes_constants import _get_platform_default_hermes_home, get_hermes_home,
 from hermes_cli._subprocess_compat import pid_exists_stdlib
 from gateway.status_lock_dir import unusable_lock_dir, unusable_lock_dir_recovered
 from utils import atomic_json_write
+from hermes_platform.resolver import system_tool
 
 if sys.platform == "win32":
     import msvcrt
@@ -429,7 +430,7 @@ def terminate_pid(
 
     try:
         result = subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True,
+            [system_tool("taskkill"), "/PID", str(pid), "/T", "/F"], capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=10, creationflags=windows_hide_flags(),
             check=False,
         )

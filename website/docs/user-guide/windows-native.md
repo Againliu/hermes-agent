@@ -183,7 +183,9 @@ Windows looks for a bare program name (`git`, `rg`, `node`, `powershell`) in the
 
 `hermes_bootstrap` flips Microsoft's process-wide switch for this on every entry point: it defines `NoDefaultCurrentDirectoryInExePath` in the process environment (the OS checks only that the variable exists, not its value). One setting covers every present and future spawn site, and it is deliberately inherited by children — `cmd.exe`, Node/libuv, Go and Bun children all honor it. On Python 3.11, `shutil.which()` gets the same PATH-only walk that Python 3.12+ already performs when the switch is set.
 
-The only visible change is inside `cmd.exe` children: a program that lives in the current directory must be invoked as `.\foo`, not `foo` (Hermes's own terminal tool runs bash, which never searched the cwd). **Opt out:** `HERMES_CWD_EXE_SEARCH=1` restores the legacy lookup.
+The only visible change is inside `cmd.exe` children: a program that lives in the current directory must be invoked as `.\foo`, not `foo` (Hermes's own terminal tool runs bash, which never searched the cwd). MCP stdio servers inherit the switch too.
+
+Windows system tools that Hermes runs itself (`taskkill`, `tasklist`, `powershell`, `whoami`, `icacls`, `schtasks`, `sc`, `cmd`, `wmic`) are spawned by their absolute path in the system directory (`GetSystemDirectoryW`, normally `C:\Windows\System32`), so a same-named program anywhere else is never picked even without the switch.
 
 ## The editor (`Ctrl-X Ctrl-E`, `/edit`)
 
