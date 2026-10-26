@@ -66,6 +66,19 @@ describe('a refused command in the tool trail', () => {
     expect(line.endsWith(' ✗')).toBe(true)
   })
 
+  it('marks a lifecycle-guard refusal ✗ with its reason', () => {
+    // terminal_tool_guards.gateway_lifecycle_block: status "error", no user_summary.
+    const line = trailFor('hermes gateway restart', {
+      output: '',
+      exit_code: 1,
+      error: 'Blocked: command or referenced script cannot restart, stop, or uninstall the gateway.',
+      status: 'error'
+    })
+
+    expect(line).toContain('cannot restart')
+    expect(line.endsWith(' ✗')).toBe(true)
+  })
+
   it('leaves a command that ran marked ✓', () => {
     expect(trailFor('ls /srv', { output: 'data', exit_code: 0 }).endsWith(' ✓')).toBe(true)
   })

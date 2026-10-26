@@ -123,18 +123,28 @@ export function isNeutralFailure(toolName: string | undefined, result: unknown):
   return !String(error).includes('ROLLBACK FAILED')
 }
 
-/** A call an approval gate or command guard refused, so it never ran: a
- *  denied, timed-out or undeliverable approval, a hardline/deny-rule block.
- *  terminal marks these `status: "blocked"`, execute_code an error opening
- *  with `BLOCKED`; a human decision also carries `user_summary`
- *  (tools/approval.py::_denied). */
-export function toolCallBlocked(part: { result?: unknown }): boolean {
+/** Tools whose refused call reads "Blocked" instead of "Ran" (the only rows
+ *  and summary clause that carry that verb). Elsewhere a refusal stays an
+ *  ordinary failure: a browser URL-policy "Blocked: …" is still a failed call. */
+const REFUSABLE_COMMAND_TOOLS: ReadonlySet<string> = new Set(['execute_code', 'terminal'])
+
+/** A command an approval gate or command guard refused, so it never ran: a
+ *  denied, timed-out or undeliverable approval, a hardline/deny-rule block, a
+ *  supervised gateway's lifecycle guard. terminal marks approval refusals
+ *  `status: "blocked"`; both tools open the error with `BLOCKED` (approval)
+ *  or `Blocked:` (lifecycle and workdir guards); a human decision also carries
+ *  `user_summary` (tools/approval.py::_denied). */
+export function toolCallBlocked(part: { result?: unknown; toolName?: string }): boolean {
+  if (!REFUSABLE_COMMAND_TOOLS.has(part.toolName ?? '')) {
+    return false
+  }
+
   const result = parseMaybeObject(part.result)
 
   return (
     result.status === 'blocked' ||
     (typeof result.user_summary === 'string' && Boolean(result.user_summary.trim())) ||
-    (typeof result.error === 'string' && /^BLOCKED\b/.test(result.error.trim()))
+    (typeof result.error === 'string' && /^(?:BLOCKED\b|Blocked:)/.test(result.error.trim()))
   )
 }
 

@@ -30,6 +30,12 @@ const DENIED_CODE = JSON.stringify({
   user_summary: 'You denied this code — it did not run.'
 })
 
+// code_execution_tool's supervised-gateway lifecycle guard: a bare tool_error, no status or user_summary.
+const LIFECYCLE_CODE = JSON.stringify({
+  error:
+    'Blocked: cannot restart or stop the gateway from inside the gateway process. Run the lifecycle command from a shell outside the gateway.'
+})
+
 const call = (toolName: string, args: Record<string, unknown>, result: string): ToolPart => ({
   args,
   isError: false,
@@ -62,5 +68,20 @@ describe('a refused command never reads as run', () => {
 
     expect(summarizeToolRun([blocked], false)).toBe('Blocked rm -rf /srv/data')
     expect(summarizeToolRun([ran, blocked], false)).toBe('Ran 1 command, blocked rm -rf /srv/data')
+  })
+
+  it('reads a lifecycle-guard refusal as Blocked, and keeps other tools’ refusals as failures', () => {
+    const code = call('execute_code', { code: 'import os; os.system("hermes gateway restart")' }, LIFECYCLE_CODE)
+
+    expect(buildToolView(code, '').title.startsWith('Blocked ')).toBe(true)
+    expect(summarizeToolRun([code], false).startsWith('Blocked ')).toBe(true)
+
+    const page = call(
+      'browser_navigate',
+      { url: 'http://10.0.0.1' },
+      JSON.stringify({ error: 'Blocked: URL targets a private or internal address' })
+    )
+
+    expect(summarizeToolRun([page], false)).toContain('1 tool call failed')
   })
 })

@@ -5,8 +5,9 @@ const text = (value: unknown): string => (typeof value === 'string' ? value.trim
 
 /**
  * The trail note for a call an approval gate or command guard refused, so it never ran (a denied
- * or timed-out approval, a hardline block), else ''. terminal marks these `status: "blocked"`,
- * execute_code an error opening with `BLOCKED`; a human decision also carries the one-line
+ * or timed-out approval, a hardline block, a supervised gateway's lifecycle guard), else ''.
+ * terminal marks approval refusals `status: "blocked"`; the error opens with `BLOCKED` (approval)
+ * or `Blocked:` (lifecycle and workdir guards); a human decision also carries the one-line
  * `user_summary` (tools/approval.py::_denied), which is what the user should read.
  */
 export const toolRefusalNote = (result: unknown): string => {
@@ -14,7 +15,7 @@ export const toolRefusalNote = (result: unknown): string => {
   const summary = text(record.user_summary)
   const error = text(record.error)
 
-  if (!summary && record.status !== 'blocked' && !/^BLOCKED\b/.test(error)) {
+  if (!summary && record.status !== 'blocked' && !/^(?:BLOCKED\b|Blocked:)/.test(error)) {
     return ''
   }
 
