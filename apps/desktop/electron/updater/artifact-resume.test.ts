@@ -25,7 +25,9 @@ afterEach(async (): Promise<void> => {
 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
-async function serve(handler: Handler): Promise<{ artifact: PinnedArtifact; directory: string; requests: IncomingMessage[] }> {
+async function serve(
+  handler: Handler
+): Promise<{ artifact: PinnedArtifact; directory: string; requests: IncomingMessage[] }> {
   const requests: IncomingMessage[] = []
 
   const server: Server = createServer((request, response): void => {
@@ -111,9 +113,9 @@ test('a transfer that stops moving fails as stalled; the next call resumes its p
     }
   })
 
-  await expect(downloadPinnedArtifact(directory, artifact, { stallMs: 200, attemptsWithoutProgress: 2 })).rejects.toBeInstanceOf(
-    PinnedDownloadStalledError
-  )
+  await expect(
+    downloadPinnedArtifact(directory, artifact, { stallMs: 200, attemptsWithoutProgress: 2 })
+  ).rejects.toBeInstanceOf(PinnedDownloadStalledError)
   // Attempt 1 delivered half; attempt 2 resumed at half and added nothing; attempt 3 is never made.
   expect(requests.map(request => request.headers.range ?? null)).toEqual([null, `bytes=${half}-`, `bytes=${half}-`])
   expect((await stat(path.join(directory, 'destination.msixbundle.partial'))).size).toBe(half)
@@ -153,7 +155,11 @@ test('a dropped connection resumes with Range/If-Range and verifies', async (): 
   const file = await downloadPinnedArtifact(directory, artifact, { stallMs: 2_000, attemptsWithoutProgress: 2 })
 
   expect(await readFile(file)).toEqual(BYTES)
-  expect(requests.map(request => request.headers.range ?? null)).toEqual([null, `bytes=${third}-`, `bytes=${2 * third}-`])
+  expect(requests.map(request => request.headers.range ?? null)).toEqual([
+    null,
+    `bytes=${third}-`,
+    `bytes=${2 * third}-`
+  ])
   expect(requests.slice(1).every(request => request.headers['if-range'] === ETAG)).toBe(true)
 })
 
@@ -210,4 +216,34 @@ test('a server that ignores ranges cannot reset the retry budget by repeating by
   ).rejects.toThrow()
   // Attempt 1 reached half; attempts 2 and 3 never passed it.
   expect(requests).toHaveLength(3)
+})
+
+test('an attempt refused before its body is read closes that connection', async (): Promise<void> => {
+  const third = Math.floor(BYTES.length / 3)
+  let refusedClosed: Promise<unknown> | null = null
+
+  const { artifact, directory } = await serve((_request, response, attempt): void => {
+    if (attempt === 1) {
+      response.writeHead(200, { 'content-length': BYTES.length, etag: ETAG })
+      response.write(BYTES.subarray(0, third))
+      setTimeout((): void => {
+        response.socket?.destroy()
+      }, 150)
+
+      return
+    }
+
+    // A resume answered with the wrong range, then a body that keeps coming.
+    refusedClosed = once(response, 'close')
+    response.writeHead(206, { 'content-range': `bytes 0-${BYTES.length - 1}/${BYTES.length}`, etag: ETAG })
+    void trickle(response, BYTES, 64, 100)
+  })
+
+  await expect(
+    downloadPinnedArtifact(directory, artifact, { stallMs: 5_000, attemptsWithoutProgress: 3 })
+  ).rejects.toThrow('different range')
+  expect(refusedClosed).not.toBeNull()
+  await expect(Promise.race([refusedClosed, sleep(1_500).then((): string => 'still open')])).resolves.not.toBe(
+    'still open'
+  )
 })

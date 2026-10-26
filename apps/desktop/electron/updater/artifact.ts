@@ -147,6 +147,9 @@ async function transfer(
     throw error
   } finally {
     clearTimeout(timer)
+    // An attempt that failed before reading its body (refused range, partial
+    // not openable) must not leave that response downloading unobserved.
+    controller.abort()
     await handle?.close()
   }
 }
