@@ -2799,12 +2799,9 @@ def save_env_value(key: str, value: str):
         lines = _read_env_lines(env_path) if env_path.exists() else []
         serialized_value = _quote_env_value(value)
 
-        # The loader is last-assignment-wins, so replacing only the first matching line leaves a stale
-        # duplicate below it that silently shadows the saved value (#8270). Keep the first hit, drop the rest.
         hits = [i for i, line in enumerate(lines) if _env_line_defines_key(line, key)]
-        if hits:
-            lines[hits[0]] = f"{key}={serialized_value}\n"
-            lines = [line for i, line in enumerate(lines) if i not in hits[1:]]
+        if hits:  # keep the first hit, drop later duplicates: the loader is last-wins (#8270)
+            lines = [f"{key}={serialized_value}\n" if i == hits[0] else line for i, line in enumerate(lines) if i not in hits[1:]]
         else:
             if lines and not lines[-1].endswith("\n"):
                 lines[-1] += "\n"
