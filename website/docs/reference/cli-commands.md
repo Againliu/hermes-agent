@@ -1112,8 +1112,9 @@ shared-bot-credential warnings the table prints under it.
 }
 ```
 
-Entries are the ledger records as stored, newest first, after `--skill` / `--limit`. An empty or
-disabled ledger is `"entries": []`. `id` is what `hermes curator rollback <id>` takes.
+Entries are the ledger records as stored, newest first, after `--skill` / `--limit`. An empty
+ledger is `"entries": []`. Disabling the ledger stops new writes, but existing entries remain
+readable. `id` is what `hermes curator rollback <id>` takes.
 
 ### `hermes providers list --json` (schema_version 1)
 
