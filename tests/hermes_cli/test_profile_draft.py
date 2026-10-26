@@ -226,3 +226,18 @@ def test_catalog_lists_managed_mcp_servers_and_the_targets_toolsets(home, llm, t
 
     assert result["mcp_servers"] == ["corp"]  # scout has no config.yaml; the managed server still counts
     assert homes == [home / "profiles" / "scout"]
+
+
+def test_edit_mode_section_sent_back_empty_is_removed_from_the_saved_soul(home, llm):
+    from tui_gateway import server
+    # The change request removes Role: the reply empties it and leaves every other part out.
+    llm.reply = json.dumps({"sections": {"role": "", "voice": "Terse."}})
+
+    edit = server._methods["profiles.draft"](1, {"name": "scout", "description": "x",
+                                                 "note": "drop the role, be terse"})["result"]
+
+    assert edit["ok"]
+    assert "## Role" not in edit["soul"] and "Old role." not in edit["soul"]
+    assert "## Voice\n\nTerse." in edit["soul"] and "## Messaging other agents\n\nKeep me." in edit["soul"]
+    # Omitted parts are untouched, not cleared.
+    assert edit["description"] == edit["previous"]["description"]

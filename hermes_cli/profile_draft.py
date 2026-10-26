@@ -135,13 +135,16 @@ def compose_soul(heading: str, sections: dict[str, str]) -> str:
 
 
 def merge_sections(soul: str, sections: dict[str, str]) -> str:
-    """``soul`` with each non-empty, changed section of ``sections`` written over its ``## Title``
-    block in place (appended when absent); every other byte — the heading, custom sections,
+    """``soul`` with each changed section of ``sections`` written over its ``## Title`` block in
+    place (appended when absent); a section given as empty text removes its block, a key that is
+    absent from ``sections`` is left alone. Every other byte — the heading, custom sections,
     plain text — is kept, so revising a saved SOUL.md never drops what the draft cannot see."""
     out = soul or ""
     for key, title in SECTIONS:
-        body = (sections.get(key) or "").strip()
-        if not body or body == split_soul(out).get(key, "").strip():
+        if key not in sections:
+            continue
+        body = (sections[key] or "").strip()
+        if body == split_soul(out).get(key, "").strip():
             continue
         m = next((h for h in _HEADING_RE.finditer(out) if _HEADING_TO_KEY.get(h.group(1).strip().lower()) == key), None)
         if m is None:
@@ -149,6 +152,10 @@ def merge_sections(soul: str, sections: dict[str, str]) -> str:
             continue
         nxt = _HEADING_RE.search(out, m.end())
         tail = out[nxt.start():] if nxt else ""
+        if not body:
+            head = out[:m.start()]
+            out = head + tail if tail else (f"{head.rstrip()}\n" if head.strip() else "")
+            continue
         out = f"{out[:m.end()]}\n\n{body}\n" + (f"\n{tail}" if tail else "")
     return out
 
@@ -261,16 +268,26 @@ def _parse_reply(raw: str) -> tuple[Optional[dict], str]:
 
 
 def _draft_from(parsed: dict, catalog: Catalog) -> ProfileDraft:
-    sections_raw = parsed.get("sections") if isinstance(parsed.get("sections"), dict) else {}
+    raw = parsed.get("sections")
+    sections_raw: dict = raw if isinstance(raw, dict) else {}
     draft = ProfileDraft(
         ok=True, reason="drafted", name=slugify(str(parsed.get("name") or "")),
         title=_clip(parsed.get("title"), 80), description=_clip(parsed.get("description"), 280),
-        sections={k: _clip(sections_raw.get(k), _SECTION_CHARS) for k, _ in SECTIONS})
+        sections={k: _clip(sections_raw[k], _SECTION_CHARS) for k, _ in SECTIONS if k in sections_raw})
     for kind in CAPABILITY_KINDS:
         kept, dropped = _filter_to_catalog(kind, parsed.get(kind), catalog.names(kind))
         setattr(draft, kind, kept)
         draft.dropped += dropped
     return draft
+
+
+def _keep_omitted(draft: ProfileDraft, parsed: dict, current: dict) -> None:
+    """Revise mode: a part the reply leaves out stays as ``current`` has it, while one it sends
+    back empty stays empty — that is a removal ``merge_sections`` applies to the saved SOUL.md."""
+    draft.sections = {k: draft.sections.get(k, str(current["sections"].get(k) or "")) for k, _ in SECTIONS}
+    for key in FIELDS:
+        if key not in parsed:
+            setattr(draft, key, str(current.get(key) or ""))
 
 
 def _keep_untouched(draft: ProfileDraft, current: dict, only: str) -> None:
@@ -321,6 +338,8 @@ def draft_profile(
     if parsed is None:
         return ProfileDraft(False, why)
     draft = _draft_from(parsed, catalog)
+    if current:
+        _keep_omitted(draft, parsed, current)
     if current and only:
         _keep_untouched(draft, current, only)
     if not any(draft.sections.values()):
