@@ -2,7 +2,7 @@ import type { RelaunchOptions } from 'electron'
 
 import { LAUNCHER_READY_FD_ENV } from './linux-launcher-ready'
 import { restoreLaunchTmpdir } from './linux-sandbox-relaunch'
-import { relaunchNow, type RelaunchStrategy, relaunchStrategy } from './relaunch-target'
+import { canRelaunch, relaunchNow, type RelaunchStrategy, relaunchStrategy } from './relaunch-target'
 
 interface RelaunchHost {
   relaunch(options: RelaunchOptions): void
@@ -66,7 +66,14 @@ export function createAppRelauncher(
         restoreLaunchTmpdir(childEnv)
         // relaunchNow's detached start (lock dropped first) serves this executable as well as an image.
         const detached: RelaunchStrategy = strategy.kind === 'appimage' ? strategy : { kind: 'appimage', image: execPath }
-        relaunchNow(app, pendingArgs, detached, childEnv)
+
+        if (canRelaunch(detached)) {
+          relaunchNow(app, pendingArgs, detached, childEnv)
+        } else {
+          // The backend is already down: Electron's relauncher is the last way back.
+          app.relaunch({ args: pendingArgs })
+        }
+
         pendingArgs = null
       }
 
