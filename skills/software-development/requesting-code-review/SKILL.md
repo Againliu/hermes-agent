@@ -111,8 +111,14 @@ else
 fi
 ```
 
-Fails there too → **pre_existing** (report it, it does not block). Passes there →
-**introduced** by this change. Never stash-run-pop to get a baseline: `git stash`
+- The same test runs there and fails the same way (same assertion or error) →
+  **pre_existing** (report it, it does not block).
+- It passes there → **introduced** by this change.
+- It does not exist there (a test this change added) → **introduced**.
+- It errors there in collection or setup, or fails differently → **inconclusive**:
+  it blocks like an introduced failure until you show why.
+
+Never stash-run-pop to get a baseline: `git stash`
 skips untracked files unless told otherwise, a conflicting `pop` leaves the tree
 half-restored, and `refs/stash` is shared by every worktree of the repository.
 
