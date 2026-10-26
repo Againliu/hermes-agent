@@ -122,6 +122,22 @@ def test_at_capacity_reject_starts_nothing(full_pool):
     assert parent._active_children == []
 
 
+def test_at_capacity_reject_settles_the_manifest_in_the_pinned_home(full_pool, tmp_path):
+    """The parent's pinned profile home owns the manifest, not the thread's ambient one."""
+    from tools.delegation_live_log import create_live_transcripts, live_transcript_root
+    full_pool("reject")
+    pinned = tmp_path / "pinned-profile"
+    parent, child = _Parent(), _Child()
+    batch = _batch(parent, child)
+    batch.live_deleg_id, batch.live_writers, batch.live_paths = create_live_transcripts(batch.task_list, home=pinned)
+    batch.live_home = pinned
+
+    _dispatch_background(batch)
+
+    manifest = json.loads((live_transcript_root(pinned) / batch.live_deleg_id / "manifest.json").read_text(encoding="utf-8"))
+    assert [(t["status"], t.get("exit_reason")) for t in manifest["tasks"]] == [("rejected", "at_capacity")]
+
+
 def test_at_capacity_unknown_policy_falls_back_to_sync(full_pool):
     full_pool("queue")
     parent, child = _Parent(), _Child()
