@@ -6,7 +6,7 @@ server (SDK discovery/registration/token/refresh, pre-flight discovery, device l
 and the authorization URL it opens pass :func:`check_oauth_endpoint`:
 
 - only ``http``/``https``; never the cloud-metadata floor;
-- a public MCP server may not point Hermes at a private, loopback or link-local address
+- a public (or unresolvable) MCP server may not point Hermes at a private, loopback or link-local address
   (``security.allow_private_urls`` / ``fake_ip_ranges`` opt-outs apply, as for every other fetch);
 - credentials need ``https``; plain ``http`` is accepted only for a loopback endpoint, or for a
   local-network endpoint of a server that is itself on the local network (that server already
@@ -49,13 +49,14 @@ def check_oauth_endpoint(url: str, server_url: str | None) -> None:
     if is_always_blocked_url(url):
         raise _refuse(url, "it points at a cloud metadata address")
     server_host = urlsplit(server_url).hostname if server_url else None
-    server_class = host_address_class(server_host) if server_host else "public"
-    if server_class == "public" and not is_safe_url(url):
+    server_public = host_address_class(server_host) in ("public", "unresolved") if server_host else True
+    endpoint_class = host_address_class(host)
+    # A name that does not resolve cannot be dialed either; the request fails on its own.
+    if server_public and endpoint_class != "unresolved" and not is_safe_url(url):
         raise _refuse(url, "the MCP server is public but this OAuth endpoint is on a private, loopback or "
-                           "link-local address (or does not resolve)")
+                           "link-local address")
     if scheme == "http":
-        endpoint_class = host_address_class(host)
-        if not (endpoint_class == "loopback" or (endpoint_class == "internal" and server_class != "public")):
+        if not (endpoint_class == "loopback" or (endpoint_class == "internal" and not server_public)):
             raise _refuse(url, "OAuth credentials are only sent over https (plain http is accepted for "
                                "loopback, or a local-network server's own local endpoints)")
 

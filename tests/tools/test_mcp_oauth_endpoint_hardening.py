@@ -1,6 +1,7 @@
 """MCP OAuth endpoint trust rules (https, no private targets behind a public server, bounded
 responses) and sign-out on server removal (RFC 7009 revocation)."""
 
+import asyncio
 import json
 import socket
 import threading
@@ -51,7 +52,7 @@ def test_advertised_endpoint_rules(fake_dns, endpoint, server, allowed):
             check_oauth_endpoint(endpoint, server)
 
 
-async def test_sdk_refresh_to_unsafe_token_endpoint_is_refused_before_sending(fake_dns, tmp_path, monkeypatch):
+def test_sdk_refresh_to_unsafe_token_endpoint_is_refused_before_sending(fake_dns, tmp_path, monkeypatch):
     """Every request the SDK's flow makes passes the rules: a public server whose metadata names a plain-http
     token endpoint never receives the refresh token."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -74,14 +75,16 @@ async def test_sdk_refresh_to_unsafe_token_endpoint_is_refused_before_sending(fa
     def _handler(request):
         seen.append(str(request.url))
         return httpx.Response(401)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler), auth=provider) as client:
-        with pytest.raises(OAuthEndpointRefused, match="only sent over https"):
+    async def _drive():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler), auth=provider) as client:
             await client.post("https://mcp.example.com/mcp", json={})
+    with pytest.raises(OAuthEndpointRefused, match="only sent over https"):
+        asyncio.run(_drive())
     assert not any("auth.example.com" in url for url in seen)
     reset_manager_for_tests()
 
 
-async def test_oversized_oauth_response_is_refused(fake_dns):
+def test_oversized_oauth_response_is_refused(fake_dns):
     from tools.mcp_tool import sdk_httpx
     httpx = sdk_httpx()
 
@@ -89,11 +92,13 @@ async def test_oversized_oauth_response_is_refused(fake_dns):
         for _ in range(3):
             yield b"x" * (OAUTH_MAX_RESPONSE_BYTES // 2 + 1)
 
-    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=_huge()))
-    async with httpx.AsyncClient(transport=transport,
-                                 event_hooks=oauth_client_event_hooks("https://mcp.example.com/mcp")) as client:
-        with pytest.raises(OAuthEndpointRefused, match="exceeds"):
+    async def _fetch():
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, content=_huge()))
+        async with httpx.AsyncClient(transport=transport,
+                                     event_hooks=oauth_client_event_hooks("https://mcp.example.com/mcp")) as client:
             await client.get("https://auth.example.com/.well-known/oauth-authorization-server")
+    with pytest.raises(OAuthEndpointRefused, match="exceeds"):
+        asyncio.run(_fetch())
 
 
 class _RevokeServer:
