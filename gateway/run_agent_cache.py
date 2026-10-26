@@ -940,8 +940,13 @@ class GatewayAgentCacheMixin:
 
     def _commit_then_release_soft(self, agent: Any, key: str, boundary: bool = False) -> None:
         """Commit end-of-session memory (if warranted), then soft-release — on the daemon eviction
-        thread. Order matters: commit needs the live memory manager before ``release_clients``."""
+        thread. Order matters: commit needs the live memory manager before ``release_clients``. A boundary
+        (viewer /new or close, reset, compress) also closes the browsers its turns kept: the next turn runs
+        under another task id and could never reach them."""
         self._commit_memory_before_soft_evict(agent, key, boundary)
+        if boundary:
+            from agent.client_lifecycle import release_session_browsers
+            release_session_browsers(agent)
         self._release_evicted_agent_soft(agent)
 
     def _release_evicted_agent_soft(self, agent: Any) -> None:
