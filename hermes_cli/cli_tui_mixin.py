@@ -678,13 +678,12 @@ class CLITuiMixin:
         state = self._secret_state
         if not state:
             return []
-        prompt = state.get("prompt") or t(
-            "cli.tui.secret_prompt", var_name=state.get('var_name', t("cli.tui.secret_fallback_name")))
-        help_text = (state.get("metadata") or {}).get("help")
-        content_lines = [prompt, t("cli.tui.secret_body")]
-        if help_text:
-            content_lines.insert(1, str(help_text))
-        return self._render_sudo_style_panel(t("cli.tui.secret_title"), content_lines)
+        from hermes_cli.cli_render import _wrap_panel_text  # an agent's request is long prose: keep it inside the box
+        meta, var_name = state.get("metadata") or {}, state.get("var_name", t("cli.tui.secret_fallback_name"))
+        prompt_rows = _wrap_panel_text(state.get("prompt") or t("cli.tui.secret_prompt", var_name=var_name), 68)
+        content_lines = [*prompt_rows, *([str(meta["help"])] if meta.get("help") else []), t("cli.tui.secret_body")]
+        return self._render_sudo_style_panel(  # an agent's own request is not a skill setup
+            f"🔑 {var_name}" if meta.get("source") == "agent" else t("cli.tui.secret_title"), content_lines)
 
     def _get_connection_display_fragments(self):
         state = self._connection_state
