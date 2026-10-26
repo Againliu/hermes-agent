@@ -6,7 +6,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from agent.redact import redact_sensitive_text
-from hermes_constants_scratch_lock import release_child, vouch_for_child
+from hermes_constants_scratch_lock import release_vouch, vouch_for_child
 
 logger = logging.getLogger("tools.process_registry")
 
@@ -17,10 +17,11 @@ class ProcessCheckpointMixin:
         raise NotImplementedError
 
     @staticmethod
-    def _release_readopted(session) -> None:
-        """Stop vouching for a re-adopted host process (recovery's owner lock); no-op otherwise."""
-        if session.detached and session.pid_scope == "host":
-            release_child(session.pid)
+    def _release_vouch(session) -> None:
+        """Drop the scratch owner lock the registry holds for this session (a fresh spawn's or a
+        re-adoption's), by its own handle: never by pid, so it cannot drop another session's."""
+        handle, session._owner_vouch = session._owner_vouch, None
+        release_vouch(handle)
 
     # ----- Checkpoint (crash recovery) -----
 
@@ -148,9 +149,9 @@ class ProcessCheckpointMixin:
             session = ProcessSession(id=entry["session_id"], detached=True, **fields)
             if same_process:
                 # Re-adopted: Hermes-owned for the scratch prune again, exactly like a fresh spawn,
-                # until _release_readopted. Only on the registry's own same-process verdict,
+                # until _release_vouch. Only on the registry's own same-process verdict,
                 # never when the output log alone decided the adoption.
-                vouch_for_child(pid)
+                session._owner_vouch = vouch_for_child(pid)
             if session.output_log:
                 self._track_started(session, self._log_reader_loop, f"proc-log-reader-{session.id}")
             else:

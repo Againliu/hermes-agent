@@ -40,7 +40,7 @@ from tools.process_registry_termination import ProcessTerminationMixin
 from tools.process_registry_results import load_completed_results, save_completed_result
 from tools.process_registry_env_log import log_delta_command
 from tools.process_registry_wsl import _is_wsl_launcher_command
-from hermes_constants_scratch_lock import release_child, vouch_for_child
+from hermes_constants_scratch_lock import vouch_for_child
 
 logger = logging.getLogger(__name__)
 
@@ -601,6 +601,7 @@ class ProcessSession:
     # Set by the _move_to_finished call that moved the session out of _running; only that call
     # publishes the completion, so a duplicate finisher must not release waiters early.
     _finish_claimed: bool = field(default=False, repr=False)
+    _owner_vouch: Optional[str] = field(default=None, repr=False)  # scratch owner lock held for it
     # The last stop of ``systemd_unit`` failed, so its descendants may still be alive; bulk
     # cleanup retries the stop even after the session finished.
     _scope_stop_pending: bool = field(default=False, repr=False)
@@ -1029,7 +1030,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                 session.exited_at = time.time()
                 self._running.pop(session.id, None)
             self._finished[session.id] = session
-        self._release_readopted(session)
+        self._release_vouch(session)
         self._write_checkpoint()
         session._completion_event.set()
 
@@ -1047,7 +1048,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                 self._finished[session.id] = session
             else:
                 self._finished.pop(session.id, None)
-        self._release_readopted(session)
+        self._release_vouch(session)
         self._write_checkpoint()
         session._completion_event.set()
         return session if session.systemd_unit else None
@@ -1145,7 +1146,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
                                   daemon=True, name=reader_name)
         session._reader_thread = reader
         if session.process is not None or session._pty is not None:
-            vouch_for_child(session.pid)  # its own child: Hermes-owned for the scratch prune
+            session._owner_vouch = vouch_for_child(session.pid)  # its own child: Hermes-owned for the scratch prune
         with self._lock:
             self._prune_if_needed()
             # Completion takes this lock too. Starting here also leaves no
@@ -1577,7 +1578,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
 
     def _publish_finished(self, session: ProcessSession, was_running: bool) -> None:
         self._release_finished_handles(session)
-        self._release_readopted(session)
+        self._release_vouch(session)
         self._write_checkpoint()
         if was_running and session.notify_on_complete:
             notification = {
@@ -1616,8 +1617,6 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         parent's pipe FDs, which is exactly the retained-resource leak.
         """
         proc = session.process
-        if proc is not None or session._pty is not None:
-            release_child(session.pid)  # the scratch owner lock _track_started took for it
         if proc is not None:
             for stream in (proc.stdout, proc.stderr, proc.stdin):
                 if stream is not None:

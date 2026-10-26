@@ -329,12 +329,7 @@ def register_self(purpose: str, *, project_root: Optional[Path] = None, detail: 
     from hermes_constants import hermes_home_key
     from hermes_constants_scratch_lock import hold_owner_lock
 
-    # The scratch prune's ownership signal: an OS lock held for this process's whole life.
-    try:
-        if not hold_owner_lock():
-            logger.warning("scratch owner lock not taken: the scratch prune will not know this process")
-    except OSError as exc:
-        logger.warning("scratch owner lock not taken (%s): the scratch prune will not know this process", exc)
+    hold_owner_lock()  # the scratch prune's ownership signal, held for this process's whole life
     tag = parse_spawn_tag(os.environ.get(SPAWN_ENV_VAR))
     spawner_pid, spawner_create = (tag.spawner_pid, tag.spawner_create) if tag else _desktop_spawner_identity()
     entry = _new_entry(os.getpid(), _process_create_time(), purpose, project_root, spawner_pid, spawner_create)

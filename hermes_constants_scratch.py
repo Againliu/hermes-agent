@@ -23,7 +23,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import hermes_constants_scratch_stuck as stuck
-from hermes_constants_scratch_lock import ancestry, live_owner_pids, owners_dir, owning_holder
+from hermes_constants_scratch_lock import ancestry, live_owner_pids, owning_holder
 
 logger = logging.getLogger(__name__)
 
@@ -187,8 +187,7 @@ def _own_lineage() -> set[int] | None:
     return set(lineage_pids() or ()) | _launcher_lineage
 
 
-def _keep_owned(doomed: list[Path], candidates: list, owners: set[int], lock_dir: Path,
-                audit: logging.Logger) -> list:
+def _keep_owned(doomed: list[Path], candidates: list, owners: dict[int, str], audit: logging.Logger) -> list:
     """Drop from *doomed* every entry an owned candidate works inside (audited with the lock that
     owns it) and return the candidates that are not owned."""
     rest = []
@@ -198,7 +197,7 @@ def _keep_owned(doomed: list[Path], candidates: list, owners: set[int], lock_dir
             rest.append((proc, cwd_path))
             continue
         _keep_entries_of(doomed, proc, cwd_path, audit,
-                         f"owner lock {os.fspath(lock_dir / f'{holder}.lock')!r} held by pid={holder}")
+                         f"owner lock {owners[holder]!r} held for pid={holder}")
     return rest
 
 
@@ -257,9 +256,8 @@ def reap_processes_rooted_in(scratch_root: Path, doomed: list[Path], audit: logg
     # The owning home comes from the scratch path as configured, not its resolved target:
     # a cache/scratch symlinked onto another disk still belongs to <home>.
     home = Path(scratch_root).absolute().parent.parent
-    lock_dir = owners_dir(home)
     if victims:
-        victims = _keep_owned(doomed, victims, live_owner_pids(home), lock_dir, audit)
+        victims = _keep_owned(doomed, victims, live_owner_pids(home), audit)
     # Re-filter against the shrunk *doomed*: an orphan in a kept entry is spared with it (the
     # reap only exists to clear the way for rmtree); one whose cwd is already gone still goes.
     victims = [(proc, cwd_path) for proc, cwd_path in victims
@@ -267,7 +265,7 @@ def reap_processes_rooted_in(scratch_root: Path, doomed: list[Path], audit: logg
     if victims:
         # Second read right before signalling: a process that took its lock since the first
         # read (a Hermes command starting inside the entry) is kept, not killed.
-        victims = _keep_owned(doomed, victims, live_owner_pids(home), lock_dir, audit)
+        victims = _keep_owned(doomed, victims, live_owner_pids(home), audit)
     if not victims:
         return 0
     for proc, cwd_path in victims:

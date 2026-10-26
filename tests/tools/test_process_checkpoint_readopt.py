@@ -252,7 +252,7 @@ def test_a_readopted_process_keeps_its_scratch_entry_until_its_session_ends(regi
         wait_until(lambda: registry.poll("proc_readopt_owner")["status"] == "not_found",
                    timeout=10, what="the registry notices the worker is gone")
         assert proc.pid not in live_owner_pids(tmp_path)
-        assert not (owners_dir(tmp_path) / f"{proc.pid}.lock").exists()
+        assert not list(owners_dir(tmp_path).glob(f"{proc.pid}.*")), "the vouch's lock file was left behind"
     finally:
         if proc.poll() is None:
             proc.kill()
