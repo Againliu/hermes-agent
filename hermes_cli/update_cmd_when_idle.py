@@ -27,6 +27,9 @@ WHEN_IDLE_TIMEOUT_EXIT = 75
 DEFAULT_MAX_WAIT_S = 3600.0
 POLL_S = 5.0
 _UNITS = {"s": 1, "m": 60, "h": 3600}
+#: Flags whose run reads, prints or records something and exits instead of installing.
+_NOT_AN_UPDATE = {"--check": "check", "--plan": "plan", "--list-venv-holders": "list_venv_holders",
+                  "--set-channel": "set_channel", "--install-id": "install_id"}
 _WORK_NOUNS = {"chat": "chat turn", "cron": "cron run", "delegation": "subagent", "api": "API run",
                "managed": "managed turn", "side_agent": "side agent", "deferred": "deferred task"}
 
@@ -72,15 +75,22 @@ def _work_summary(units: list) -> str:
 def gateway_busy() -> Optional[str]:
     """:func:`idle_proof`'s turn probe over the control socket: ``""`` when no running gateway holds
     work (or none runs), a summary like ``"1 chat turn, 1 cron run"`` when one does, ``None`` when a
-    gateway answered ``identify`` but not ``active-work`` (cannot prove idle)."""
+    gateway runs but did not answer ``identify`` or ``active-work`` (cannot prove idle)."""
     from gateway.control_socket import identify_gateway, query_gateway_control
+    from gateway.status import live_gateway_pid_for_home
     from hermes_cli.update_receipt import _profile_homes
 
     seen: set = set()
     units: list = []
     for _profile, home in _profile_homes():
         identity = identify_gateway(home, timeout=2.0)
-        if not identity or identity.get("pid") in seen:
+        if not identity:
+            # No answer is also a timeout, or a gateway without the socket: a live owner whose
+            # work cannot be read is not idle.
+            if live_gateway_pid_for_home(home) is not None:
+                return None
+            continue
+        if identity.get("pid") in seen:
             continue
         seen.add(identity.get("pid"))
         answer = query_gateway_control(home, "active-work", timeout=8.0)
@@ -106,6 +116,8 @@ def wait_until_idle(max_wait_s: float, *, probe: Callable[[], Optional[str]] = g
         # the whole answer: no separate human-input ledger to consult from this process.
         verdict = idle_proof(turn_probe=probe, input_probe=lambda: 0)
         idle_polls = idle_polls + 1 if verdict["idle"] is True else 0
+        if clock() >= deadline:
+            return False  # a proof that lands at or past the bound (slow probes) is too late to act on
         if idle_polls >= 2:
             return True
         status = verdict.get("detail") or verdict.get("reason")
@@ -114,9 +126,7 @@ def wait_until_idle(max_wait_s: float, *, probe: Callable[[], Optional[str]] = g
             what = "the gateway to answer" if verdict["idle"] is None else str(status)
             print(f"→ Waiting for {what} before updating ({left // 60}m{left % 60:02d}s left)...", flush=True)
             last = status
-        if clock() >= deadline:
-            return False
-        sleep(poll_s if verdict["idle"] is not True else min(poll_s, 1.0))
+        sleep(min(poll_s if verdict["idle"] is not True else min(poll_s, 1.0), deadline - clock()))
 
 
 def _resolve_target(args) -> Optional[tuple[str, str]]:
@@ -161,6 +171,9 @@ def run_when_idle(args, cmd_update: Callable) -> None:
     if getattr(args, "gateway", False):
         print("✗ --when-idle cannot run from a chat /update: that turn is the work it would wait for.")
         sys.exit(2)
+    if clash := [flag for flag, dest in _NOT_AN_UPDATE.items() if getattr(args, dest, None)]:
+        print(f"✗ --when-idle waits to install an update; {clash[0]} does not install one. Run it without --when-idle.")
+        sys.exit(2)
     if not (_project_root() / ".git").exists():
         return cmd_update(args)  # package/zip installs: the normal path refuses or routes them
     try:
@@ -169,11 +182,16 @@ def run_when_idle(args, cmd_update: Callable) -> None:
         print(f"✗ Could not resolve the update target: {exc}. Nothing was changed.")
         sys.exit(1)
     if resolved is None:
-        print("✓ Already up to date; nothing to wait for.")
-        return None
+        from hermes_cli.update_cmd_commit import _obligation_paths
+        if not any(path.exists() for path in _obligation_paths(_project_root())):
+            print("✓ Already up to date; nothing to wait for.")
+            return None
+        # An earlier update moved HEAD but still owes its completion or restart: the normal path
+        # repairs that, once nothing is in flight.
+        resolved = ("", "the completion an earlier update still owes")
     target, label = resolved
     declined = read_declined()
-    if declined and declined["target"] == target:
+    if target and declined and declined["target"] == target:
         print(f"→ Skipping {label}: an unattended update to it failed at {declined.get('failed_at', '?')}.")
         print("  It is retried automatically once a newer version ships; run `hermes update` to retry it now.")
         return None
@@ -184,11 +202,19 @@ def run_when_idle(args, cmd_update: Callable) -> None:
         print("  Run `hermes update` to update now (in-flight turns finish first).")
         sys.exit(WHEN_IDLE_TIMEOUT_EXIT)
     print("✓ Idle. Updating now.")
+    from hermes_cli.update_cmd_commit import armed_move_targets
+    already_armed = len(armed_move_targets())
     try:
         cmd_update(args)
     except SystemExit as exc:
         code = exc.code if isinstance(exc.code, int) else 1
-        if code:
-            record_declined(target, label, code)
-            print(f"  Recorded {label} as failed: later --when-idle runs skip it until a newer version ships.")
+        # Only a run that reached a checkout move tried a release; a refusal before it (another
+        # updater holds the lock, a fetch failed) stays retryable. The commit it moved to is the one
+        # declined: the update resolves its own target, which may be newer than the one waited for.
+        attempted = armed_move_targets()[already_armed:]
+        if code and attempted:
+            tried = attempted[-1]
+            record_declined(tried, label if tried == target else tried[:12], code)
+            print(f"  Recorded {label if tried == target else tried[:12]} as failed: "
+                  "later --when-idle runs skip it until a newer version ships.")
         raise
