@@ -229,6 +229,12 @@ def hold_reasons(cli, store) -> dict[str, str]:
             and row.get("admission_id")}
 
 
+def reorderable(cli, store) -> list[str]:
+    """The queued admissions the owner lets move, in run order (``prompt.reorder_queued`` places)."""
+    return [row["admission_id"] for row in _state(cli, store).pending or ()
+            if isinstance(row, dict) and row.get("status") == "queued" and row.get("reorderable") is True]
+
+
 def move(cli, store, admission: str, position: int) -> list[str]:
     """``prompt.reorder_queued``: the admission runs at ``position`` (0-based) among the reorderable rows."""
     receipt = store.call("prompt.reorder_queued", session_id=cli.session_id, admission_id=admission,

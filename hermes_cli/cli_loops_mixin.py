@@ -495,6 +495,18 @@ class CLILoopsMixin:
         else:
             _cprint(f"  {t('cli.queue.updated', index=idx, preview=_preview(new_text))}")
 
+    def _gateway_move_position(self, items, src, dst):
+        """``prompt.reorder_queued``'s place for a move between listed rows ``src`` and ``dst``: the
+        destination row's rank among the rows the owner lets move. None (printed) when either row
+        stays put (a notification, an automation row)."""
+        from cli import _cprint
+        from hermes_cli import gateway_queue
+        movable = gateway_queue.reorderable(self, self._gateway_queue_store())
+        if items[src - 1][0] not in movable or items[dst - 1][0] not in movable:
+            _cprint(f"  {t('cli.queue.move_refused', index=src, error='unsupported_control')}")
+            return None
+        return movable.index(items[dst - 1][0])
+
     def _queue_move(self, rest: str) -> None:
         from cli import _cprint
         bits = rest.split()
@@ -507,9 +519,12 @@ class CLILoopsMixin:
         if owned and min(src, dst) <= owned and src != dst:
             # The owner's FIFO is reordered by the owner (``prompt.reorder_queued``); the local turns
             # always run after it, so a move cannot cross between the two.
-            if max(src, dst) > owned:
+            if min(src, dst) < 1:
+                _cprint(f"  {t('cli.queue.move_out_of_range', size=len(items))}")
+            elif max(src, dst) > owned:
                 _cprint(f"  {t('cli.queue.move_across_gateway', size=owned)}")
-            elif self._queue_gateway_call("move", src, items[src - 1][0], dst - 1) is not None:
+            elif (position := self._gateway_move_position(items, src, dst)) is not None and self._queue_gateway_call(
+                    "move", src, items[src - 1][0], position) is not None:
                 _cprint(f"  {t('cli.queue.moved', source=src, destination=dst)}")
             return
         src, dst = src - owned, dst - owned
