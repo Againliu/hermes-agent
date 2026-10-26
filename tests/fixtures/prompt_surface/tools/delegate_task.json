@@ -4,7 +4,7 @@
   "parameters": {
     "properties": {
       "action": {
-        "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts plus background pool cap/running/free; 'steer' = queue course-correction text into one child (subagent_id + message) without stopping it; 'stop' = end one child early (subagent_id; partial result still returns). Control actions return immediately; goal/tasks are ignored unless spawning.",
+        "description": "Default 'spawn'. Live control of running children: 'list' = ids/goals/status/transcripts; 'steer' = queue course-correction text into one child (subagent_id + message) without stopping it; 'stop' = end one child early (subagent_id; partial result still returns). Control actions return immediately; goal/tasks are ignored unless spawning.",
         "enum": [
           "spawn",
           "list",
