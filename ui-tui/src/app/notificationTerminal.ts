@@ -64,6 +64,7 @@ export function warpAgentPayload(
 ): string {
   const advertised = Number.parseInt(opts.protocolVersion ?? '1', 10)
   const project = opts.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? ''
+
   const text = [...detail]
     .filter(ch => ch >= ' ' && ch !== '\x7f')
     .join('')

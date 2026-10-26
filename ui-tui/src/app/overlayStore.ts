@@ -26,6 +26,7 @@ const buildOverlayState = (): OverlayState => ({
   confirm: null,
   connection: null,
   connectors: false,
+  historySearch: null,
   ambient: [],
   widget: null,
   journey: false,
@@ -54,6 +55,7 @@ const BLOCKING_KEYS = [
   'confirm',
   'connection',
   'connectors',
+  'historySearch',
   'journey',
   'modelPicker',
   'pager',
@@ -87,7 +89,7 @@ export const $isBlocked = computed($overlayState, overlay => BLOCKING_KEYS.some(
  *   (`ActiveWidgetSlot`, `sdk/host.tsx:209`, outside the ComposerPane
  *   subtree) so it can anchor the full-screen absolute `Overlay`
  *   (`components/overlay.tsx`) against the whole terminal.
- * - The FloatingOverlays set — `modelPicker`, `pager`, `petPicker`,
+ * - The FloatingOverlays set — `historySearch`, `modelPicker`, `pager`, `petPicker`,
  *   `sessions`, `skillsHub`, `pluginsHub`, `connectors` — but ONLY when the rule sits at
  *   the top.  That panel is `position="absolute" bottom="100%"` inside
  *   ComposerPane's relative Box (`appOverlays.tsx:387`), so it grows UPWARD
@@ -126,6 +128,7 @@ export const $isBlocked = computed($overlayState, overlay => BLOCKING_KEYS.some(
 export const hasFloatingPanel = (overlay: OverlayState): boolean =>
   Boolean(
     overlay.connectors ||
+    overlay.historySearch ||
     overlay.modelPicker ||
     overlay.pager ||
     overlay.petPicker ||

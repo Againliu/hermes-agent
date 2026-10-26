@@ -13,7 +13,7 @@ import { computePrecisionWheelStep, initPrecisionWheel } from '../lib/precisionW
 import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
 import { closeWidget, dispatchWidgetInput } from '../sdk/host.js'
 
-import { $agentDockCollapsed } from './agentRoster.js'
+import { $agentDockCollapsed, $agentDockVisible } from './agentRoster.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import {
   type GatewayRpc,
@@ -77,6 +77,9 @@ export type CtrlCComposerAction = 'clear' | 'interrupt' | 'exit'
  * in that order. A non-empty composer always wins — mid-stream, the chord
  * used to interrupt the turn even when the user was trying to dump a draft.
  */
+/** Ctrl+R search starts from the single-line draft; a multi-line draft starts empty. */
+export const historySearchSeed = (draft: string) => (draft.includes('\n') ? '' : draft.trim())
+
 export function resolveCtrlCComposerAction(opts: {
   busy: boolean
   hasDraft: boolean
@@ -310,6 +313,10 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
     if (overlay.petPicker) {
       return patchOverlayState({ petPicker: false })
+    }
+
+    if (overlay.historySearch) {
+      return patchOverlayState({ historySearch: null })
     }
 
     if (overlay.billing) {
@@ -739,18 +746,20 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
       return patchOverlayState({ sessions: true })
     }
 
-    // Ctrl+R / F7 toggle only changes the live-work dock preview; it does not
-    // open the monitor or move composer focus. Ctrl+R is the reliable fallback
-    // on macOS terminals that reserve the function row for hardware controls.
-    if (
-      ((event.keypress.name === 'f7' && !key.ctrl) || isCtrl(key, ch, 'r')) &&
-      !key.meta &&
-      !key.shift &&
-      !key.super
-    ) {
+    // F7 (and Ctrl+R while the live-work dock is on screen) only changes the
+    // dock preview; it does not open the monitor or move composer focus.
+    // Ctrl+R is the fallback on macOS terminals that reserve the function row.
+    // With no dock showing, Ctrl+R is the shell's reverse history search.
+    const ctrlR = isCtrl(key, ch, 'r') && !key.meta && !key.shift && !key.super
+
+    if ((event.keypress.name === 'f7' && !key.ctrl && !key.meta && !key.shift && !key.super) || (ctrlR && $agentDockVisible.get())) {
       $agentDockCollapsed.set(!$agentDockCollapsed.get())
 
       return
+    }
+
+    if (ctrlR) {
+      return patchOverlayState({ historySearch: { query: historySearchSeed(cState.input) } })
     }
 
     // Ctrl+O opens the model picker without disturbing a typed draft — the

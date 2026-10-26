@@ -300,6 +300,8 @@ export interface OverlayState {
   confirm: ConfirmReq | null
   connection: ConnectionOverlayState | null
   connectors: boolean
+  /** Ctrl+R prompt-history search; `query` seeds the filter from the draft. */
+  historySearch: null | { query: string }
   /** Ambient widget apps — glanceable dock, non-blocking (never in $isBlocked). */
   ambient: ActiveWidget[]
   /** Modal widget app — owns input, blocks the composer. */
@@ -679,6 +681,8 @@ export interface AppOverlaysProps {
   onClarifyQuestionAnswer: (qid: string, value: string) => void
   onActiveSessionSelect: (sessionId: string) => void
   onActiveSessionClose: (sessionId: string) => Promise<null | SessionCloseResponse>
+  /** Ctrl+R search picked an entry: it replaces the draft for editing. */
+  onHistoryAccept: (entry: string) => void
   onModelSelect: (value: string) => void
   onNewLiveSession: () => void
   onNewPromptSession: (prompt: string, modelArg?: string) => void
