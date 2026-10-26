@@ -1157,29 +1157,6 @@ _STREAM_DROP_MARKERS = (
 )
 
 
-def _quota_resume_plan(
-    agent: Any, classified: Any, *, error_context: Any, provider: Any
-) -> Optional[dict[str, Any]]:
-    """Wire-form quota-resume descriptor for a terminal failure, or None.
-
-    Best-effort by construction: this decorates an already-failed turn, so any
-    problem resolving the deadline must leave the failure exactly as it was.
-    """
-    try:
-        from agent.quota_resume import plan_quota_resume
-
-        plan = plan_quota_resume(
-            failure_reason=classified.reason,
-            error_context=error_context,
-            provider=provider,
-            credential_pool=getattr(agent, "_credential_pool", None),
-        )
-    except Exception:
-        logger.debug("quota-resume planning failed", exc_info=True)
-        return None
-    return plan.to_dict() if (plan.eligible or plan.resume_at is not None) else None
-
-
 def max_retries_exhausted_result(
     agent: Any, api_error: Exception, classified: Any, *, attempts: int, is_rate_limited: bool,
     error_msg: str, api_kwargs: Any, api_messages: Any, messages: list[dict[str, Any]],
@@ -1323,10 +1300,9 @@ def max_retries_exhausted_result(
     # Subscription quota wall: carry the provider's own reset deadline to the surfaces
     # so a client can wait it out instead of handing the user a blind Retry. Only
     # attached when a deadline was actually reported — never guessed.
-    _resume_plan = _quota_resume_plan(
-        agent, classified, error_context=error_context, provider=provider,
-    )
-    if _resume_plan is not None:
+    from agent.quota_resume import plan_for_failed_turn
+    if (_resume_plan := plan_for_failed_turn(
+            agent, classified, error_context=error_context, provider=provider, base_url=base_url)):
         result["quota_resume"] = _resume_plan
     return result
 

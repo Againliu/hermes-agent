@@ -2673,8 +2673,9 @@ DEFAULT_CONFIG = {
         # button the user has to babysit. Only ever armed from a reset time the provider
         # actually reported (error body/header, credential pool, or the provider's usage
         # API) — never a guess, and never for overload/billing/auth failures.
+        # Opt-in: rerunning a turn hours later is a behaviour change the user chooses.
         "quota_resume": {
-            "enabled": True,
+            "enabled": False,
             # Max automatic resumes of one turn, so a mis-reported reset can't loop it.
             "max_attempts": 2,
         },

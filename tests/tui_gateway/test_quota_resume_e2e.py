@@ -92,7 +92,7 @@ def test_captured_anthropic_overload_payload_yields_no_plan():
 def test_max_retries_result_attaches_quota_resume(monkeypatch):
     """The terminal result is where the deadline stops being thrown away."""
     from agent.error_classifier import FailoverReason
-    from agent import turn_recovery
+    from agent import quota_resume
 
     reset_at = time.time() + 1800
 
@@ -101,9 +101,9 @@ def test_max_retries_result_attaches_quota_resume(monkeypatch):
         retryable = True
         billing_unverified = False
 
-    plan = turn_recovery._quota_resume_plan(
-        agent=type("A", (), {"_credential_pool": None})(),
-        classified=_Classified(),
+    plan = quota_resume.plan_for_failed_turn(
+        type("A", (), {"_credential_pool": None})(),
+        _Classified(),
         error_context={"reset_at": reset_at},
         provider="anthropic",
     )
@@ -115,16 +115,16 @@ def test_max_retries_result_attaches_quota_resume(monkeypatch):
 
 def test_max_retries_result_omits_plan_for_overload():
     from agent.error_classifier import FailoverReason
-    from agent import turn_recovery
+    from agent import quota_resume
 
     class _Classified:
         reason = FailoverReason.overloaded
         retryable = True
         billing_unverified = False
 
-    assert turn_recovery._quota_resume_plan(
-        agent=type("A", (), {"_credential_pool": None})(),
-        classified=_Classified(), error_context={}, provider="anthropic",
+    assert quota_resume.plan_for_failed_turn(
+        type("A", (), {"_credential_pool": None})(),
+        _Classified(), error_context={}, provider="anthropic",
     ) is None
 
 
@@ -338,5 +338,5 @@ def test_config_defaults_expose_a_settings_toggle():
     from hermes_cli.config_defaults import DEFAULT_CONFIG
 
     cfg = DEFAULT_CONFIG["desktop"]["quota_resume"]
-    assert cfg["enabled"] is True
+    assert cfg["enabled"] is False  # opt-in: a rerun hours later is the user's choice
     assert isinstance(cfg["max_attempts"], int)

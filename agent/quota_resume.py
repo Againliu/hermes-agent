@@ -286,3 +286,31 @@ __all__ = [
     "coerce_reset_timestamp",
     "plan_quota_resume",
 ]
+
+
+def plan_for_failed_turn(
+    agent: Any, classified: Any, *, error_context: Any, provider: Any, base_url: Any = "",
+) -> Optional[dict]:
+    """Wire-form plan for a turn that failed after retries and fallback, or None.
+
+    Also parks the provider (``agent.usage_hold``) when the reset was reported, so the next
+    cron tick, kanban card or queued message waits instead of failing into the same wall.
+    Best-effort by construction: this decorates an already-failed turn, so any problem
+    resolving the deadline must leave the failure exactly as it was.
+    """
+    try:
+        plan = plan_quota_resume(
+            failure_reason=classified.reason,
+            error_context=error_context,
+            provider=provider,
+            credential_pool=getattr(agent, "_credential_pool", None),
+        )
+    except Exception:
+        logger.debug("quota-resume planning failed", exc_info=True)
+        return None
+    if not (plan.eligible or plan.resume_at is not None):
+        return None
+    wire = plan.to_dict()
+    from agent.usage_hold import record_from_plan
+    record_from_plan(wire, provider=provider, base_url=base_url)
+    return wire

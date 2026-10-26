@@ -31,7 +31,7 @@ from .method_ctx import bind_module
 # a few seconds of slop costs nothing.
 _QUOTA_RESUME_POLL_SECONDS = 15.0
 
-_QUOTA_RESUME_ENABLED_DEFAULT = True
+_QUOTA_RESUME_ENABLED_DEFAULT = False
 # One re-arm covers the common "provider moved the goalposts" case (the window
 # reopened later than first advertised) without letting a mis-reported deadline
 # loop a session forever.
