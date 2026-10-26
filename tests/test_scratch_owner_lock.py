@@ -48,8 +48,8 @@ def test_a_running_gateway_keeps_its_shells_entry_when_the_spawn_ledger_is_lost(
          f"open({str(ready)!r}, 'w', encoding='utf-8').write(json.dumps([os.getpid(), sh.pid])); time.sleep(120)"],  # windows-footgun: ok — a write
         stdin=subprocess.DEVNULL, env={**os.environ, "HERMES_HOME": str(tmp_path)}, creationflags=_NO_WINDOW)
     try:
-        _, shell = wait_until(lambda: ready.exists() and json.loads(ready.read_text(encoding="utf-8-sig") or "null"),
-                              timeout=60, what="the registered gateway started its shell")
+        holder, shell = wait_until(lambda: ready.exists() and json.loads(ready.read_text(encoding="utf-8-sig") or "null"),
+                                   timeout=60, what="the registered gateway started its shell")
         (tmp_path / "spawn-ledger.json").write_text("{not json", encoding="utf-8")
         _age(lane)
 
@@ -58,7 +58,9 @@ def test_a_running_gateway_keeps_its_shells_entry_when_the_spawn_ledger_is_lost(
         assert _alive(shell), "the live gateway's shell was killed"
         assert lane.exists(), "the entry the live gateway's shell works in was deleted"
         log = (tmp_path / "logs" / "scratch-prune.log").read_text(encoding="utf-8-sig")
-        assert f"held for pid={gateway.pid}" in log, log  # kept by the gateway's lock, not a fail-closed pass
+        # Kept by the gateway's lock, not a fail-closed pass. The pid it reports itself: on Windows
+        # the venv's python.exe is a launcher whose child is the interpreter that holds the lock.
+        assert f"held for pid={holder}" in log, log
     finally:
         with contextlib.suppress(psutil.Error):
             for child in psutil.Process(gateway.pid).children(recursive=True):

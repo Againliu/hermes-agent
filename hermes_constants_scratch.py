@@ -398,30 +398,25 @@ def _remove_entry(entry: Path, audit: logging.Logger) -> list[str] | None:
     """Delete *entry*; the dirs that refused access (see ``stuck``), or None when it was kept.
 
     Windows refuses to rename a directory while any process holds a handle inside it (an open
-    file, a cwd). The entry is moved aside first, so one in use is kept whole instead of
-    half-deleted around the files ``rmtree`` cannot remove, and the tree is removed under the
-    aside name: a process opening the entry by its old path in the meantime finds nothing to hold.
-    Whatever ``rmtree`` could not remove is moved back to the entry's name, best-effort."""
+    file, a cwd). The entry is moved aside and back first, so one in use is kept whole instead of
+    half-deleted around the files ``rmtree`` cannot remove."""
     if not entry.is_dir() or entry.is_symlink():
         entry.unlink()
         return []
-    if os.name != "nt":
-        return stuck.rmtree_collecting_permission_errors(entry)
-    aside = entry.with_name(f".{entry.name}.pruning-{os.getpid()}")
-    try:
-        os.rename(entry, aside)
-    except OSError as exc:
-        audit.info("scratch prune: kept %r — in use: Windows refused to move it (%s)", os.fspath(entry), exc)
-        return None
-    stuck.rmtree_collecting_permission_errors(aside)
-    if os.path.lexists(aside):
+    if os.name == "nt":
+        aside = entry.with_name(f".{entry.name}.pruning-{os.getpid()}")
+        try:
+            os.rename(entry, aside)
+        except OSError as exc:
+            audit.info("scratch prune: kept %r — in use: Windows refused to move it (%s)", os.fspath(entry), exc)
+            return None
         try:
             os.rename(aside, entry)
         except OSError as exc:
-            audit.info("scratch prune: could not fully remove %r; the rest is left as %r (%s)",
+            audit.info("scratch prune: kept %r as %r — could not move it back (%s)",
                        os.fspath(entry), os.fspath(aside), exc)
             return None
-    return []
+    return stuck.rmtree_collecting_permission_errors(entry)
 
 
 def prune_idle_entries(

@@ -339,7 +339,9 @@ def _background_hermes_command(world, lane):
     assert held and took < 1.0, info
     psutil.Process(info["registry"]).kill()
     wait_until(lambda: gone(info["registry"]), timeout=30, what="the spawning gateway terminated")
-    return child, f"held for pid={child}"
+    # The lane's first candidate decides the audit line: the child's own lock, or the Git Bash
+    # wrapper the checkpoint records (keep-only). Either is an owner, never "ownership unknown".
+    return child, "— live Hermes process pid="
 
 
 @pytest.mark.parametrize("make", [_recovered_worker, _worker_kept_by_the_boot_prune_then_recovered,
