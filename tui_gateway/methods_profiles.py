@@ -656,12 +656,15 @@ def _configure_ui_meta(profile_dir, params, applied) -> None:
             else:
                 existing.pop("ui_meta", None)
             existing["_ui_meta_revisions"] = revisions
+            if "hermes-bots" in incoming:
+                # Window before flag, both ways: a tick between the writes (or a failed flag write)
+                # sees "unpaused, window open" (not paused yet) or "paused, window closed" (still
+                # holding), never an unpaused bot whose pause slots are not yet on record.
+                _apply_bot_pause(profile_dir, was_paused, _bots_paused(current), applied)
             from utils import atomic_yaml_write
             atomic_yaml_write(profile_dir / "profile.yaml", existing, sort_keys=False)
             applied["ui_meta"] = True
             applied["ui_meta_revisions"] = {key: revisions[key] for key in incoming}
-            if "hermes-bots" in incoming:
-                _apply_bot_pause(profile_dir, was_paused, _bots_paused(current), applied)
             if _bots_title(current) != old_title:
                 # A client writing another machine's bot title lands here; the Desktop's
                 # `[bot-meta win=…]` desktop.log line at the same time names the window.

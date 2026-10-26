@@ -118,3 +118,32 @@ def test_a_resumed_bot_holds_a_raw_string_schedule_slot_from_its_pause(fleet, mo
     _tick(paused)
 
     assert fired == ["after"]
+
+
+def test_a_tick_between_the_resume_writes_never_runs_a_slot_from_the_pause(fleet, monkeypatch):
+    """The resume writes the flag and the pause record separately; a tick landing between them
+    (or after a failed second write) must not see an unpaused bot whose pause is not on record."""
+    import tui_gateway.server as srv
+    import utils
+
+    paused, _active, fired = fleet
+    monkeypatch.setenv("HOME", str(paused.parent.parent.parent))
+
+    def configure(flag):
+        params = {"name": "scribe", "ui_meta": {"hermes-bots": {"title": "scribe", "paused": flag}}}
+        srv._methods["profiles.configure"]("c", params)
+
+    configure(True)
+    _overdue_job(paused, minutes=0)  # due now: inside the pause
+    for name in ("atomic_json_write", "atomic_yaml_write"):
+        real = getattr(utils, name)
+
+        def write_then_tick(path, *a, _real=real, **k):
+            _real(path, *a, **k)
+            if path.name in {"profile.yaml", "bot_pause_windows.json"}:
+                _tick(paused)
+
+        monkeypatch.setattr(utils, name, write_then_tick)
+    configure(False)
+
+    assert fired == []
