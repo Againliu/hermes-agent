@@ -110,13 +110,13 @@ def _handle_sudo_failure(output: str, env_type: str) -> str:
 
 # sudo -S rejects a bad cached/interactive password with messages matching this pattern.
 # A regex, not substrings: sudo >= 1.9 counts the attempts ("sudo: 1 incorrect password
-# attempt"), which the old bare-form substring only matched after three tries — so a
-# rejected password stayed cached and the user was never re-prompted. The rewrite below
-# pins LC_ALL=C on the sudo process, keeping these English markers matchable everywhere.
+# attempt") and sudo-rs (Ubuntu's default sudo) says "Incorrect authentication attempt" /
+# "Authentication failed, try again." under its own prefix, so a fixed English substring
+# missed the first rejection and the wrong password stayed cached.
 _SUDO_WRONG_PASSWORD_RE = re.compile(
-    r"incorrect password attempts?"
-    r"|maximum \d+ incorrect authentication attempts?"
+    r"incorrect (?:password|authentication) attempts?"
     r"|sudo: authentication failed"
+    r"|authentication failed, try again"
     r"|sorry, try again",
     re.IGNORECASE,
 )
@@ -378,13 +378,7 @@ def _rewrite_real_sudo_invocations(command: str) -> tuple[str, int]:
         in_env = executable == "env"
         env_options = in_env
         if executable == "sudo":
-            # Shell-prefix assignment, scoped to the sudo process only: sudo prints its own
-            # diagnostics (wrong-password lines included) in the caller's locale, and the
-            # failure detection above only knows the English markers — a localized sudo
-            # would otherwise keep a rejected password cached forever. env_reset keeps
-            # LC_ALL off the target command, and a command-line VAR=val the user wrote
-            # still wins over this one for the target.
-            out[-1] = f"LC_ALL=C {out[-1]} -S -p ''"
+            out[-1] += " -S -p ''"
             sudo_count += 1
     return "".join(out), sudo_count
 

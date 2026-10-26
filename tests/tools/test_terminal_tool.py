@@ -35,7 +35,7 @@ def test_actual_sudo_command_uses_configured_password(monkeypatch):
 
     transformed, sudo_stdin = terminal_tool_sudo._transform_sudo_command("sudo apt install -y ripgrep")
 
-    assert transformed == "LC_ALL=C sudo -S -p '' apt install -y ripgrep"
+    assert transformed == "sudo -S -p '' apt install -y ripgrep"
     assert sudo_stdin == "testpass\n"
 
 
@@ -50,7 +50,7 @@ def test_explicit_empty_sudo_password_tries_empty_without_prompt(monkeypatch):
 
     transformed, sudo_stdin = terminal_tool_sudo._transform_sudo_command("sudo true")
 
-    assert transformed == "LC_ALL=C sudo -S -p '' true"
+    assert transformed == "sudo -S -p '' true"
     assert sudo_stdin == "\n"
 
 
@@ -100,7 +100,7 @@ def test_literal_sudo_executables_receive_password_stdin(monkeypatch):
         for executable in ("sudo", "/usr/bin/sudo", "'/opt/my tools/sudo'", '"/usr/bin/sudo"'):
             command = prefix + executable + " -u root true"
             rewritten, stdin = terminal_tool_sudo._transform_sudo_command(command)
-            assert rewritten == prefix + "LC_ALL=C " + executable + " -S -p '' -u root true"
+            assert rewritten == prefix + executable + " -S -p '' -u root true"
             assert stdin == "testpass\n"
 
 
@@ -144,6 +144,9 @@ def test_sudo_wrong_password_failure_matches_all_rejection_forms():
         "sudo: 3 incorrect password attempts",
         "sudo: maximum 3 incorrect authentication attempts",
         "Sorry, try again.",
+        "sudo-rs: Authentication failed, try again.",
+        "sudo-rs: Incorrect authentication attempt",
+        "sudo-rs: Maximum 3 incorrect authentication attempts",
     ):
         assert terminal_tool_sudo._sudo_wrong_password_failure(output), output
     for output in (
@@ -153,14 +156,3 @@ def test_sudo_wrong_password_failure_matches_all_rejection_forms():
         "apt-get install -y ripgrep",
     ):
         assert not terminal_tool_sudo._sudo_wrong_password_failure(output), output
-
-
-def test_sudo_rewrite_pins_c_locale_so_markers_survive_localization(monkeypatch):
-    """sudo prints its own diagnostics in the caller's locale, so on a localized system no
-    English marker ever matches. The shell-prefix assignment scopes LC_ALL=C to the sudo
-    process only: env_reset keeps it off the target command, and a command-line VAR=val
-    still wins over an earlier assignment (sudo passes it to the target verbatim)."""
-    monkeypatch.setenv("SUDO_PASSWORD", "testpass")
-    transformed, sudo_stdin = terminal_tool_sudo._transform_sudo_command("sudo apt install -y ripgrep")
-    assert transformed == "LC_ALL=C sudo -S -p '' apt install -y ripgrep"
-    assert sudo_stdin == "testpass\n"
