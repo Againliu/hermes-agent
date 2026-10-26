@@ -1,7 +1,7 @@
 ---
 name: requesting-code-review
 description: "Read-only review by default; commit only if authorized."
-version: 2.1.0
+version: 2.2.0
 author: Hermes Agent (adapted from obra/superpowers + MorAlekss)
 license: MIT
 platforms: [linux, macos, windows]
@@ -54,10 +54,12 @@ reports and stops.
 git diff --cached
 ```
 
-If empty, try `git diff` then `git diff HEAD~1 HEAD`.
-
-If `git diff --cached` is empty but `git diff` shows changes, tell the user to
-`git add <files>` first. If still empty, run `git status` — nothing to verify.
+If empty, review the unstaged work with `git diff` instead; do not stage it
+yourself. If both are empty, run `git status`: there is nothing local to verify.
+To review a branch rather than the working tree, diff it against its merge-base
+(`git diff "$(git merge-base origin/main HEAD)"...HEAD`). Never fall back to
+`git diff HEAD~1 HEAD` silently: the last commit may not be the change the user
+asked about, and it fails on a repository's first commit.
 
 If the diff exceeds 15,000 characters, split by file:
 ```bash
@@ -88,9 +90,23 @@ git diff --cached | grep "^+" | grep -E "execute\(f\"|\.format\(.*SELECT|\.forma
 
 ## Step 3 — Baseline tests and linting
 
-Detect the project language and run the appropriate tools. Capture the failure
-count BEFORE your changes as **baseline_failures** (stash changes, run, pop).
+Detect the project language and run the appropriate tools on the working tree.
 Only NEW failures introduced by your changes block the commit.
+
+**Pre-existing or new?** For each failing test, rerun just that test at the
+merge-base in a detached worktree, so your uncommitted work is never touched:
+
+```bash
+base=$(git merge-base origin/main HEAD)   # or HEAD for uncommitted-only work
+git worktree add --detach ../baseline-check "$base"
+(cd ../baseline-check && python -m pytest path/to/test_file.py::test_name -q)
+git worktree remove --force ../baseline-check
+```
+
+Fails there too → **pre_existing** (report it, it does not block). Passes there →
+**introduced** by this change. Never stash-run-pop to get a baseline: `git stash`
+skips untracked files unless told otherwise, a conflicting `pop` leaves the tree
+half-restored, and `refs/stash` is shared by every worktree of the repository.
 
 **Test frameworks** (auto-detect by project files):
 ```bash
@@ -261,9 +277,9 @@ After the fix agent completes, re-run Steps 1-6 (full verification cycle).
 - Passed and commit authorized: proceed to Step 8
 - Passed and review-only: report results and stop (do not commit)
 - Failed and attempts < 2: repeat Step 7
-- Failed after 2 attempts: escalate to user with the remaining issues and
-  suggest `git stash` or `git reset` to undo only if those operations were
-  authorized
+- Failed after 2 attempts: escalate to user with the remaining issues and the
+  `git diff` of what the fix agent changed; let the user decide what to keep.
+  Never `git stash`, `git reset` or `git checkout --` their tree yourself.
 
 ## Step 8 — Commit
 
