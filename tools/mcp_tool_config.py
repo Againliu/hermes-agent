@@ -3,6 +3,7 @@ interpolation, hidden-whitespace and suspicious-entry filtering, the filtered
 subprocess env, command resolution, the cached-npx binary shortcut and the shared stderr log."""
 
 import codecs
+import contextvars
 import hashlib
 import json
 import logging
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from hermes_cli.stderr_timestamp import stamp_line, timestamp
 from tools.mcp_tool_common import _env_ref_name, _prepend_path
+from tools.mcp_tool_stderr import StderrRecords, redact_record
 
 logger = logging.getLogger("tools.mcp_tool")
 
@@ -36,7 +38,7 @@ except ImportError:
 
 
 class _McpStderrLog:
-    """Secret-redacting, size-bounded MCP stderr log owned by one profile.
+    """Size-bounded MCP stderr log owned by one profile (``_StderrTee`` redacts what it writes).
 
     ``logs/mcp-stderr.log`` is shared by every Hermes process on one ``HERMES_HOME``, so the
     size check, rotation and write run under an exclusive lock on ``mcp-stderr.log.lock``
@@ -80,10 +82,9 @@ class _McpStderrLog:
         os.ftruncate(self._fh.fileno(), 0)
 
     def write(self, text: str) -> int:
-        from agent.redact import redact_sensitive_text
-
-        redacted = redact_sensitive_text(str(text), force=True)
-        encoded = redacted.encode("utf-8", errors="replace")[:_MCP_STDERR_MAX_BYTES]
+        # Child output arrives already redacted per whole record (``_StderrTee``); a single
+        # line-level pass here would miss secrets split across lines.
+        encoded = str(text).encode("utf-8", errors="replace")[:_MCP_STDERR_MAX_BYTES]
         redacted = encoded.decode("utf-8", errors="ignore")
         with self._lock:
             self._interprocess()
@@ -114,7 +115,7 @@ class _McpStderrLog:
 def _get_mcp_stderr_log() -> Any:
     """Shared append-mode handle for MCP subprocess stderr, cached until shutdown PER PROFILE HOME (a
     multiplexed gateway's secondary profile must log under ITS ``logs/``, not the launch profile's).
-    The returned writer redacts and rotates before every disk write; opening failures fall back to
+    The returned writer rotates before every disk write; opening failures fall back to
     ``/dev/null``, then real stderr."""
     from hermes_constants import get_hermes_home, hermes_home_key, mkdir_under_hermes_home
     home_key = hermes_home_key()
@@ -124,7 +125,7 @@ def _get_mcp_stderr_log() -> Any:
             try:
                 log_dir = get_hermes_home() / "logs"
                 mkdir_under_hermes_home(log_dir)
-                # All writes pass through the forced secret redactor and bounded rotator.
+                # All writes pass through the bounded rotator.
                 fh = _McpStderrLog(log_dir / "mcp-stderr.log")
             except Exception as exc:  # pragma: no cover — best-effort fallback
                 logger.debug("Failed to open MCP stderr log, using devnull: %s", exc)
@@ -152,9 +153,14 @@ def _close_mcp_stderr_logs(*, scope: Optional[str] = None) -> None:
 
 
 class _StderrTee:
-    """A stdio child's stderr, copied into the shared log one stamped line at a time while the last few KB
-    stay readable (raw), so a server that dies at startup can say why on the MCP status surfaces instead of
+    """A stdio child's stderr, copied into the shared log as stamped lines while the last few KB stay
+    readable (raw), so a server that dies at startup can say why on the MCP status surfaces instead of
     only in the log (#124264). ``sink`` is handed to the child; ``close()`` returns the captured tail.
+
+    Lines are grouped into whole records and each record is redacted as one text (secrets split
+    across a pretty-printed dump stay masked). The reader thread runs in a copy of the spawning
+    context, so redaction uses the owning profile's configured secret values, not the launch
+    profile's (a plain thread starts with no profile binding).
 
     The tail is deliberately kept raw, in memory only: it is never written to disk and its only consumer
     (``node_abi_error``) matches fixed ``_ABI_MARKERS`` and extracts a module path to build the remedy.
@@ -166,7 +172,9 @@ class _StderrTee:
         read_fd, write_fd = os.pipe()
         self.sink = os.fdopen(write_fd, "wb", buffering=0)
         self._log, self._tail = log_fh, bytearray()
-        self._reader = threading.Thread(target=self._pump, args=(read_fd,), name="mcp-stderr", daemon=True)
+        self._records = StderrRecords()
+        self._reader = threading.Thread(target=contextvars.copy_context().run, args=(self._pump, read_fd),
+                                        name="mcp-stderr", daemon=True)
         self._reader.start()
 
     def _pump(self, read_fd: int) -> None:
@@ -178,14 +186,15 @@ class _StderrTee:
                 # Stamp whole lines only; a partial line waits for its newline (or EOF).
                 *lines, pending = (pending + decoder.decode(chunk)).split("\n")
                 self._write_lines(lines)
-        if rest := pending + decoder.decode(b"", final=True):
-            self._write_lines([rest])
+        rest = pending + decoder.decode(b"", final=True)
+        self._write_lines([rest] if rest else [], final=True)
 
-    def _write_lines(self, lines: list[str]) -> None:
-        if not lines:
+    def _write_lines(self, lines: list[str], final: bool = False) -> None:
+        records = self._records.feed(lines) + (self._records.flush() if final else [])
+        if not records:
             return
         try:
-            self._log.write("".join(stamp_line(line) for line in lines))
+            self._log.write("".join(stamp_line(line) for record in records for line in redact_record(record)))
             self._log.flush()
         except (OSError, ValueError):  # log closed at shutdown: keep draining the child
             pass

@@ -142,12 +142,21 @@ def _connect_inputs(server_name: str, config: dict) -> tuple[list, set]:
     ``[command, env, cwd]``; HTTP ``[url, headers]`` after the live endpoint and the identity
     header. The owner hashes this very list and an adopter recomputes it, so both digests are
     built from one code path. Also returns the configured header names (HTTP only), captured
-    before the identity header is merged in, for the strict-redirect boundary."""
+    before the identity header is merged in, for the strict-redirect boundary. The resolved
+    secret values (env, headers, URL query) are registered for exact-value redaction, so the
+    child's stderr and error text cannot echo them even after the config is edited."""
+    from agent.redact_known_values import mcp_server_secret_values, register_secret_value
+
     if "url" in config:
         url, headers = _http_endpoint(server_name, config)
         configured_header_names = {key.lower() for key in headers}
+        for value in mcp_server_secret_values(headers=headers, url=url):
+            register_secret_value(value)
         return [url, _apply_identity_header(server_name, config, headers)], configured_header_names
-    return list(_stdio_launch(config)), set()
+    inputs = list(_stdio_launch(config))
+    for value in mcp_server_secret_values(env=inputs[1]):
+        register_secret_value(value)
+    return inputs, set()
 
 
 class MCPServerTransportMixin:
