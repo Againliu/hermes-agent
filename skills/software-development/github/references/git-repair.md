@@ -19,8 +19,11 @@ for everyone who has it, not a local cleanup.
 
 - `git branch backup/<name>-<date> <branch>` before a rebase, reset, amend or filter, or note the
   reflog entry to return to: `git reflog show <branch> -n 5`.
-- Recovery is `git reset --hard backup/<name>-<date>` or `git reset --hard <branch>@{N}`, and it
-  comes before trying anything else when a rewrite goes wrong.
+- A backup branch or reflog entry holds commits only. Before any `git reset --hard`, check
+  `git status --porcelain`; save uncommitted edits (including conflict resolutions in progress)
+  with `git stash push --include-untracked -m <why>` or a WIP commit on the backup branch.
+- Recovery is `git reset --hard backup/<name>-<date>` or `git reset --hard <branch>@{N}` once the
+  tree is saved or clean, and it comes before trying anything else when a rewrite goes wrong.
 
 ## 3. Conflicts
 
