@@ -759,7 +759,7 @@ def _notification_poller_scoped_loop(stop_event: threading.Event, sid: str, sess
             last_quota_resume_poll = now
             try:
                 _maybe_fire_quota_resume(sid, session)
-            except Exception as quota_exc:
+            except Exception as quota_exc:  # health: allow BLE001 -- poller must survive; logged
                 _notif_log_failure("quota resume poll failed", quota_exc)
         if now - last_kanban_poll >= _KANBAN_POLL_SECONDS:
             last_kanban_poll = now

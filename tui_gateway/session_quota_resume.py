@@ -3,7 +3,7 @@
 A quota wall is the one failure that comes with a promise: the provider says when
 it lifts. Everywhere else the honest answer is "retry and see", but here the
 session can simply sleep until the window reopens and pick the work back up —
-which is what Claude Code's own "continue automatically at usage limit" does.
+the way a person would come back and press Retry once the plan window reopens.
 
 Scheduling lives in the backend, not the renderer, because the backend owns the
 session: it already arbitrates turn ownership across the Desktop app, the TUI and
@@ -23,6 +23,7 @@ so they reference server.py globals bare.
 from __future__ import annotations
 
 import contextlib
+from typing import Any
 
 from .method_ctx import bind_module
 
@@ -119,6 +120,19 @@ def _arm_quota_resume(sid: str, session: dict, plan: dict, prompt: str) -> bool:
     return True
 
 
+def _attach_quota_resume(payload: dict, plan: Any, sid: str, session: dict, prompt: str) -> None:
+    """Copy the plan onto message.complete and arm the backend resume when opted in; the
+    ``scheduled`` flag tells the client whether a resume is actually counting down."""
+    if not plan:
+        return
+    payload["quota_resume"] = dict(plan)
+    try:
+        payload["quota_resume"]["scheduled"] = _arm_quota_resume(sid, session, plan, prompt)
+    except Exception:  # health: allow BLE001 -- decorates an already-failed turn; logged with traceback
+        logger.debug("quota-resume arming failed", exc_info=True)
+        payload["quota_resume"]["scheduled"] = False
+
+
 def _quota_resume_status_text(resume_at: float, provider: str) -> str:
     """Human-readable 'waiting until…' line for the status stack."""
     delta = max(0, int(resume_at - time.time()))
@@ -167,7 +181,7 @@ def _maybe_fire_quota_resume(sid: str, session: dict) -> None:
         _run_prompt_submit(
             rid, sid, session, _quota_resume_note(prompt), display_kind="auto_continue"
         )
-    except Exception as exc:
+    except Exception as exc:  # health: allow BLE001 -- poller boundary; logged, turn released
         _notif_log_failure("quota-resume dispatch failed", exc)
         _notif_release_turn(session)
 

@@ -52,7 +52,7 @@ def _path() -> Path:
 
 def _load() -> dict[str, dict[str, Any]]:
     try:
-        data = json.loads(_path().read_text(encoding="utf-8"))
+        data = json.loads(_path().read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -123,6 +123,12 @@ def release_hold(provider: Any, base_url: Any = "") -> None:
         data.pop(key, None)
         atomic_json_write(_path(), data)
     logger.info("Usage limit on %s released after a successful run", key)
+
+
+def release_after_turn(agent: Any, *, completed: bool, failed: bool) -> None:
+    """The provider answered a whole turn: any usage-limit hold on it is over."""
+    if completed and not failed and getattr(agent, "_turn_received_provider_response", False):
+        release_hold(getattr(agent, "provider", ""), getattr(agent, "base_url", ""))
 
 
 def record_from_plan(plan: Any, *, provider: Any, base_url: Any = "", account: str = "") -> None:

@@ -874,10 +874,8 @@ def finalize_turn(
             platform=_platform,
         )
 
-    if completed and not failed and getattr(agent, "_turn_received_provider_response", False):
-        # The provider answered: any usage-limit hold on it is over (agent/usage_hold.py).
-        from agent.usage_hold import release_hold
-        release_hold(getattr(agent, "provider", ""), getattr(agent, "base_url", ""))
+    from agent.usage_hold import release_after_turn
+    release_after_turn(agent, completed=completed, failed=failed)
     agent._turn_preflight_display_snapshot = None
     agent._turn_received_provider_response = False
     return result

@@ -945,18 +945,7 @@ def _complete_turn_payload(session: dict, st: _TurnRun, status_note: str | None,
         payload["failure_reason"] = _failure_reason
     # Provider-reported quota reset ({eligible, resume_at, source, provider, reason}) so
     # the client can wait out the window instead of offering a blind Retry.
-    if _quota_resume := result.get("quota_resume"):
-        payload["quota_resume"] = dict(_quota_resume)
-        # Arm the backend-side resume so the turn finishes itself when the window
-        # reopens, and tell the client whether that actually happened — an armed
-        # resume is what the UI counts down against.
-        try:
-            payload["quota_resume"]["scheduled"] = _arm_quota_resume(
-                sid, session, _quota_resume, st.prompt_text
-            )
-        except Exception:
-            logger.debug("quota-resume arming failed", exc_info=True)
-            payload["quota_resume"]["scheduled"] = False
+    _attach_quota_resume(payload, result.get("quota_resume"), sid, session, st.prompt_text)
     if rendered := render_message(raw, cols):
         payload["rendered"] = rendered
     error_value = result.get("error")

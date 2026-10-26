@@ -2,7 +2,7 @@
 
 Exercises the real chain — classifier verdict -> turn result -> gateway payload ->
 armed session state -> poller dispatch — with the actual error payloads captured
-from Anthropic and the ChatGPT/Codex backend, not hand-written approximations.
+from Anthropic and the OpenAI Codex backend, not hand-written approximations.
 
 The gateway helpers are rebound onto ``tui_gateway.server``'s namespace at import
 (method_ctx.bind_module), so they are patched and called *there*.
@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 import pytest
 
-# Captured verbatim from a real ChatGPT/Codex 429 (request dump, account scrubbed).
+# Captured verbatim from a real OpenAI Codex 429 (request dump, account scrubbed).
 CODEX_QUOTA_BODY = {
     "type": "usage_limit_reached",
     "message": "The usage limit has been reached",
@@ -333,10 +333,7 @@ def test_quota_failure_survives_strict_wire_validation(server, monkeypatch, enab
         assert "_quota_resume_at" not in session
 
 
-def test_config_defaults_expose_a_settings_toggle():
-    """Desktop Settings renders booleans from DEFAULT_CONFIG; the toggle must exist."""
-    from hermes_cli.config_defaults import DEFAULT_CONFIG
-
-    cfg = DEFAULT_CONFIG["desktop"]["quota_resume"]
-    assert cfg["enabled"] is False  # opt-in: a rerun hours later is the user's choice
-    assert isinstance(cfg["max_attempts"], int)
+def test_resume_is_opt_in_when_config_is_silent(server, monkeypatch):
+    """No ``desktop.quota_resume`` in config.yaml: nothing reruns unattended (legacy default)."""
+    monkeypatch.setattr(server, "_load_cfg", dict)
+    assert server._quota_resume_config() == (False, 2)

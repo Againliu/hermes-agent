@@ -1,6 +1,6 @@
 """When a subscription quota wall can be waited out — and until exactly when.
 
-A subscription provider (Claude Pro/Max, ChatGPT Plus/Pro via Codex) answers an
+A subscription provider (Anthropic plans, OpenAI Codex plans) answers an
 exhausted window with a *deadline*, not a refusal: the quota reopens at a stated
 time. Today that deadline is parsed for the credential pool's cooldown and then
 dropped, so the turn dies with a Retry button the user has to babysit.
