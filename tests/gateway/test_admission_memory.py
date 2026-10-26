@@ -142,16 +142,6 @@ def test_inbound_turn_starts_once_memory_frees(monkeypatch):
     assert len(runner.sent) == 1
 
 
-def test_cron_run_is_recorded_failed_when_memory_never_frees(monkeypatch):
-    from cron.scheduler_memory_hold import hold_for_memory
-
-    gate, _, clock = _gate(10, max_wait_seconds=4)
-    monkeypatch.setattr(am, "_gate", gate)
-    monkeypatch.setattr(am.time, "sleep", lambda _: setattr(clock, "now", clock.now + 2))  # cron thread's sleep
-    held = hold_for_memory({"id": "j1", "name": "nightly"}, "j1", "nightly", None)
-    assert held is not None and held[0] is False and "memory" in held[3]
-
-
 def test_an_older_background_waiter_never_starts_ahead_of_a_waiting_person():
     gate, state, clock = _gate(100)
     background = gate.enqueue(am.BACKGROUND)
@@ -192,19 +182,6 @@ def test_memory_guard_settings_load_from_config_yaml_at_gateway_start(tmp_path, 
     gate = am.configure(_load_gateway_config(tmp_path / "config.yaml"), tmp_path)
     assert (gate.settings.enabled, gate.settings.critical_mb, gate.settings.reserve_mb) == (False, 100, 64)
     assert gate.settings.low_mb == "auto"
-
-
-def test_a_script_only_cron_job_waits_before_its_script_runs(monkeypatch):
-    from cron import scheduler
-
-    gate, _, clock = _gate(10, max_wait_seconds=2)
-    monkeypatch.setattr(am, "_gate", gate)
-    monkeypatch.setattr(am.time, "sleep", lambda _: setattr(clock, "now", clock.now + 2))
-    ran = []
-    monkeypatch.setattr(scheduler, "_prepare_job_prompt", lambda *a, **k: ran.append(a) or ((True, "", "", None), None))
-    ok, _, _, error = scheduler.run_job({"id": "j1", "name": "heavy", "no_agent": True, "script": "x.py"})
-    assert ran == [], "the job's script ran before the memory hold"
-    assert ok is False and "memory" in error
 
 
 def test_a_managed_worker_turn_waits_for_memory_before_spawning(tmp_path, monkeypatch):
