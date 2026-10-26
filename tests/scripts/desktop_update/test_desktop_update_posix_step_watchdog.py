@@ -80,6 +80,17 @@ def test_a_stuck_update_is_stopped_with_its_whole_tree_and_reported(tmp_path):
         assert not _process_alive(pid), f"{name} {pid} survived the stall"
 
 
+def test_a_descendant_that_ignores_term_is_killed_after_the_root_dies(tmp_path):
+    """TERM ends the update's root, but a child that ignores TERM is still stopped by the watchdog's KILL."""
+    body = '( trap "" TERM; exec sleep 1000 ) & echo "$!" > "$HERMES_TEST_DIR/stubborn.pid"; ' \
+           'echo "Fetching updates..."; wait'
+    result = _run_handoff(tmp_path, body)
+
+    assert result["exit_code"] == 124
+    pid = int((tmp_path / "stubborn.pid").read_text(encoding="utf-8-sig"))
+    assert not _process_alive(pid), f"TERM-ignoring child {pid} survived the stall"
+
+
 def test_a_slow_update_that_keeps_moving_is_never_stopped(tmp_path):
     """Three times the idle bound in total, but never idle for it: a slow link, not a stall."""
     body = 'for i in 1 2 3 4 5 6 7 8 9; do echo "receiving objects $i"; sleep 1; done; echo "✓ Update complete!"'

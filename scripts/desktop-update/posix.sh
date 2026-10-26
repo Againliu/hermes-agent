@@ -1246,9 +1246,12 @@ step_watchdog_start() { # pid flag -- stops the pid's tree and creates flag once
     done ) &
   STEP_WATCHDOG=$!
 }
-step_watchdog_stop() {
+step_watchdog_stop() { # [flag] -- a watchdog that flagged a stall finishes its escalation
   [ -n "$STEP_WATCHDOG" ] || return 0
-  kill -KILL "$STEP_WATCHDOG" 2>/dev/null; wait "$STEP_WATCHDOG" 2>/dev/null
+  # The root can die of the watchdog's TERM while a descendant ignores it; the
+  # watchdog alone holds that tree and its pending KILL (bounded: <=10 s).
+  [ -n "${1:-}" ] && [ -e "$1" ] || kill -KILL "$STEP_WATCHDOG" 2>/dev/null
+  wait "$STEP_WATCHDOG" 2>/dev/null
   STEP_WATCHDOG=""
 }
 # `hermes update` can COMPLETE (its output carries "Update complete!") and
@@ -1292,7 +1295,7 @@ run_update() { # streams straight into the log (a killed run keeps its output);
       [ "$CODE" -ne 127 ] || break          # not our child any more
       kill -0 "$pid" 2>/dev/null || break   # reaped: CODE is its exit status
     done
-    step_watchdog_stop
+    step_watchdog_stop "$go.stalled"
     STEP_STALLED=0
     if [ -e "$go.stalled" ]; then STEP_STALLED=1 CODE=124; fi
     rm -f "$go.stalled" 2>/dev/null
