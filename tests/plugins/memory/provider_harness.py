@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import functools
 import json
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -57,7 +58,7 @@ class ProviderHarness:
         self.init_kwargs: dict[str, Any] = {}
         self.history: list[dict[str, Any]] = []
         self.agent = None
-        self._patches: list[Any] = []
+        self._cleanup = ExitStack()
 
     # -- recording -------------------------------------------------------------------------
     def _record(self, hook: str, fn):
@@ -72,11 +73,21 @@ class ProviderHarness:
             return result
         return wrapper
 
-    def _install_recorders(self) -> None:
+    def _install_recorders(self, stack: ExitStack) -> None:
+        # Unwrap on exit, so a reused provider never records into a finished harness.
+        missing = object()
         for hook in HOOKS:
             fn = getattr(self.provider, hook, None)
             if callable(fn):
+                own = vars(self.provider).get(hook, missing)
                 setattr(self.provider, hook, self._record(hook, fn))
+                stack.callback(self._restore_hook, hook, own, missing)
+
+    def _restore_hook(self, hook: str, own: Any, missing: Any) -> None:
+        if own is missing:
+            delattr(self.provider, hook)
+        else:
+            setattr(self.provider, hook, own)
 
     def _fake_client(self):
         harness = self
@@ -100,24 +111,25 @@ class ProviderHarness:
         # JSON is valid YAML; the suite's isolated home is the harness's own.
         (home / "config.yaml").write_text(json.dumps({"memory": {"provider": self.provider.name}}), encoding="utf-8")
 
-        self._install_recorders()
-        client = self._fake_client()
-        self._patches = [
-            patch("agent.agent_init.resolve_memory_provider", lambda *_a, **_k: self.provider),
-            patch("agent.process_bootstrap.OpenAI", lambda **_kw: client),
-            patch("model_tools.get_tool_definitions", lambda *a, **k: []),
-        ]
-        for p in self._patches:
-            p.start()
-        from run_agent import AIAgent
+        # Each step registers its undo as it lands: a failed setup (``__exit__`` never runs) unwinds
+        # whatever already started instead of leaking global patches into later tests.
+        with ExitStack() as stack:
+            self._install_recorders(stack)
+            client = self._fake_client()
+            stack.enter_context(patch("agent.agent_init.resolve_memory_provider", lambda *_a, **_k: self.provider))
+            stack.enter_context(patch("agent.process_bootstrap.OpenAI", lambda **_kw: client))
+            stack.enter_context(patch("model_tools.get_tool_definitions", lambda *a, **k: []))
+            from run_agent import AIAgent
 
-        self.agent = AIAgent(
-            model="harness-model", api_key="harness-key", base_url="http://127.0.0.1:9/v1",
-            platform=self.platform, session_id=self.session_id, quiet_mode=True,
-            skip_context_files=True, skip_memory=False, max_iterations=2,
-            **self.agent_kwargs,
-        )
-        self.agent._disable_streaming = True
+            self.agent = AIAgent(
+                model="harness-model", api_key="harness-key", base_url="http://127.0.0.1:9/v1",
+                platform=self.platform, session_id=self.session_id, quiet_mode=True,
+                skip_context_files=True, skip_memory=False, max_iterations=2,
+                **self.agent_kwargs,
+            )
+            stack.callback(self.agent.close)
+            self.agent._disable_streaming = True
+            self._cleanup = stack.pop_all()
         return self
 
     def turn(self, user_message: str) -> str:
@@ -137,12 +149,7 @@ class ProviderHarness:
             manager.flush_pending(timeout=10)
 
     def __exit__(self, *exc) -> None:
-        try:
-            if self.agent is not None:
-                self.agent.close()
-        finally:
-            for p in reversed(self._patches):
-                p.stop()
+        self._cleanup.close()  # agent.close (shutdown still recorded), then the patches, then the hooks
 
     # -- reading ---------------------------------------------------------------------------
     @property

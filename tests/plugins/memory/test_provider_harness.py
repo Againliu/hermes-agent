@@ -71,3 +71,24 @@ def test_harness_catches_a_provider_that_blanks_between_turn_start_and_prefetch(
 
     assert h.prefetched[-1] == ""
     assert "Miso" not in h.requests[-1].split("what is my cat called?")[-1]
+
+
+def test_harness_unwinds_a_failed_setup_and_unwraps_the_provider_on_exit():
+    import agent.agent_init
+    import model_tools
+
+    originals = (agent.agent_init.resolve_memory_provider, model_tools.get_tool_definitions)
+    provider = _NotesProvider()
+    try:
+        with ProviderHarness(provider, not_an_agent_kwarg=True):
+            pass
+    except TypeError:
+        pass
+    assert (agent.agent_init.resolve_memory_provider, model_tools.get_tool_definitions) == originals
+    assert "prefetch" not in vars(provider)
+
+    with ProviderHarness(provider) as h:
+        h.turn("hello")
+    recorded = len(h.events)
+    provider.prefetch("again")  # a reused provider no longer records into the finished harness
+    assert "prefetch" not in vars(provider) and len(h.events) == recorded
