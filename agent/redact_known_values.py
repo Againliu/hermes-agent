@@ -25,6 +25,7 @@ short common string would shred unrelated text.
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -119,6 +120,17 @@ def _env_file_values(home: Path) -> list:
     return [v for k, v in load_env_file(home / ".env").items() if _ENV_SECRET_NAME_RE.search(k)]
 
 
+def _worker_env_values(home: Path) -> list:
+    """A managed worker's credentials: its owner hands the profile's secrets over in this process's
+    environment (``gateway.session_managed_worker._worker_env``) instead of letting it open .env.
+    The worker runs for one profile, so only that home's lookups take them."""
+    from hermes_constants import get_process_hermes_home, hermes_home_key
+
+    if hermes_home_key(home) != hermes_home_key(get_process_hermes_home()):
+        return []
+    return [v for k, v in os.environ.items() if _ENV_SECRET_NAME_RE.search(k)]
+
+
 def _config_values(home: Path, snapshot) -> list:
     if snapshot is not None:
         cfg = snapshot
@@ -144,9 +156,11 @@ def _file_values(home: Path) -> list:
     from agent.safe_worker_policy import worker_config_snapshot
 
     # A managed worker runs on its owner's frozen config and never opens the profile's .env or
-    # config.yaml (safe mode / --ignore-user-config promise exactly that): mask the snapshot's values.
+    # config.yaml (safe mode / --ignore-user-config promise exactly that): mask the snapshot's values
+    # and the credentials its owner passed in the environment.
     snapshot = worker_config_snapshot()
-    values = (_env_file_values(home) if snapshot is None else []) + _config_values(home, snapshot)
+    env_values = _env_file_values(home) if snapshot is None else _worker_env_values(home)
+    values = env_values + _config_values(home, snapshot)
     for doc in [_read_json(home / "auth.json"), *(_read_json(p) for p in _token_files(home))]:
         _walk_fields(doc, values)
     return values
