@@ -206,16 +206,15 @@ def _probe_service(service: str):
     # request, and passing scopes makes google-auth validate them on refresh.
     creds = Credentials.from_authorized_user_file(str(TOKEN_PATH))
 
-    if service == "gmail":
-        build("gmail", "v1", credentials=creds).users().getProfile(userId="me").execute()
-    elif service == "calendar":
-        build("calendar", "v3", credentials=creds).calendarList().list(maxResults=1).execute()
-    elif service == "drive":
-        build("drive", "v3", credentials=creds).files().list(pageSize=1, fields="files(id)").execute()
-    elif service == "contacts":
-        build("people", "v1", credentials=creds).people().connections().list(
+    probes = {
+        "gmail": lambda: build("gmail", "v1", credentials=creds).users().getProfile(userId="me"),
+        "calendar": lambda: build("calendar", "v3", credentials=creds).calendarList().list(maxResults=1),
+        "drive": lambda: build("drive", "v3", credentials=creds).files().list(pageSize=1, fields="files(id)"),
+        "contacts": lambda: build("people", "v1", credentials=creds).people().connections().list(
             pageSize=1, personFields="names"
-        ).execute()
+        ),
+    }
+    probes[service]().execute()
 
 
 def check_auth_live():
