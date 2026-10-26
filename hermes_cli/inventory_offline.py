@@ -75,51 +75,45 @@ def _canonical_rows(ctx: ConfigContext, current: str, include_unconfigured: bool
     return rows
 
 
-def _named_provider_rows(ctx: ConfigContext, current: str, seen: set[str]) -> list[dict]:
-    """``providers:`` entries outside the canonical registry: declared models only, never probed."""
-    rows = []
-    for slug, value in ctx.user_providers.items():
-        normalized = str(slug).strip().lower()
-        if not isinstance(value, dict) or not normalized or normalized in seen:
-            continue
-        models = _config_model_ids(value.get("default_model"), value.get("model"), value.get("models"))
-        rows.append(_row(str(slug), str(value.get("name") or slug), models, is_current=normalized == current,
-                         user_defined=True, source="user-config", key_env=str(value.get("key_env") or "")))
-        seen.add(normalized)
-    return rows
+def _norm_url(value: object) -> str:
+    return str(value or "").strip().rstrip("/").lower()
 
 
-def _endpoint_identity(entry: dict) -> tuple:
-    """Endpoint + credential + protocol + headers. URL alone would merge distinct tenants or API modes
-    that happen to share a gateway."""
-    from hermes_cli.config import normalize_extra_headers
+def _endpoint_rows(ctx: ConfigContext, current: str, seen: set[str]) -> list[dict]:
+    """Configured endpoints, declared models only, never probed.
 
-    url = str(entry.get("base_url") or entry.get("api") or entry.get("url") or "").strip().rstrip("/")
-    inline_key = str(entry.get("api_key") or "").strip()
-    key_env = str(entry.get("key_env") or entry.get("api_key_env") or "").strip()
-    credential = inline_key or (f"env:{key_env}" if key_env else "")
-    api_mode = str(entry.get("api_mode") or entry.get("transport") or "").strip().lower()
-    return url, credential, api_mode, tuple(sorted(normalize_extra_headers(entry.get("extra_headers")).items()))
+    Reads ``ctx.custom_providers``: the normalized, enabled, deduplicated view
+    (:func:`hermes_cli.config.get_compatible_custom_providers`) of both ``providers:`` and legacy
+    ``custom_providers:``, so camelCase keys, ``api_key_env`` and API-mode aliases are interpreted
+    once, by the runtime's own normalizer. A keyed entry keeps its config key as the slug (as the live
+    picker does); a legacy entry gets :func:`hermes_cli.providers.custom_provider_slug`. Entries that
+    share a slug (one legacy entry per model) merge into one row.
+    """
+    from hermes_cli.providers import custom_provider_slug
 
-
-def _legacy_custom_rows(ctx: ConfigContext, current: str, seen: set[str]) -> list[dict]:
-    """The legacy ``custom_providers`` list, minus entries identical to a keyed ``providers:`` entry."""
-    known = {_endpoint_identity(value) for value in ctx.user_providers.values() if isinstance(value, dict)}
-    current_url = str(ctx.current_base_url or "").strip().rstrip("/").lower()
-    rows = []
+    current_url = _norm_url(ctx.current_base_url)
+    rows: dict[str, dict] = {}
     for entry in ctx.custom_providers:
         if not isinstance(entry, dict) or not str(entry.get("name") or "").strip():
             continue
-        name = str(entry["name"]).strip()
-        url = _endpoint_identity(entry)[0]
-        slug = "custom:" + name.lower().replace(" ", "-")
-        if (url and _endpoint_identity(entry) in known) or slug in seen:
-            continue
-        is_current = slug == current or (current == "custom" and bool(current_url) and url.lower() == current_url)
-        rows.append(_row(slug, name, _config_model_ids(entry.get("model"), entry.get("models")), is_current=is_current,
-                         user_defined=True, source="user-config", key_env=str(entry.get("key_env") or "")))
-        seen.add(slug)
-    return rows
+        name, key = str(entry["name"]).strip(), str(entry.get("provider_key") or "").strip()
+        slug = key or custom_provider_slug(name)
+        row = rows.get(slug.lower())
+        if row is None:
+            if slug.lower() in seen:  # a canonical row already represents this provider
+                continue
+            row = rows[slug.lower()] = _row(slug, name, [], is_current=False, user_defined=True,
+                                            source="user-config", key_env=str(entry.get("key_env") or ""))
+        url = _norm_url(entry.get("base_url"))
+        row["is_current"] = row["is_current"] or slug.lower() == current or (
+            current == "custom" and bool(current_url) and url == current_url)
+        row["models"] = list(dict.fromkeys([*row["models"], *_config_model_ids(entry.get("model"), entry.get("models"))]))
+    for row in rows.values():
+        if row["is_current"] and ctx.current_model and ctx.current_model not in row["models"]:
+            row["models"].insert(0, ctx.current_model)
+        row["total_models"] = len(row["models"])
+    seen.update(rows)
+    return list(rows.values())
 
 
 def build_offline_models_payload(ctx: ConfigContext, *, include_unconfigured: bool = False) -> dict:
@@ -127,8 +121,7 @@ def build_offline_models_payload(ctx: ConfigContext, *, include_unconfigured: bo
     current = str(ctx.current_provider or "").strip().lower()
     rows = _canonical_rows(ctx, current, include_unconfigured)
     seen = {row["slug"].lower() for row in rows}
-    rows += _named_provider_rows(ctx, current, seen)
-    rows += _legacy_custom_rows(ctx, current, seen)
+    rows += _endpoint_rows(ctx, current, seen)
     if current and current not in seen:
         models = [ctx.current_model] if ctx.current_model else []
         rows.append(_row(ctx.current_provider, ctx.current_provider, models, is_current=True, user_defined=True,

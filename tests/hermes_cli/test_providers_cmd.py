@@ -25,6 +25,14 @@ def _ctx(**overrides) -> ConfigContext:
     return ConfigContext(**base)
 
 
+def _config_ctx(monkeypatch, config: dict) -> ConfigContext:
+    """The context ``hermes providers list`` really reads: config.yaml through ``load_picker_context``."""
+    from hermes_cli.inventory import load_picker_context
+
+    monkeypatch.setattr("hermes_cli.config.load_config", lambda: config)
+    return load_picker_context()
+
+
 def test_parser_accepts_scriptable_offline_flags():
     args = _parser().parse_args(["providers", "ls", "--all", "--no-live", "--json", "--provider", "openrouter"])
     assert (args.providers_action, args.offline, args.all, args.json, args.provider) == (
@@ -42,13 +50,14 @@ def test_offline_inventory_never_opens_a_socket(monkeypatch):
     assert any(row["slug"] == "anthropic" for row in payload["providers"])
 
 
-def test_offline_inventory_uses_config_and_bundled_catalogs():
-    ctx = _ctx(
-        current_provider="openrouter", current_model="example/current-model",
-        user_providers={"local": {"name": "Local gateway", "models": {"qwen-local": {}}}},
-        custom_providers=[{"name": "Legacy endpoint", "base_url": "http://localhost:8000/v1",
-                           "models": ["legacy-model"]}],
-    )
+def test_offline_inventory_uses_config_and_bundled_catalogs(monkeypatch):
+    ctx = _config_ctx(monkeypatch, {
+        "model": {"provider": "openrouter", "default": "example/current-model"},
+        "providers": {"local": {"name": "Local gateway", "base_url": "http://localhost:9000/v1",
+                                "models": {"qwen-local": {}}}},
+        "custom_providers": [{"name": "Legacy endpoint", "base_url": "http://localhost:8000/v1",
+                              "model": "legacy-model"}],
+    })
     by_id = {row["slug"]: row for row in build_offline_models_payload(ctx)["providers"]}
     assert {"openrouter", "local", "custom:legacy-endpoint"} <= set(by_id)
     assert by_id["openrouter"]["is_current"] is True
@@ -60,21 +69,33 @@ def test_offline_inventory_uses_config_and_bundled_catalogs():
 @pytest.mark.parametrize("legacy_override", [
     {"key_env": "LEGACY_API_KEY"}, {"api_mode": "responses"}, {"extra_headers": {"X-Tenant": "legacy"}},
 ], ids=["credential", "api-mode", "headers"])
-def test_offline_inventory_keeps_legacy_entries_with_distinct_endpoint_identity(legacy_override):
+def test_offline_inventory_keeps_legacy_entries_with_distinct_endpoint_identity(monkeypatch, legacy_override):
     shared = {"base_url": "https://gateway.example.test/v1", "key_env": "KEYED_API_KEY",
               "api_mode": "chat_completions", "extra_headers": {"X-Tenant": "keyed"}}
-    legacy = {**shared, "name": "Legacy endpoint", "models": ["legacy-model"], **legacy_override}
-    ctx = _ctx(user_providers={"configured": {**shared, "name": "Configured", "models": ["configured-model"]}},
-               custom_providers=[legacy])
+    legacy = {**shared, "name": "Legacy endpoint", "model": "legacy-model", **legacy_override}
+    ctx = _config_ctx(monkeypatch, {
+        "providers": {"configured": {**shared, "name": "Configured", "models": ["configured-model"]}},
+        "custom_providers": [legacy]})
     by_id = {row["slug"]: row for row in build_offline_models_payload(ctx)["providers"]}
     assert by_id["configured"]["models"] == ["configured-model"]
     assert by_id["custom:legacy-endpoint"]["models"] == ["legacy-model"]
 
 
+def test_offline_inventory_lists_a_keyed_provider_once_with_its_normalized_fields(monkeypatch):
+    """camelCase keys and API-mode aliases are read by the runtime normalizer, once: one row, full fields."""
+    ctx = _config_ctx(monkeypatch, {"providers": {"gateway": {
+        "name": "Gateway", "baseUrl": "https://gw.example.test/v1", "keyEnv": "GW_API_KEY",
+        "defaultModel": "gw-default", "api_mode": "openai", "models": ["gw-other"]}}})
+    rows = [row for row in build_offline_models_payload(ctx)["providers"] if row["is_user_defined"]]
+    assert [(row["slug"], row["key_env"]) for row in rows] == [("gateway", "GW_API_KEY")]
+    assert set(rows[0]["models"]) == {"gw-default", "gw-other"}
+
+
 def _run(monkeypatch, capsys, argv):
-    monkeypatch.setattr("hermes_cli.inventory.load_picker_context", lambda: _ctx(
-        current_provider="local", current_model="m1",
-        user_providers={"local": {"name": "Local", "models": ["m1", "m2"], "key_env": "LOCAL_KEY"}}))
+    monkeypatch.setattr("hermes_cli.config.load_config", lambda: {
+        "model": {"provider": "local", "default": "m1"},
+        "providers": {"local": {"name": "Local", "base_url": "http://localhost:9000/v1",
+                                "models": ["m1", "m2"], "key_env": "LOCAL_KEY"}}})
     args = _parser().parse_args(argv)
     code = args.func(args)
     out = capsys.readouterr()
