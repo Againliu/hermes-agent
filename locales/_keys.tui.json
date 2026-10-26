@@ -623,6 +623,8 @@
   "libText.text.pasteLinesChip",
   "libText.text.resultLabel",
   "libText.text.showingLiveTail",
+  "notify.complete",
+  "notify.prompt",
   "pickers.common.error",
   "pickers.common.filter",
   "pickers.common.invalidResponse",

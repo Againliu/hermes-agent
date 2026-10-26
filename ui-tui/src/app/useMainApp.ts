@@ -34,7 +34,7 @@ import type {
 } from '../gatewayTypes.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { pruneVirtualHeightCache, useVirtualHistory } from '../hooks/useVirtualHistory.js'
-import { t } from '../i18n/runtime.js'
+import { messages, t } from '../i18n/runtime.js'
 import { useT } from '../i18n/useT.js'
 import { composerPromptWidth } from '../lib/inputMetrics.js'
 import { appendTranscriptMessage, capTranscriptHistory } from '../lib/messages.js'
@@ -57,7 +57,7 @@ import { getInputSelection } from './inputSelectionStore.js'
 import { type GatewayRpc, type SlashHandler, type StateSetter, type TranscriptRow, type UiState } from './interfaces.js'
 import { requestLiveSessions } from './liveSessions.js'
 import { applyControlSnapshot } from './loopStatus.js'
-import { notificationTerminalForEnv } from './notificationTerminal.js'
+import { type AttentionKind, notificationTerminalForEnv, warpAgentPayload } from './notificationTerminal.js'
 import { $overlayState, capturePromptResponseGuard, hasSensitivePrompt, patchOverlayState } from './overlayStore.js'
 import { $goodVibesTick } from './petFlashStore.js'
 import { applyProcessSnapshot, type ProcessEntry } from './processRoster.js'
@@ -324,19 +324,34 @@ export function useMainApp(gw: GatewayClient) {
   const [bellOnPrompt, setBellOnPrompt] = useState(false)
   const { notifyBell, notifyGhostty, notifyITerm2, notifyKitty } = useTerminalNotification()
 
-  const notifyOnComplete = useCallback(() => {
-    const terminal = notificationTerminalForEnv(process.env)
+  // display.bell_on_complete / bell_on_prompt: BEL always (tmux bell-action, SSH), plus the
+  // detected terminal's desktop notification (OSC 9 / 99 / 777, Warp's OSC 777 agent event).
+  const notifyAttention = useCallback(
+    (kind: AttentionKind) => {
+      const terminal = notificationTerminalForEnv(process.env)
+      const message = messages().notify[kind]
 
-    notifyBell()
+      notifyBell()
 
-    if (terminal === 'ghostty') {
-      notifyGhostty({ message: 'Response complete', title: 'Hermes' })
-    } else if (terminal === 'kitty') {
-      notifyKitty({ id: 1, message: 'Response complete', title: 'Hermes' })
-    } else if (terminal === 'iterm2') {
-      notifyITerm2({ message: 'Response complete', title: 'Hermes' })
-    }
-  }, [notifyBell, notifyGhostty, notifyITerm2, notifyKitty])
+      if (terminal === 'warp') {
+        notifyGhostty({
+          message: warpAgentPayload(kind, message, {
+            cwd: process.cwd(),
+            protocolVersion: process.env.WARP_CLI_AGENT_PROTOCOL_VERSION,
+            sessionId: $uiState.get().sid ?? ''
+          }),
+          title: 'warp://cli-agent'
+        })
+      } else if (terminal === 'ghostty') {
+        notifyGhostty({ message, title: 'Hermes' })
+      } else if (terminal === 'kitty') {
+        notifyKitty({ id: 1, message, title: 'Hermes' })
+      } else if (terminal === 'iterm2') {
+        notifyITerm2({ message, title: 'Hermes' })
+      }
+    },
+    [notifyBell, notifyGhostty, notifyITerm2, notifyKitty]
+  )
 
   const ui = useStore($uiState)
   const overlay = useStore($overlayState)
@@ -1052,7 +1067,7 @@ export function useMainApp(gw: GatewayClient) {
           setCatalog: setSlashCatalog
         },
         submission: { submitLiteralRef, submitRef },
-        system: { bellOnComplete, bellOnPrompt, notifyOnComplete, stdout, sys },
+        system: { bellOnComplete, bellOnPrompt, notifyAttention, stdout, sys },
         transcript: { appendMessage, panel, setHistoryItems },
         voice: {
           setProcessing: setVoiceProcessing,
@@ -1066,7 +1081,7 @@ export function useMainApp(gw: GatewayClient) {
       bellOnComplete,
       bellOnPrompt,
       composerActions.enqueue,
-      notifyOnComplete,
+      notifyAttention,
       composerActions.setInput,
       gateway,
       panel,

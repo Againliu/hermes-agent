@@ -185,16 +185,36 @@ describe('createGatewayEventHandler', () => {
 
   it('sends a desktop notification with the completion bell', () => {
     const ctx = buildCtx([])
-    const notifyOnComplete = vi.fn()
+    const notifyAttention = vi.fn()
 
     ctx.system.bellOnComplete = true
-    ctx.system.notifyOnComplete = notifyOnComplete
+    ctx.system.notifyAttention = notifyAttention
     ctx.system.stdout = { isTTY: true, write: vi.fn() }
 
     const onEvent = createGatewayEventHandler(ctx)
     onEvent({ payload: { text: 'Finished the task.' }, type: 'message.complete' } as any)
 
-    expect(notifyOnComplete).toHaveBeenCalledOnce()
+    expect(notifyAttention).toHaveBeenCalledExactlyOnceWith('complete')
+  })
+
+  it('sends a desktop notification with the prompt bell when an approval opens', () => {
+    const ctx = buildCtx([])
+    const notifyAttention = vi.fn()
+
+    ctx.system.bellOnPrompt = true
+    ctx.system.notifyAttention = notifyAttention
+    ctx.system.stdout = { isTTY: true, write: vi.fn() }
+
+    const onEvent = createGatewayEventHandler(ctx)
+    patchUiState({ sid: 'sess-1' })
+    onEvent({
+      type: 'approval.request',
+      session_id: 'sess-1',
+      payload: { prompt_id: 'p-1', command: 'rm -rf build', execution_generation: 1 }
+    } as any)
+
+    expect(notifyAttention).toHaveBeenCalledExactlyOnceWith('prompt')
+    expect(ctx.system.stdout!.write).not.toHaveBeenCalled()
   })
 
   it('heals missed completion and blocking prompts only from the focused authoritative idle snapshot', () => {

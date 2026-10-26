@@ -522,7 +522,8 @@ export interface GatewayEventHandlerContext {
   system: {
     bellOnComplete: boolean
     bellOnPrompt?: boolean
-    notifyOnComplete?: () => void
+    /** Desktop notification + BEL for a finished turn or a waiting prompt (display.bell_on_*). */
+    notifyAttention?: (kind: 'complete' | 'prompt') => void
     stdout?: NodeJS.WriteStream
     sys: (text: string) => void
   }
