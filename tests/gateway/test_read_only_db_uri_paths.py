@@ -35,8 +35,10 @@ def _sqlite(path, *statements):
 def home(request, tmp_path):
     home = tmp_path / request.param
     home.mkdir()
+    # Snapshot, not ``== [home]``: the suite's autouse isolation keeps its own HERMES_HOME here too.
+    before = set(tmp_path.iterdir())
     yield home
-    assert list(tmp_path.iterdir()) == [home], "a read-only open created a file at a truncated path"
+    assert set(tmp_path.iterdir()) == before, "a read-only open created a file at a truncated path"
 
 
 def test_readiness_probe_reads_the_state_db(home):
