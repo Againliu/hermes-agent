@@ -147,6 +147,28 @@ function restModelOptions(
   return profileKey ? getGlobalModelOptions(opts, profileKey) : getGlobalModelOptions(opts)
 }
 
+type ModelOptionsDispatch = NonNullable<ModelOptionsRequest['request']>
+
+/** A backend older than the local-server scan rejects the unknown `detect_local`
+ *  flag. Desktop and its runtime update separately, so the picker retries
+ *  through the same dispatcher without it and shows the catalog it always had. */
+async function dispatchModelOptions(
+  dispatch: ModelOptionsDispatch,
+  params: Record<string, unknown>
+): Promise<ModelOptionsResult> {
+  try {
+    return await dispatch<ModelOptionsResult>('model.options', params)
+  } catch (error) {
+    if (!params.detect_local || !/invalid.?params/i.test(String(error))) {
+      throw error
+    }
+
+    const { detect_local: _scan, ...older } = params
+
+    return dispatch<ModelOptionsResult>('model.options', older)
+  }
+}
+
 /** `{name: true}` for each set flag; unset flags are omitted from the RPC params. */
 function onFlags(flags: Record<string, boolean>): Record<string, unknown> {
   return Object.fromEntries(
@@ -188,7 +210,7 @@ export async function requestModelOptions({
     let gatewayOptions: ModelOptionsResult | undefined
 
     try {
-      gatewayOptions = await dispatch<ModelOptionsResult>('model.options', params)
+      gatewayOptions = await dispatchModelOptions(dispatch, params)
     } catch (error) {
       gatewayError = error
     }
