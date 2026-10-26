@@ -42,3 +42,9 @@ def _group(user_id, **extra):
 
 def test_owner_is_authorized_by_the_receiving_bot_not_the_runtime_profile():
     assert channel_memory_binding(_Runner(), _group("owner"), {}).owner_writes is True
+
+
+def test_group_role_grant_does_not_count_as_dm_access():
+    # A member admitted to the guild channel only by DISCORD_ALLOWED_ROLES cannot DM the bot by
+    # default, so it must not write the owner's files either.
+    assert channel_memory_binding(_Runner(), _group("member", role_authorized=True), {}).owner_writes is False

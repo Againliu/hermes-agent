@@ -37,11 +37,12 @@ def _scope_key(source: Any, mode: str) -> Optional[str]:
 def _sender_can_dm(runner: Any, source: Any) -> bool:
     """Would the gateway admit this sender in a DM? Asked of the bot that received the group
     message (a shared bot may route the group into a profile with no allowlist of its own).
+    A group-only role grant is dropped: a real DM refuses role-only access by default.
     Fails closed: an authorization error must not reopen the owner's files to a group member."""
     if not source.user_id:
         return False
     dm_source = replace_source(source, chat_type="dm", chat_id=str(source.user_id), thread_id=None,
-                               parent_chat_id=None, chat_name=None)
+                               parent_chat_id=None, chat_name=None, role_authorized=False)
     try:
         return bool(runner._under_authorization_profile(
             dm_source, lambda: runner._principal_authorized(dm_source, allow_adapter_delegation=True)))
