@@ -10,7 +10,7 @@ import time
 import pytest
 
 from tools import async_delegation
-from tools.delegate_tool_dispatch import _Batch, _dispatch_background
+from tools.delegate_tool_dispatch import _Batch, _dispatch_background, _run_batch
 from tools.process_registry import process_registry
 
 
@@ -136,6 +136,20 @@ def test_at_capacity_reject_settles_the_manifest_in_the_pinned_home(full_pool, t
 
     manifest = json.loads((live_transcript_root(pinned) / batch.live_deleg_id / "manifest.json").read_text(encoding="utf-8"))
     assert [(t["status"], t.get("exit_reason")) for t in manifest["tasks"]] == [("rejected", "at_capacity")]
+
+
+def test_at_capacity_reject_closes_the_delegation_run(full_pool, monkeypatch):
+    """A rejected call still emits its one delegation-run row instead of leaving the run open."""
+    from hermes_cli.observability import shared_metrics_loop
+    rows = []
+    monkeypatch.setattr(shared_metrics_loop, "_emit", lambda name, fields, hermes_home=None, **kw: rows.append((name, fields(**kw))))
+    full_pool("reject")
+
+    _run_batch(_batch(_Parent(), _Child()), background=True)
+
+    assert rows == [("DELEGATION_RUN_MARK", {
+        "depth": "1", "mode": "background", "outcome": "failed", "subagent_count_bucket": "1",
+    })]
 
 
 def test_at_capacity_unknown_policy_falls_back_to_sync(full_pool):

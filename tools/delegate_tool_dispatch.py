@@ -260,8 +260,9 @@ def _reject_at_capacity(batch: _Batch, max_async_children: int) -> str:
         if i < len(batch.live_writers) and batch.live_writers[i] is not None:
             with _quiet("Live transcript finalize failed", exc_info=True):
                 batch.live_writers[i].finalize(rejected)
-    update_manifest_statuses(batch.live_deleg_id, [{"task_index": i, **rejected} for i, _, _ in batch.children],
-                             home=batch.live_home)
+    rejected_results = [{"task_index": i, **rejected} for i, _, _ in batch.children]
+    update_manifest_statuses(batch.live_deleg_id, rejected_results, home=batch.live_home)
+    finish_delegation_unit(batch.task_list, rejected_results, background=True)
     return json.dumps({
         "status": "rejected", "mode": "background",
         "error": (
