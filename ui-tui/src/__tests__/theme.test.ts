@@ -612,6 +612,21 @@ describe('background-aware adaptation (OSC-11 light terminals)', () => {
     expect(DARK_THEME.color.diffAddedWord).toBe(DARK_THEME.color.diffRemovedWord)
   })
 
+  it('falls a wrong-polarity skin diff band back to the base band as a pair (#38359)', async () => {
+    const { DARK_THEME, fromSkin } = await importThemeWithCleanEnv()
+
+    // A light-terminal diff palette (pastel band, dark text) on the default dark terminal.
+    const { color } = fromSkin(
+      { diff_added: '#dcffdc', diff_removed: '#ffdcdc', diff_added_word: '#1b5e20', diff_removed_word: '#b71c1c' },
+      {}
+    )
+
+    expect(color.diffAdded).toBe(DARK_THEME.color.diffAdded)
+    expect(color.diffAddedWord).toBe(DARK_THEME.color.diffAddedWord)
+    expect(color.diffRemoved).toBe(DARK_THEME.color.diffRemoved)
+    expect(color.diffRemovedWord).toBe(DARK_THEME.color.diffRemovedWord)
+  })
+
   it('maps the status bar from skin status_bar_* keys', async () => {
     const { fromSkin } = await importThemeWithCleanEnv()
 
