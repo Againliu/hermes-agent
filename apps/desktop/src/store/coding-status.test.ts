@@ -13,7 +13,8 @@ import {
   repoChangeKindForPath,
   repoStatusForCwd
 } from './coding-status'
-import { $currentCwd, $selectedStoredSessionId } from './session'
+import { $busy, $currentCwd, $selectedStoredSessionId } from './session'
+import { $workspaceChangeTick } from './workspace-events'
 
 const sampleStatus: HermesRepoStatus = {
   branch: 'feature/login',
@@ -254,6 +255,52 @@ describe('refreshRepoStatus', () => {
     expect(repoStatusForCwd('/main').get()).toEqual(sampleStatus)
 
     release?.()
+  })
+})
+
+describe('tool-driven repo status probes', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    _resetCodingStatusForTests()
+    $busy.set(false)
+    $currentCwd.set('')
+    $selectedStoredSessionId.set(null)
+    vi.advanceTimersByTime(5_000)
+    _resetCodingStatusForTests()
+  })
+
+  afterEach(() => {
+    _resetCodingStatusForTests()
+    $busy.set(false)
+    vi.clearAllTimers()
+    vi.useRealTimers()
+    delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
+  })
+
+  // Every probe is a git child spawned synchronously on the Electron main
+  // thread; a tool-heavy turn must not turn each tool completion into one.
+  it('a burst of tool completions spawns a bounded number of probes, and the last change still lands', async () => {
+    const probe = vi.fn(async () => sampleStatus)
+    stubProbe(probe)
+    $currentCwd.set('/repo')
+    vi.advanceTimersByTime(200)
+    await vi.runAllTicks()
+    probe.mockClear()
+
+    // 20 tool completions, one every 500 ms (the workspace tick's own throttle).
+    for (let i = 0; i < 20; i++) {
+      $workspaceChangeTick.set($workspaceChangeTick.get() + 1)
+      vi.advanceTimersByTime(500)
+      await vi.runAllTicks()
+    }
+
+    expect(probe.mock.calls.length).toBeLessThanOrEqual(5)
+
+    // The trailing probe after the burst still runs: nothing is dropped.
+    probe.mockClear()
+    vi.advanceTimersByTime(5_000)
+    await vi.runAllTicks()
+    expect(probe).toHaveBeenCalledWith('/repo')
   })
 })
 

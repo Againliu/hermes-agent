@@ -27,6 +27,16 @@ import { $workspaceChangeTick } from './workspace-events'
 
 const REPO_STATUS_REFRESH_DEBOUNCE_MS = 100
 
+// Floor between probes driven by tool completions. Each probe is a `git status`
+// child spawned from the Electron MAIN process, and the spawn itself is
+// synchronous there (fork/CreateProcess of a large process: 10-120 ms measured
+// on Linux, more on Windows under AV). A tool-heavy turn completes a tool every
+// few hundred ms, so the 500 ms workspace-tick throttle alone still spawned
+// ~30 probes per turn per on-screen worktree (#138086). Structural edges (cwd /
+// session switch, worktree mutation, focus) and the turn-settle backstop keep
+// the short debounce, so the rail is exact the moment the agent goes idle.
+const REPO_STATUS_TOOL_REFRESH_FLOOR_MS = 3_000
+
 const normalizeCwd = (cwd?: null | string): null | string => cwd?.trim() || null
 
 const EMPTY_WORKTREES: HermesGitWorktree[] = []
@@ -469,7 +479,24 @@ $worktreeRefreshToken.subscribe(() => scheduleRepoStatusRefresh())
 // rails' branch/+/- move exactly when an agent touches a tree. Unscoped on
 // purpose: the tool may belong to a background tile's session, so every
 // on-screen worktree re-probes, not just the primary.
-$workspaceChangeTick.subscribe(() => scheduleRepoStatusRefresh())
+let lastToolRefreshAt = Number.NEGATIVE_INFINITY
+let toolRefreshTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleToolDrivenRepoStatusRefresh(): void {
+  if (toolRefreshTimer) {
+    return // A trailing probe is already queued; it will see this change too.
+  }
+
+  const wait = Math.max(0, lastToolRefreshAt + REPO_STATUS_TOOL_REFRESH_FLOOR_MS - Date.now())
+
+  toolRefreshTimer = setTimeout(() => {
+    toolRefreshTimer = null
+    lastToolRefreshAt = Date.now()
+    scheduleRepoStatusRefresh()
+  }, wait)
+}
+
+$workspaceChangeTick.subscribe(() => scheduleToolDrivenRepoStatusRefresh())
 
 // A turn settling is the backstop for changes no tool diff announced (e.g. a
 // raw `git` in the terminal): one final refresh when the agent goes idle.
@@ -494,6 +521,13 @@ export function _resetCodingStatusForTests(): void {
     clearTimeout(repoStatusRefreshTimer)
     repoStatusRefreshTimer = null
   }
+
+  if (toolRefreshTimer) {
+    clearTimeout(toolRefreshTimer)
+    toolRefreshTimer = null
+  }
+
+  lastToolRefreshAt = Number.NEGATIVE_INFINITY
 
   scheduledCwds.clear()
   scheduledAllTargets = false
