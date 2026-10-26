@@ -56,3 +56,34 @@ def test_shared_session_keeps_even_the_owner_on_channel_memory():
     runner = _Runner()
     assert channel_memory_binding(runner, _group("owner"), {}, shared_session=True).owner_writes is False
     assert channel_memory_binding(runner, _group("owner"), {}, shared_session=False).owner_writes is True
+
+
+@pytest.mark.parametrize("settings, expected", [
+    ("{scope: workspace, owner_writes_from_groups: false, char_limit: 40}",
+     ChannelMemoryBinding(scope="discord/G1", owner_writes=False, char_limit=40)),
+    ("{scope: chat, char_limit: 40}", ChannelMemoryBinding(scope="discord/G1_c1", owner_writes=True, char_limit=40)),
+    ("{enabled: false}", None),
+])
+def test_config_yaml_reaches_the_turn_binding_and_its_file(tmp_path, monkeypatch, settings, expected):
+    (tmp_path / "config.yaml").write_text(f"memory:\n  channel_memory: {settings}\n", encoding="utf-8")
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(mt, "get_memory_dir", lambda: tmp_path / "memories")
+    source = _group("owner", scope_id="G1")
+
+    def turn():
+        bind_channel_memory(_Runner(), source, shared_session=False)
+        binding = CHANNEL_MEMORY.get()
+        store = mt.MemoryStore()
+        store.load_from_disk()
+        short = mt.memory_tool(action="add", target="channel", content="Standup 9am", store=store)
+        long = mt.memory_tool(action="add", target="channel", content="x" * 60, store=store)
+        return binding, short, long
+
+    binding, short, long = contextvars.copy_context().run(turn)
+    assert binding == expected
+    if expected is None:
+        assert '"success": false' in short  # no binding: 'channel' is not a target outside a group turn
+        return
+    platform, _, key = expected.scope.partition("/")
+    assert "Standup 9am" in (tmp_path / "memories" / "channels" / platform / f"{key}.md").read_text(encoding="utf-8-sig")
+    assert '"success": false' in long  # char_limit from config.yaml, not the 1500 default
