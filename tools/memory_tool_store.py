@@ -184,6 +184,7 @@ class MemoryStore:
     # to budget exhaustion and suppress the user's reply.
     # See #42405.
     _MAX_CONSOLIDATION_FAILURES_PER_TURN = 3
+    _LOAD_TARGETS = ("memory", "user")  # ChannelMemoryStore loads its one file
 
     def __init__(self, memory_char_limit: int = 2200, user_char_limit: int = 1375, *,
                  memory_enabled: bool = True, user_profile_enabled: bool = True):
@@ -237,7 +238,7 @@ class MemoryStore:
                     f"Removed from system prompt; use memory(action=remove, target='{_store_target(filename)}') "
                     f"to delete the original.]")
 
-        for target in ("memory", "user"):
+        for target in self._LOAD_TARGETS:
             path = self._path_for(target)
             from hermes_constants import mkdir_under_hermes_home
 
