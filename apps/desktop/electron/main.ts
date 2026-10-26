@@ -338,6 +338,7 @@ import {
 } from './linux-gpu-fallback'
 import { notifyLauncherWindowRevealed } from './linux-launcher-ready'
 import {
+  clearNvidiaEglBootMarker,
   decideNvidiaEglFallback,
   nvidiaEglFallbackMarker,
   nvidiaEglMarkerAfterSuccessfulBoot,
@@ -898,10 +899,9 @@ const NVIDIA_EGL_FALLBACK = decideNvidiaEglFallback({
 
 nvidiaEglFallbackActive = NVIDIA_EGL_FALLBACK.enable
 
-// Persist the launch decision before GPU children start: a `booting` marker
-// left behind by a launch that never reached first paint is itself evidence
-// of a GPU death (the "GPU process isn't usable" FATAL abort wins the race
-// against our relaunch handler), and the next launch engages from it.
+// Persist the launch decision before GPU children start: a `booting` marker left by a launch
+// that never reached first paint is evidence of a GPU death (the "GPU process isn't usable"
+// FATAL abort wins the race against our relaunch handler), and the next launch engages from it.
 if (NVIDIA_DRIVER_MAJOR !== null) {
   try {
     writeNvidiaEglMarker(app.getPath('userData'), NVIDIA_EGL_FALLBACK.nextMarker)
@@ -1320,7 +1320,7 @@ let desktopSshPathOverride = ''
 
 // Linux: a runtime `--no-sandbox` kills renderers on /dev/shm (linux-sandbox-relaunch.ts).
 if (isPrimaryInstance) {
-  relaunchIfNoSandboxCameTooLate(app)
+  relaunchIfNoSandboxCameTooLate(app, () => clearNvidiaEglBootMarker(app.getPath('userData'), NVIDIA_EGL_FALLBACK))
 }
 
 // ACTIVE_HERMES_ROOT — the canonical mutable Hermes install. Same path

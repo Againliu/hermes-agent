@@ -4,6 +4,12 @@ import path from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import {
+  clearNvidiaEglBootMarker,
+  decideNvidiaEglFallback,
+  readNvidiaEglMarker,
+  writeNvidiaEglMarker
+} from './linux-nvidia-egl-fallback'
 import { linuxNoSandboxRelaunch } from './linux-sandbox-relaunch'
 
 const argv = ['/opt/Hermes/hermes', '--ozone-platform=x11', 'hermes://session/abc']
@@ -90,20 +96,69 @@ describe('Linux runtime --no-sandbox relaunch', () => {
 
       let relaunchEnv: NodeJS.ProcessEnv = {}
 
-      const relaunched = relaunchIfNoSandboxCameTooLate({
-        commandLine: { hasSwitch: name => name === 'no-sandbox' },
-        relaunch: () => {
-          relaunchEnv = { ...process.env }
+      const relaunched = relaunchIfNoSandboxCameTooLate(
+        {
+          commandLine: { hasSwitch: name => name === 'no-sandbox' },
+          relaunch: () => {
+            relaunchEnv = { ...process.env }
+          },
+          releaseSingleInstanceLock: () => undefined,
+          exit: () => undefined
         },
-        releaseSingleInstanceLock: () => undefined,
-        exit: () => undefined
-      })
+        () => undefined
+      )
 
       expect(relaunched).toBe(true)
       expect(relaunchEnv.TMPDIR).toBe(shortDir)
       expect(relaunchEnv.HERMES_DESKTOP_TMPDIR).toBe(longDir)
     } finally {
       restoreEnv(saved)
+    }
+  })
+
+  // main.ts wrote this launch's NVIDIA `booting` witness before the restart; the
+  // next launch must not read that deliberate exit as a GPU abort mid-boot.
+  it.skipIf(process.platform !== 'linux')('restarts without leaving the next launch a GPU-abort witness', async () => {
+    const saved = { ...process.env }
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-sandbox-relaunch-gpu-'))
+
+    const launch = () => {
+      const decision = decideNvidiaEglFallback({
+        driverMajor: 600,
+        driverVersion: '600.1.2',
+        marker: readNvidiaEglMarker(userData),
+        appVersion: '0.0.0',
+        env: {},
+        platform: 'linux'
+      })
+
+      writeNvidiaEglMarker(userData, decision.nextMarker)
+
+      return decision
+    }
+
+    try {
+      delete process.env.ELECTRON_DISABLE_SANDBOX
+      delete process.env.APPIMAGE
+      vi.resetModules()
+      const { relaunchIfNoSandboxCameTooLate } = await import('./linux-sandbox-relaunch')
+      const decision = launch()
+
+      const relaunched = relaunchIfNoSandboxCameTooLate(
+        {
+          commandLine: { hasSwitch: name => name === 'no-sandbox' },
+          relaunch: () => undefined,
+          releaseSingleInstanceLock: () => undefined,
+          exit: () => undefined
+        },
+        () => clearNvidiaEglBootMarker(userData, decision)
+      )
+
+      expect(relaunched).toBe(true)
+      expect(launch().enable).toBe(false)
+    } finally {
+      restoreEnv(saved)
+      fs.rmSync(userData, { recursive: true, force: true })
     }
   })
 
@@ -138,12 +193,15 @@ describe('Linux runtime --no-sandbox relaunch', () => {
         process.env.APPIMAGE = image
         process.env.APPDIR = path.dirname(process.execPath)
 
-        relaunchIfNoSandboxCameTooLate({
-          commandLine: { hasSwitch: name => name === 'no-sandbox' },
-          relaunch: () => events.push('relaunch'),
-          releaseSingleInstanceLock: () => events.push('release'),
-          exit: () => events.push('exit')
-        })
+        relaunchIfNoSandboxCameTooLate(
+          {
+            commandLine: { hasSwitch: name => name === 'no-sandbox' },
+            relaunch: () => events.push('relaunch'),
+            releaseSingleInstanceLock: () => events.push('release'),
+            exit: () => events.push('exit')
+          },
+          () => undefined
+        )
 
         await vi.waitFor(() => expect(fs.existsSync(report)).toBe(true), { timeout: 5000 })
         const [args, session, tmpdir, readyFd] = fs.readFileSync(report, 'utf8').split('\n')
