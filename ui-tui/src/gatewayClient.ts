@@ -12,6 +12,7 @@ import {
 import { reconnectBackoffDelayMs } from '@hermes/shared/reconnect-backoff'
 import { WebSocket as UndiciWebSocket } from 'undici'
 
+import type { UpdateDrain } from './app/userMessages.js'
 import {
   canonicalEvent,
   canonicalRequest,
@@ -156,6 +157,8 @@ export class GatewayClient extends EventEmitter {
   private creationContract?: CreationContract
   private describedSkin?: Record<string, unknown>
   private runtimeCapabilities: string[] = []
+  /** Set while the attached owner finishes its turns before an update replaces it. */
+  updateDrain: null | UpdateDrain = null
   private describeFlight?: Promise<void>
   private attachHold: AttachHold | null = null
   // The last session.create whose outcome is in doubt (see createCanonical).
@@ -509,6 +512,7 @@ export class GatewayClient extends EventEmitter {
 
   hydrateSharedPrompts(snapshot: unknown) {
     if (!this.isCanonical) { return }
+
     const result = snapshot as { session_id: string; authority_epoch: number; prompts?: Array<Record<string, unknown>>;
       open_requests?: Array<{ id: string; method: string; params?: Record<string, unknown> }> | null }
 
@@ -872,8 +876,9 @@ export class GatewayClient extends EventEmitter {
    * session.create asks again instead of reporting an outdated gateway forever. */
   private describeRuntime(): Promise<void> {
     if (!this.describeFlight) {
-      const flight: Promise<void> = this.requestOverWebSocket<{ capabilities?: unknown; session_create: CreationContract; skin?: Record<string, unknown> | null }>('runtime.describe').then(
+      const flight: Promise<void> = this.requestOverWebSocket<{ capabilities?: unknown; drain?: null | UpdateDrain; session_create: CreationContract; skin?: Record<string, unknown> | null }>('runtime.describe').then(
         description => {
+          this.updateDrain = description.drain?.reason === 'update' ? description.drain : null
           this.creationContract = description.session_create
           this.runtimeCapabilities = Array.isArray(description.capabilities)
             ? description.capabilities.filter((c): c is string => typeof c === 'string')

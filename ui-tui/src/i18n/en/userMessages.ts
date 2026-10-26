@@ -31,6 +31,10 @@ export const userMessagesEn = {
       slowStart:
         'Hermes is taking longer than usual to start. Still waiting… If it never connects: /logs shows the last backend output; /quit and run `hermes doctor`.',
       slowStartStatus: 'still starting…',
+      /** `{0}` = the release it updates to (empty when unnamed), `{1}` = turns it still finishes. */
+      updating: (target: string, turns: string) =>
+        `${target ? `Updating to ${target}` : 'Updating Hermes'}${turns !== '0' ? ` · finishing ${turns} turn${turns === '1' ? '' : 's'}` : '…'}`,
+      updatingActivity: 'new messages wait for the updated Hermes',
       stderrProblem: 'Something went wrong inside Hermes · /logs for details',
       /** `{0}` = the Python exception class name (e.g. `ValueError`). */
       stderrProblemNamed: (what: string) => `Something went wrong inside Hermes (${what}) · /logs for details`

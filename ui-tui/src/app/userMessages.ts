@@ -62,6 +62,15 @@ export const backendGaveUp = (code: null | number, lastLine?: string): string =>
 
 export const backendGaveUpActivity = (): string => t('userMessages.backend.gaveUpActivity')
 
+/** `runtime.describe.drain` of an owner finishing its turns before `hermes update` replaces it. */
+export interface UpdateDrain { reason: 'update'; target?: null | string; waiting_for?: Record<string, number> }
+
+export const backendUpdating = (drain: UpdateDrain): string =>
+  t('userMessages.backend.updating', drain.target ?? '',
+    String(Object.values(drain.waiting_for ?? {}).reduce((sum, n) => sum + (Number.isInteger(n) && n > 0 ? n : 0), 0)))
+
+export const backendUpdatingActivity = (): string => t('userMessages.backend.updatingActivity')
+
 /** Last line of the backend log tail that is not our own [lifecycle]/[startup] bookkeeping. */
 export const lastStderrLine = (tail: string): string | undefined =>
   tail

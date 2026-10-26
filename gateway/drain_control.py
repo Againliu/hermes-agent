@@ -76,6 +76,13 @@ def drain_status(runner, *, work: bool = True) -> Optional[dict[str, Any]]:
     return status
 
 
+def update_drain(runner) -> Optional[dict[str, Any]]:
+    """:func:`drain_status` when *runner* drains for an update, else None (a restart or a stop names
+    nothing a client renders). Read it on the gateway loop."""
+    status = drain_status(runner)
+    return status if status and status["reason"] == UPDATE_DRAIN_CAUSE else None
+
+
 def restart_wait_open(runner) -> bool:
     """True while *runner* is in a restart's after-turn wait (draining, not yet stopping)."""
     descriptor = getattr(runner, "session_runtime_descriptor", None) or {}
