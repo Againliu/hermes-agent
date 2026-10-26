@@ -72,3 +72,23 @@ def test_a_raising_settle_hook_does_not_skip_the_shared_card_teardown(monkeypatc
 
     assert [p.get("reason") for kind, p in published if kind == "approval.settled"] == ["timeout"]
     assert controls.pending == {}
+
+
+def test_choice_landing_after_the_deadline_check_never_settles_as_timeout(monkeypatch):
+    controls, published = _controls()
+    chat_notice = []
+
+    def notify(data):
+        mod.register_gateway_settle(SESSION_KEY, data["request_id"], chat_notice.append)
+        controls.register("s", SESSION_KEY, 7, data)
+
+    def deadline_passed_then_user_answered():
+        # The poll gave up; a native /approve lands before the entry leaves the queue, so the command runs.
+        assert mod.resolve_gateway_approval(SESSION_KEY, "once") == 1
+        return "timeout"
+
+    result = _wait(monkeypatch, notify, deadline_passed_then_user_answered)
+
+    assert result["resolved"] is True and result["choice"] == "once"
+    assert chat_notice == ["resolved"]
+    assert not any(payload.get("reason") == "timeout" for _, payload in published)

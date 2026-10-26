@@ -220,9 +220,13 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         if settle is not None:
             # ``request.cancel`` carries a RequestCancelReason: a choice committed from another surface is
             # ``resolved``; a withdrawn entry (woken with no choice — session torn down, turn ended, client
-            # cannot answer) is ``session_closed``; never the raw poll-state token "set".
-            if state == "set":
-                reason = "resolved" if choice is not None else "session_closed"
+            # cannot answer) is ``session_closed``; never the raw poll-state token "set". A choice that landed
+            # after the deadline check is honoured, so its hooks hear ``resolved``, never "timeout" (the command
+            # runs). An interrupt stays a fail-closed deny whatever was committed.
+            if choice is not None and state != "interrupted":
+                reason = "resolved"
+            elif state == "set":
+                reason = "session_closed"
             else:
                 reason = state
             settle(reason)
