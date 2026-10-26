@@ -125,7 +125,7 @@ class TestKillProcessTree:
             guard.assert_not_called()
             run.assert_called_once()
             argv = run.call_args.args[0]
-            assert argv[0] == system_tool("taskkill")
+            assert argv[0] == "taskkill"
             assert "/PID" in argv
             assert str(4321) in argv
 
