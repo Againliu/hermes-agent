@@ -43,6 +43,37 @@ def _error(message: str, failure_class: str, **extra) -> dict[str, Any]:
     return {"success": False, "error": message, **extra}
 
 
+_WORD_RE = re.compile(r"\w{3,}")
+_REDUNDANCY_FLOOR = 0.5  # share of the smaller entry's words found in the other text
+
+
+def _redundant_entries(entries: list[str], incoming: str = "", skip: Optional[int] = None,
+                       limit: int = 5) -> list[dict[str, Any]]:
+    """Entries whose words mostly reappear in another entry or in *incoming*, most redundant first.
+
+    Advisory only: a full store has no ages, so redundancy (not position or length) is the one
+    signal that an entry can go without losing a fact. Each candidate names what it overlaps.
+    """
+    words = [set(_WORD_RE.findall(e.lower())) for e in entries]
+    new_words = set(_WORD_RE.findall(incoming.lower()))
+    found = []
+    for i, mine in enumerate(words):
+        if i == skip or len(mine) < 2:
+            continue
+        best, other = 0.0, None
+        for j, theirs in [(j, w) for j, w in enumerate(words) if j not in (i, skip)] + [("new", new_words)]:
+            if theirs:
+                share = len(mine & theirs) / min(len(mine), len(theirs))
+                if share > best:
+                    best, other = share, j
+        if best >= _REDUNDANCY_FLOOR:
+            what = "the entry being written" if other == "new" else f"entry {other}"
+            found.append((-best, i, {"index": i, "preview": entries[i][:120],
+                                     "reason": f"{round(best * 100)}% of its words also appear in {what}; "
+                                               f"merge or remove one."}))
+    return [item for *_key, item in sorted(found, key=lambda f: (f[0], f[1]))[:limit]]
+
+
 def _store_target(filename: str) -> str:
     """The memory tool target that owns a store file, for hints that show the call to make."""
     return "user" if filename == "USER.md" else "memory"
@@ -334,19 +365,17 @@ class MemoryStore:
             f"Memory at {self._char_count(target):,}/{limit:,} chars; adding this entry ({len(content)} chars) "
             f"would exceed the limit by {over:,} chars. Retry as ONE 'operations' batch that "
             f"removes or shortens (patch) stale entries from current_entries below to free at least "
-            f"{over:,} chars AND adds this entry — the limit is checked only on the batch result."))
+            f"{over:,} chars AND adds this entry — the limit is checked only on the batch result. "
+            f"candidates_for_eviction lists entries that repeat another entry or this one."), content)
 
-    def _capacity_failure(self, target: str, message: str) -> dict[str, Any]:
-        """Offer bounded, advisory candidates without bypassing the retry limit."""
+    def _capacity_failure(self, target: str, message: str, incoming: str = "",
+                          replacing: Optional[int] = None) -> dict[str, Any]:
+        """Over-budget failure plus advisory ``candidates_for_eviction``: entries that repeat another
+        entry or the incoming text. Never mutates the store; the retry budget still applies."""
         response = self._failure_with_entries(target, message)
         if "current_entries" in response:
-            entries = response["current_entries"]
-            candidates = sorted(enumerate(entries), key=lambda item: (len(item[1]), item[0]))[:5]
-            response["candidates_for_eviction"] = [
-                {"index": index, "text": entry, "preview": entry[:120],
-                 "reason": "Shortest entries first; ties follow store order. Review relevance before removal."}
-                for index, entry in candidates
-            ]
+            response["candidates_for_eviction"] = _redundant_entries(
+                response["current_entries"], incoming, skip=replacing)
         return response
 
     def _batch_failure(self, target: str, message: str, failure_class: str,
@@ -520,7 +549,8 @@ class MemoryStore:
                 return self._capacity_failure(target, (
                     f"Replacement {_over_limit(new_total, limit)}. Shorten the new content, or retry as ONE "
                     f"'operations' batch with this replace plus removes/shortenings of other stale entries "
-                    f"(see current_entries below) — the limit is checked only on the batch result."))
+                    f"(see current_entries below) — the limit is checked only on the batch result."),
+                    new_content, replacing=idx)
             return replaced, "Entry replaced.", {"replaced_entry": entries[idx]}
         return self._mutate(target, _apply)
 

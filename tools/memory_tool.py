@@ -7,7 +7,9 @@ Single `memory` tool: add/patch/remove or a batch `operations` list."""
 import copy
 import json
 import logging
+import re
 from contextvars import ContextVar
+from datetime import date
 from pathlib import Path
 from hermes_constants import get_hermes_home
 from typing import Dict, Any, List, Optional, Tuple
@@ -238,8 +240,28 @@ def memory_tool(action: str | None = None, target: str = "memory", content: str 
     return result
 
 
-def _applied(result: dict[str, Any]) -> tuple[str, str]:
+def _applied(result: dict[str, Any], written: list[Any]) -> tuple[str, str]:
+    if result.get("success"):
+        _add_relative_date_hint(result, written)
     return ("success" if result.get("success") else "failed"), json.dumps(result, ensure_ascii=False)
+
+
+_WEEKDAYS = "monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+_RELATIVE_TIME_RE = re.compile(
+    rf"\b(?:today|tonight|tomorrow|yesterday|(?:next|last|this|coming) (?:week|month|year|weekend|{_WEEKDAYS})"
+    r"|in (?:a|an|one|two|three|a few|\d+) (?:days?|weeks?|months?|years?)"
+    r"|(?:a|an|one|two|three|a few|\d+) (?:days?|weeks?|months?|years?) ago)\b", re.IGNORECASE)
+
+
+def _add_relative_date_hint(result: dict[str, Any], written: list[Any]) -> None:
+    """A saved entry naming a time relative to now ("in 3 weeks") loses its anchor once this
+    conversation ends; ask for an absolute date. A hint on the saved write, never a refusal."""
+    match = next((m for text in written if isinstance(text, str) for m in [_RELATIVE_TIME_RE.search(text)] if m),
+                 None)
+    if match is not None:
+        result["date_hint"] = (
+            f"'{match.group(0)}' is relative to today ({date.today().isoformat()}) and this memory outlives "
+            "the conversation: patch the entry to state the absolute date.")
 
 
 def _invalid(message: str) -> tuple[str, str]:
@@ -267,7 +289,8 @@ def _memory_tool(action, target, content, old_text, new_text, operations, store)
         gate_result = _apply_write_gate(store, "batch", target, None, None, operations)
         if gate_result is not None:
             return "rejected", gate_result
-        return _applied(store.apply_batch(target, operations))
+        return _applied(store.apply_batch(target, operations),
+                        [op.get("content") for op in operations if isinstance(op, dict)])
     # Reject calls with neither operations[] nor the legacy top-level action.
     # Without this guard the dispatch falls through to the generic
     # "Unknown action 'None'" error, which gives the model no signal about
@@ -286,7 +309,7 @@ def _memory_tool(action, target, content, old_text, new_text, operations, store)
                or _apply_write_gate(store, action, target, content, old_text))
     if invalid is not None:
         return "rejected", invalid
-    return _applied(_STORE_ACTIONS[action][0](store, target, content, old_text))
+    return _applied(_STORE_ACTIONS[action][0](store, target, content, old_text), [content])
 
 
 def get_builtin_memory_config(config: Optional[dict[str, Any]] = None) -> dict[str, Any]:
@@ -387,12 +410,8 @@ MEMORY_SCHEMA = {
         "corrections for that kind of work) belongs in the task's skill via skill_manage, "
         "where it loads only when relevant; memory is injected into every turn and must "
         "stay small.\n\n"
-        "IF FULL: a single add or replace is rejected with current_entries and up to five "
-        "candidates_for_eviction (zero-based index, full text, 120-char preview, reason), shortest "
-        "first with ties in store order. These are review hints, not importance judgments; nothing "
-        "is deleted automatically. Review relevance or archive useful entries before removing "
-        "them. Reissue as ONE batch that removes or shortens stale entries and adds the new one "
-        "together. Repeated failures eventually return a terminal result without entries or hints.\n\n"
+        "IF FULL: an add is rejected with the current entries shown. Reissue as ONE batch that "
+        "removes or shortens enough stale entries and adds the new one together.\n\n"
         "TARGETS: 'user' = who the user is (name, role, preferences, style). 'memory' = your "
         "notes (environment, conventions, tool quirks, lessons).\n\n"
         "SKIP: trivial/obvious info, easily re-discovered facts, raw data dumps, task progress, "
