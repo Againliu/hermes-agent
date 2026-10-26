@@ -183,14 +183,25 @@ def hold_seconds_for_failed_run(exc: BaseException, agent: Any) -> Optional[floa
 
 
 def _job_route(job: dict[str, Any], cfg: dict[str, Any]) -> tuple[str, str]:
-    """Provider + base_url a job will call, following run_job's precedence (pin > cron default
-    > global model). Only what config states; unresolvable routes are never held."""
-    model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+    """Provider + base_url a job will call, resolved exactly as ``_resolve_job_runtime`` does
+    (pin > cron default > persisted config, through ``resolve_runtime_provider``) so a bare
+    ``custom`` pin or a named custom provider lands on the same ``custom:<url>`` key the failing
+    turn recorded. An unresolvable route is never held (fail-open: the run reports it)."""
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+
     cron_cfg = cfg.get("cron") if isinstance(cfg.get("cron"), dict) else {}
-    pinned = job.get("provider") or str(cron_cfg.get("model_provider") or "").strip()
-    if pinned:
-        return str(pinned), str(job.get("base_url") or "")
-    return str(model_cfg.get("provider") or ""), str(job.get("base_url") or model_cfg.get("base_url") or "")
+    kwargs: dict[str, Any] = {
+        "requested": job.get("provider") or str(cron_cfg.get("model_provider") or "").strip() or None,
+        "target_model": job.get("model") or "",
+    }
+    if job.get("base_url"):
+        kwargs["explicit_base_url"] = job.get("base_url")
+    try:
+        runtime = resolve_runtime_provider(**kwargs) or {}
+    except Exception:  # health: allow BLE001 -- resolve failures are the run's to report, not the gate's
+        logger.debug("usage-limit gate: route for job %s unresolvable", job.get("id"), exc_info=True)
+        return "", ""
+    return str(runtime.get("provider") or ""), str(runtime.get("base_url") or "")
 
 
 def _defer_for_provider_hold(job_id: str, hold: dict[str, Any]) -> bool:
@@ -201,6 +212,9 @@ def _defer_for_provider_hold(job_id: str, hold: dict[str, Any]) -> bool:
         schedule = job.get("schedule") or {}
         if schedule.get("kind") not in {"cron", "interval"} or job.get("state") == "paused":
             return False
+        # The due scan stamped this slot as handed to the dispatcher; parking is a deliberate
+        # reschedule, so the stamp must go in the same save or the next scan "restores" it.
+        slot_stamped = job.pop("pending_slot", None) is not None
         window_end = datetime.fromtimestamp(float(hold["until"]) + HOLD_SLACK_SECONDS).astimezone()
         natural = compute_next_run(schedule, window_end.isoformat())
         if job.get(ON_LIMIT_KEY) == "skip":
@@ -214,6 +228,8 @@ def _defer_for_provider_hold(job_id: str, hold: dict[str, Any]) -> bool:
                 job[SCHEDULE_EXPR_KEY] = schedule.get("expr")
         current = _parse_aware(job.get("next_run_at"))
         if current is not None and current >= _parse_aware(parked):
+            if slot_stamped:
+                save_jobs(jobs)
             return False  # already parked at or past the window by another tick
         job["next_run_at"] = parked
         job[STATE_KEY] = parked
@@ -227,12 +243,15 @@ def hold_due_jobs_for_provider_limits(due_jobs: list, cfg: dict[str, Any], fallb
     """Pre-fire gate: jobs whose provider is held at a usage limit are parked (wait) or skipped
     instead of firing into the wall. Jobs with a fallback chain, script-only jobs and one-shots
     run as before. Returns the jobs that may fire now."""
-    from agent.usage_hold import active_hold, format_until
+    from agent.usage_hold import active_hold, any_active_hold, format_until
 
+    if not any_active_hold():
+        return list(due_jobs)  # nothing held: skip per-job route resolution entirely
     runnable = []
     for job in due_jobs:
         hold = None
-        kind = (job.get("schedule") or {}).get("kind")
+        schedule = job.get("schedule")
+        kind = schedule.get("kind") if isinstance(schedule, dict) else None
         if not job.get("no_agent") and kind in {"cron", "interval"} and not fallback_chain(job, cfg):
             hold = active_hold(*_job_route(job, cfg))
         if hold is None:
