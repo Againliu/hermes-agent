@@ -372,7 +372,7 @@ const ComposerPane = memo(function ComposerPane({
     completions: composer.completions,
     onActiveSessionClose: actions.closeLiveSession,
     onActiveSessionSelect: actions.activateLiveSession,
-    onHistoryAccept: (entry: string) => composer.updateInput(entry),
+    onHistoryAccept: composer.replaceDraft,
     onModelSelect: actions.onModelSelect,
     onNewLiveSession: actions.newLiveSession,
     onNewPromptSession: actions.newPromptSession,

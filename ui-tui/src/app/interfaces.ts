@@ -413,6 +413,8 @@ export interface ComposerActions {
   /** Composer text for queue-edit slot `index` (local items first, then server-queued rows). */
   queueDraft: (index: number) => string
   removeQueue: (index: number) => void
+  /** Replace the WHOLE draft (continuation lines included), as a history recall does. */
+  replaceDraft: (value: string) => void
   setCompIdx: StateSetter<number>
   setComposerTokens: StateSetter<ComposerToken[]>
   setHistoryIdx: StateSetter<null | number>
@@ -634,6 +636,7 @@ export interface AppLayoutComposerProps {
   pagerPageSize: number
   queueEditIdx: null | number
   queuedDisplay: string[]
+  replaceDraft: (value: string) => void
   submit: (value: string) => void
   updateInput: StateSetter<string>
   voiceRecordKey: ParsedVoiceRecordKey

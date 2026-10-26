@@ -1585,6 +1585,7 @@ export function useMainApp(gw: GatewayClient) {
       pagerPageSize,
       queueEditIdx: composerState.queueEditIdx,
       queuedDisplay: composerState.queuedDisplay,
+      replaceDraft: composerActions.replaceDraft,
       submit,
       updateInput,
       voiceRecordKey
