@@ -476,7 +476,7 @@ Payload fields below are the exact event-specific fields supplied by each call s
 | `agent_loop_stopped` | Observer | Immediately after a real running agent is interrupted — gateway `_interrupt_and_clear_session` or TUI/desktop `session.interrupt`; return ignored. | `session_key`, `platform`, `reason`, `invalidation_reason` | Session/routing identifiers and interruption reasons; no message body. |
 | `on_skill_lifecycle` | Observer | After an authoritative skill-usage state change; return ignored. | `action`, `skill_name`, `provenance`, `task_id`, `session_id`, `use_count`, `reused`, `reuse_after_patch` | Exposes the local skill name and provenance. |
 | `subagent_start` | Observer | Child constructed and about to run; return ignored. | `parent_session_id`, `parent_turn_id`, `parent_subagent_id`, `parent_tool_call_id`, `task_index`, `child_session_id`, `child_subagent_id`, `child_role`, `child_goal` | Child goal may contain user/project content. |
-| `subagent_stop` | Observer | Child exit; return ignored. | `parent_session_id`, `parent_turn_id`, `parent_tool_call_id`, `task_index`, `child_session_id`, `child_subagent_id`, `child_role`, `child_summary`, `child_status`, `tool_call_history`, `duration_ms` | Summary and redacted tool-history metadata may reveal project structure. |
+| `subagent_stop` | Observer | Child exit, or restart recovery of a background child whose process died first; return ignored. | `parent_session_id`, `parent_turn_id`, `parent_tool_call_id`, `task_index`, `child_session_id`, `child_subagent_id`, `child_role`, `child_summary`, `child_status`, `tool_call_history`, `duration_ms`, `model`, `api_calls`, `tokens`, `cost_usd`, `cost_status`; `recovered` on recovery | Summary and redacted tool-history metadata may reveal project structure. |
 | `pre_gateway_dispatch` | Directive/control | Once per incoming non-internal message, at ingress: platform-adapter messages before auth/pairing/dispatch; webhook and relay deliveries after their authorization, before the admission commits; never for local CLI/TUI/Desktop or API turns, a retry of a committed delivery, or a queued admission when it executes. First valid `skip`, `rewrite`, or `allow` controls flow. | `event`, `gateway`, `session_store` | Extremely privileged in-process objects expose inbound user/routing data and host handles. |
 | `post_gateway_admission` | Directive/control (fail-open) | Admitted non-internal message after auth, pause/drain, pending-reply, running-session and slash-command lanes, inside the claimed session slot and the routed profile's scope; first `handled` result skips the agent turn, anything else (including a raise or timeout) runs it. | `session_key`, `platform`, `source` (dict snapshot), `message_id`, `text` | Inbound text is untrusted user data; no runner or session-store handles are passed. |
 | `gateway_platform_event` | Observer | After the gateway's profile-scoped authorization succeeds, when a supported platform-native event is normalized at the gateway boundary (Telegram: reactions, message edits; Discord: message edits/deletes, thread created/renamed); return ignored. | `platform`, `event_type`, `payload` (event-type-specific dict — see the per-event contracts below) | Normalized plain-dict envelope only; raw SDK objects, adapter handles, and bot clients are never exposed. |
@@ -1258,14 +1258,21 @@ def my_callback(parent_session_id: str, child_role: str | None,
 | `parent_session_id` | `str` | Session ID of the delegating parent agent |
 | `child_role` | `str \| None` | Orchestrator role tag set on the child (`None` if the feature isn't enabled) |
 | `child_summary` | `str \| None` | The final response the child returned to the parent |
-| `child_status` | `str` | `"completed"`, `"failed"`, `"interrupted"`, or `"error"` |
+| `child_status` | `str` | `"completed"`, `"failed"`, `"interrupted"`, `"error"`, or `"unknown"` (recovered, see below) |
 | `tool_call_history` | `list[dict]` | Ordered metadata-only tool calls: `tool_name`, bounded `tool_input`, `input_bytes`, `output_bytes`, and `status`; raw inputs and outputs are excluded |
 | `duration_ms` | `int` | Wall-clock time spent running the child, in milliseconds |
 | `parent_tool_call_id`, `task_index`, `child_session_id`, `child_subagent_id` | | Same values `subagent_start` sent for this child, so start and stop pair up |
+| `model` | `str \| None` | Model the child ran on |
+| `api_calls` | `int \| None` | API calls the child made |
+| `tokens` | `dict \| None` | `{"input": N, "output": N}` for the child's whole run |
+| `cost_usd`, `cost_status` | `float \| None`, `str` | The child's own estimated spend and its status (for example `"estimated"` or `"unknown"`); the parent session's cost already includes it |
+| `recovered` | `bool` | Present (`True`) only on a stop fired by restart recovery, see below |
 
 Tool hooks (`pre_tool_call`, `post_tool_call`, `transform_tool_result`) fired by a child's own tool calls also carry `parent_tool_call_id`, so an audit script can tie every child tool call back to the delegation that spawned it. Top-level tool calls never carry the key. Shell hooks read it from `.extra.parent_tool_call_id`.
 
 **Fires:** In `tools/delegate_tool.py`, after `ThreadPoolExecutor.as_completed()` drains all child futures. `invoke_hook("subagent_stop", ...)` is marshalled to the parent thread so authors don't see child-pool re-entrancy, and callbacks stay on that caller thread.
+
+**After a crash or restart:** a background child whose Hermes process died before its batch finished still gets its `subagent_stop`. The next Hermes process on that profile (gateway start, CLI, TUI or Desktop backend) classifies the orphaned delegation and fires one stop per child it started, under that profile's plugins, with `recovered=True` and `parent_turn_id=""`. A child that had finished before the crash reports its real status, summary and spend; the rest report `child_status="unknown"` with `cost_status="unknown"`. Each such child fires exactly one stop, even when several processes recover at once. A synchronous (foreground) child keeps no durable record, so one killed with its process fires no stop.
 
 **Return value:** Ignored.
 
