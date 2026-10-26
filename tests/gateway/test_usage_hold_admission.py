@@ -84,6 +84,18 @@ def test_opted_in_turn_is_queued_once_per_session_and_bounded(home):
     assert uh.queue_rerun(_ctx(source=SimpleNamespace(platform=Platform.LOCAL)), hold) is None
 
 
+def test_rerun_lands_one_grace_after_the_reported_reset(home):
+    """The hold already carries the plan's grace; the rerun must not wait a second grace."""
+    from agent.quota_resume import DEFAULT_GRACE_SECONDS, plan_quota_resume
+    from agent.usage_hold import active_hold, record_from_plan
+
+    now = time.time()
+    plan = plan_quota_resume(failure_reason="rate_limit", error_context={"reset_at": now + 600}, now=now)
+    record_from_plan(plan.to_dict(), provider="custom", base_url=ROUTE["base_url"])
+    hold = active_hold("custom", ROUTE["base_url"])
+    assert uh.queue_rerun(_ctx(), hold, now=now) == pytest.approx(now + 600 + DEFAULT_GRACE_SECONDS, abs=1)
+
+
 class _Store:
     def __init__(self, entries):
         import threading

@@ -84,13 +84,14 @@ def _rerunnable(ctx: Any) -> bool:
 def queue_rerun(ctx: Any, hold: dict[str, Any], *, now: Optional[float] = None) -> Optional[float]:
     """Queue this held turn to run once at the reset. Returns the rerun time, or None when the
     user has not opted in or a bound refuses it."""
-    from agent.quota_resume import DEFAULT_GRACE_SECONDS, DEFAULT_MAX_WAIT_SECONDS
+    from agent.quota_resume import DEFAULT_MAX_WAIT_SECONDS
 
     enabled, max_attempts = _rerun_settings(ctx.user_config)
     if not enabled or not _rerunnable(ctx):
         return None
     now = time.time() if now is None else now
-    resume_at = float(hold["until"]) + DEFAULT_GRACE_SECONDS
+    # The hold's ``until`` is the quota-resume plan's time, which already adds the reset grace.
+    resume_at = float(hold["until"])
     if resume_at - now > DEFAULT_MAX_WAIT_SECONDS:
         return None
     path = get_hermes_home() / QUEUE_FILE
