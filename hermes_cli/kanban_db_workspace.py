@@ -89,21 +89,35 @@ def _holds_workspace(row: sqlite3.Row, now: int) -> bool:
     return row["claim_lock"] is not None and (row["claim_expires"] or 0) > now
 
 
+def _worktree_runs_in(path: Path, branch: str) -> bool:
+    """Whether :func:`_resolve_worktree_workspace` runs a ``worktree`` card in its
+    stored path itself: its own checkout on a retry (dispatch writes the resolved
+    path back), or a fresh ``worktree add`` there. A repo root anchors
+    ``<repo>/.worktrees/<id>`` and another branch's checkout falls back to it."""
+    if _is_linked_worktree_checkout(path):
+        return _git_current_branch(path) == branch
+    return _path_key(_git_toplevel(path)) != _path_key(path.resolve(strict=False))
+
+
 def workspace_holder(conn: sqlite3.Connection, task_id: str, now: int) -> Optional[str]:
     """Id of another live running task whose directory is ``task_id``'s, else None.
 
-    Only a stored path that IS the working directory can collide: ``dir`` and
-    explicit-path ``scratch``. A ``worktree`` path names the repo a fresh
-    ``<repo>/.worktrees/<id>`` is cut from, and a path-less scratch task gets
-    ``workspaces/<id>``, so neither can share a sibling's directory."""
+    A path-less task gets a per-id directory and never collides. A ``worktree``
+    card collides only when it would run in its stored path (git is asked only
+    on a path hit, so the claim txn does not pay for it otherwise)."""
     own = conn.execute(_WORKSPACE_ROW_SQL, (task_id,)).fetchone()
-    if own is None or not own["workspace_path"] or (own["workspace_kind"] or "scratch") == "worktree":
+    if own is None or not own["workspace_path"]:
         return None
-    key = _path_key(Path(own["workspace_path"]).expanduser().resolve(strict=False))
+    path = Path(own["workspace_path"]).expanduser()
+    key = _path_key(path.resolve(strict=False))
     for row in conn.execute(_RUNNING_PATHS_SQL, (task_id,)).fetchall():
         other = _path_key(Path(row["workspace_path"]).expanduser().resolve(strict=False))
-        if other == key and _holds_workspace(row, now):
-            return row["id"]
+        if other != key or not _holds_workspace(row, now):
+            continue
+        if (own["workspace_kind"] or "scratch") == "worktree" and not _worktree_runs_in(
+                path, (own["branch_name"] or "").strip() or f"wt/{task_id}"):
+            return None
+        return row["id"]
     return None
 
 

@@ -19,6 +19,7 @@ import sys
 from hermes_cli import kanban_db as kb
 from hermes_cli import kanban_db_dispatch as kbd
 from hermes_cli import kanban_db_connect as kbc
+from hermes_cli import kanban_db_workspace as kbw
 
 
 @pytest.fixture
@@ -114,13 +115,36 @@ def test_expired_workerless_claim_does_not_block(conn, tmp_path, monkeypatch):
     assert kb.claim_task(conn, _ready_contender(conn, ws), claimer=kb._claimer_id()) is not None
 
 
+def _git_repo(path):
+    def git(*args):
+        subprocess.run(["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                       check=True, capture_output=True)
+    path.mkdir()
+    git("init", "-q")
+    git("commit", "-q", "--allow-empty", "-m", "init")
+    return git
+
+
 def test_worktree_contender_on_a_busy_repo_root_still_claims(conn, tmp_path):
-    """A ``worktree`` path names the repo each card gets its own
-    ``.worktrees/<id>`` from, never a shared directory."""
-    repo = str(tmp_path / "repo")
-    _running_holder(conn, repo, worker="live")
-    contender = _ready_contender(conn, repo, kind="worktree")
+    """A ``worktree`` card on a repo root runs in its own ``.worktrees/<id>``."""
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    _running_holder(conn, str(repo), worker="live")
+    contender = _ready_contender(conn, str(repo), kind="worktree")
     assert kb.claim_task(conn, contender, claimer=kb._claimer_id()) is not None
+
+
+def test_retried_worktree_card_refused_while_its_checkout_is_held(conn, tmp_path):
+    """After a first run the stored path IS the card's checkout, which a retry
+    reuses; a live ``dir`` card writing there must hold the retry back."""
+    repo = tmp_path / "repo"
+    git = _git_repo(repo)
+    contender = _ready_contender(conn, str(repo), kind="worktree")
+    checkout = repo / ".worktrees" / contender
+    git("worktree", "add", "-q", "-b", f"wt/{contender}", str(checkout))
+    kbw.set_workspace_path(conn, contender, checkout)
+    _running_holder(conn, str(checkout), worker="live")
+    assert kb.claim_task(conn, contender, claimer=kb._claimer_id()) is None
 
 
 def test_repeated_refusals_record_one_event(conn, tmp_path):
