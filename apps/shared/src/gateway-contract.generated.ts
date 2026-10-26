@@ -5683,6 +5683,7 @@ export interface QuotaResume {
   source?: string | null
   provider?: string | null
   reason?: string | null
+  scope?: string | null
   scheduled?: boolean | null
 }
 /** ``agent/error_surface.py::_surface`` — advisory {layer, code, retryable} (+ identity, + auth hint, + ``resets_at`` epoch seconds when the provider named when its limit lifts, + ``usage_limit`` on a usage-window plan's limit). */

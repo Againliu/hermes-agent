@@ -274,6 +274,8 @@ class QuotaResume(Payload):
     source: str | None = None
     provider: str | None = None
     reason: str | None = None
+    #: ``model``: the window caps only the failing model's family (``QuotaResumePlan.scope``).
+    scope: str | None = None
     scheduled: bool | None = None
 
 

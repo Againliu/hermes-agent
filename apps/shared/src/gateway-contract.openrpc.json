@@ -32464,6 +32464,18 @@
             "default": null,
             "title": "Reason"
           },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          },
           "scheduled": {
             "anyOf": [
               {
