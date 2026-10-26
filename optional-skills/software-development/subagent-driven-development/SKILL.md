@@ -180,11 +180,13 @@ delegate_task(
 # Run full test suite
 pytest tests/ -q
 
-# Review all changes
-git diff --stat
+# Review all changes, tracked and untracked
+git status --short
 
-# Final commit if needed: stage the files this feature touched, by path
-git add <paths from git diff --stat> && git commit -m "feat: complete [feature name] implementation"
+# Final commit if needed: stage by path only the files the plan's tasks own
+# (the Create/Modify/test paths from each task's text, new files included);
+# anything else in `git status` belongs to someone else and stays unstaged
+git add -- <task-owned paths> && git commit -m "feat: complete [feature name] implementation"
 ```
 
 ## Task Granularity
