@@ -145,9 +145,11 @@ export interface WhenIdleDeps<T> {
   /**
    * Run the hand-off. It re-checks readiness itself right before tearing
    * anything down and answers `busy` (with reasons) when work started in the
-   * gap; the wait then simply continues.
+   * gap; the wait then simply continues. `stillWanted` turns false once the
+   * wait is cancelled: the hand-off checks it after its own backend requests,
+   * before anything is torn down.
    */
-  fire: () => Promise<{ busy: UpdateBusyReason[] } | { result: T }>
+  fire: (stillWanted: () => boolean) => Promise<{ busy: UpdateBusyReason[] } | { result: T }>
   publish: (reasons: UpdateBusyReason[], deadlineAt: number) => void
   sleep: (ms: number) => Promise<void>
   now: () => number
@@ -205,8 +207,13 @@ export class UpdateWhenIdle<T> {
         idleReads = readiness.ready ? idleReads + 1 : 0
         lastReasons = readiness.reasons.length ? readiness.reasons : lastReasons
 
+        // A read that lands past the bound (a laptop that slept mid-wait) is too late to act on.
+        if (deps.now() >= deadlineAt) {
+          return { kind: 'timed-out', reasons: lastReasons }
+        }
+
         if (idleReads >= settleReads) {
-          const fired = await deps.fire()
+          const fired = await deps.fire(live)
 
           if ('result' in fired) {
             return { kind: 'fired', result: fired.result }

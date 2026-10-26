@@ -207,3 +207,63 @@ test('the wait is bounded: still busy at the deadline gives up and names what he
   assert.equal((result as { error?: string }).error, 'idle-timeout')
   assert.deepEqual((result as { waitingFor?: unknown }).waitingFor, [{ kind: 'cron', jobs: ['backup'] }])
 })
+
+test('a wait whose idle read lands past the deadline never hands off', async () => {
+  let now = 0
+  let reads = 0
+  let fired = false
+
+  const result = await applyUpdatesWhenIdle({
+    scheduler: new UpdateWhenIdle(),
+    read: async () => {
+      reads += 1
+      // One idle read, then the laptop sleeps through the bound: the second idle read comes too late.
+      now = reads === 2 ? 2 * 60 * 60 * 1000 : now
+
+      return { ready: true, reasons: [] }
+    },
+    applyGated: async () => {
+      fired = true
+
+      return { ok: true }
+    },
+    emitWaiting: () => undefined,
+    log: () => undefined,
+    pollMs: 1000,
+    maxWaitMs: 60_000,
+    now: () => now,
+    sleep: async () => undefined
+  })
+
+  assert.equal(fired, false)
+  assert.equal((result as { error?: string }).error, 'idle-timeout')
+})
+
+test('cancel during the final gate reaches the hand-off before it tears anything down', async () => {
+  const scheduler = new UpdateWhenIdle<{ ok: boolean; error?: string }>()
+  let tornDown = false
+
+  const result = await applyUpdatesWhenIdle({
+    scheduler,
+    read: async () => ({ ready: true, reasons: [] }),
+    applyGated: async stillWanted => {
+      scheduler.cancel() // the user clicks Cancel while the gate awaits its backends
+
+      if (!stillWanted()) {
+        return { ok: false, error: 'cancelled' }
+      }
+
+      tornDown = true
+
+      return { ok: true }
+    },
+    emitWaiting: () => undefined,
+    log: () => undefined,
+    pollMs: 1000,
+    maxWaitMs: 60_000,
+    ...clock()
+  })
+
+  assert.equal(tornDown, false)
+  assert.deepEqual(result, { ok: false, error: 'cancelled' })
+})

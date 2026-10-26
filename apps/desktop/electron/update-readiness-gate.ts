@@ -181,8 +181,11 @@ export function createUpdateReadinessGate<B extends LocalBackend>(host: UpdateRe
 export interface WhenIdleApplyDeps<R> {
   scheduler: UpdateWhenIdle<R>
   read: () => Promise<UpdateReadiness>
-  /** The gated apply (no consent): answers a BusyApplyResult when work started in the gap. */
-  applyGated: () => Promise<R | BusyApplyResult>
+  /**
+   * The gated apply (no consent): answers a BusyApplyResult when work started in the gap.
+   * `stillWanted` is false once the wait was cancelled; check it before tearing anything down.
+   */
+  applyGated: (stillWanted: () => boolean) => Promise<R | BusyApplyResult>
   emitWaiting: (reasons: UpdateBusyReason[], deadlineAt: number) => void
   log: (line: string) => void
   pollMs?: number
@@ -205,8 +208,8 @@ export async function applyUpdatesWhenIdle<R>(
 
   const outcome = await deps.scheduler.run({
     read: deps.read,
-    fire: async () => {
-      const result = await deps.applyGated()
+    fire: async stillWanted => {
+      const result = await deps.applyGated(stillWanted)
 
       return isBusyResult(result) ? { busy: result.waitingFor } : { result }
     },

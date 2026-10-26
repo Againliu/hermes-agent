@@ -4418,7 +4418,7 @@ async function applyUpdates(payload?: unknown): Promise<UpdaterApplyResultWire> 
   return applyUpdatesWhenIdle<UpdaterApplyResultWire>({
     scheduler: updateWhenIdle,
     read: () => updateReadiness.read(),
-    applyGated: () => applyUpdatesGated(false),
+    applyGated: stillWanted => applyUpdatesGated(false, stillWanted),
     emitWaiting: (reasons, deadlineAt) =>
       emitUpdateProgress({ stage: 'waiting', message: '', waitingFor: reasons, deadlineAt }),
     log: rememberLog
@@ -4429,7 +4429,10 @@ async function applyUpdates(payload?: unknown): Promise<UpdaterApplyResultWire> 
 // local backend froze admission and proved idle and no renderer reports a turn;
 // otherwise nothing is touched and the busy reasons go back to the overlay.
 // Only past this gate may isQuittingForHandoff skip the quit guard.
-async function applyUpdatesGated(interruptWork: boolean): Promise<UpdaterApplyResultWire | BusyApplyResult> {
+async function applyUpdatesGated(
+  interruptWork: boolean,
+  stillWanted: () => boolean = () => true
+): Promise<UpdaterApplyResultWire | BusyApplyResult> {
   return updateOperation.apply(async (): Promise<UpdaterApplyResultWire> => {
     updateInFlight = true
     let handedOff: boolean = false
@@ -4461,6 +4464,13 @@ async function applyUpdatesGated(interruptWork: boolean): Promise<UpdaterApplyRe
 
           return busy
         }
+      }
+
+      // Cancelled while the gate awaited its backends: nothing is torn down (finally releases the fences).
+      if (!stillWanted()) {
+        rememberLog('[updates] update-when-idle cancelled before the hand-off')
+
+        return { ok: false, error: 'cancelled' }
       }
 
       const packaged: UpdaterStrategy | null = await resolvePackagedUpdateStrategy()
@@ -16623,7 +16633,9 @@ function activeWorkInterruptedByUpdate(): ActiveWork {
     return NO_ACTIVE_WORK
   }
 
-  return mergeActiveWork([...activeWorkByWebContents.values(), lastActiveWorkSeen])
+  // Live window reports only: lastActiveWorkSeen is the quit-time fallback and stays busy after
+  // the window that reported a turn closes; the backends' idle proofs cover work without a window.
+  return mergeActiveWork(activeWorkByWebContents.values())
 }
 
 const updateReadiness = createUpdateReadinessGate({
