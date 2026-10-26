@@ -2594,12 +2594,12 @@ def run_job(
     job_id = job["id"]
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
 
+    from cron.scheduler_memory_hold import hold_for_memory
+    if (held := hold_for_memory(job, job_id, job_name, cancel_event)) is not None:  # before any script runs
+        return held
     early, prompt = _prepare_job_prompt(job, job_id, job_name, extra_prompt, cancel_event)
     if early is not None:
         return early
-    from cron.scheduler_memory_hold import hold_for_memory
-    if (held := hold_for_memory(job, job_id, job_name, prompt, cancel_event)) is not None:
-        return held
     from run_agent import AIAgent
 
     _cron_session_id = (owner_execution[1] if owner_execution is not None else

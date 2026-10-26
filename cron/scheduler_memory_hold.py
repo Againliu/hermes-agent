@@ -14,8 +14,10 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
-def hold_for_memory(job: dict, job_id: str, job_name: str, prompt: str, cancel_event: Any) -> Optional[tuple]:
-    """None to proceed; else ``run_job``'s failure tuple (timed out or cancelled while waiting)."""
+def hold_for_memory(job: dict, job_id: str, job_name: str, cancel_event: Any) -> Optional[tuple]:
+    """None to proceed; else ``run_job``'s failure tuple (timed out or cancelled while waiting).
+    Runs before the job's pre-run script and before a script-only (``no_agent``) job, so no part
+    of a scheduled run starts into a host that is out of memory."""
     from gateway.admission_memory import BACKGROUND, get_gate, wait_blocking
 
     verdict = wait_blocking(BACKGROUND, still_wanted=lambda: cancel_event is None or not cancel_event.is_set())
@@ -27,4 +29,5 @@ def hold_for_memory(job: dict, job_id: str, job_name: str, prompt: str, cancel_e
     logger.warning("Job '%s' (ID: %s) %s", job_name, job_id, error)
     from cron.scheduler import _run_doc_header
 
-    return False, _run_doc_header(job, f"{job_name} (FAILED)", job_id, prompt) + f"\n{error}\n", "", error
+    header = _run_doc_header(job, f"{job_name} (FAILED)", job_id, str(job.get("prompt") or ""))
+    return False, header + f"\n{error}\n", "", error
