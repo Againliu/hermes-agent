@@ -75,10 +75,13 @@ def channel_memory_binding(runner: Any, source: Any, config: dict[str, Any], *,
                                 char_limit=channel_char_limit(config))
 
 
-def bind_channel_memory(runner: Any, source: Any, *, shared_session: bool) -> None:
+def bind_channel_memory(runner: Any, source: Any) -> None:
     """Set (or clear) the binding for the current turn. Always written, so a queued DM turn
-    handled by the same task never inherits a previous group turn's binding."""
+    handled by the same task never inherits a previous group turn's binding. Sharing follows
+    the session-key rules (``build_session_context`` reads the same two settings)."""
     from gateway.run import _load_gateway_config
+    from gateway.session import is_shared_multi_user_session
 
-    CHANNEL_MEMORY.set(channel_memory_binding(runner, source, _load_gateway_config() or {},
-                                              shared_session=shared_session))
+    shared = is_shared_multi_user_session(source, group_sessions_per_user=runner.config.group_sessions_per_user,
+                                          thread_sessions_per_user=runner.config.thread_sessions_per_user)
+    CHANNEL_MEMORY.set(channel_memory_binding(runner, source, _load_gateway_config() or {}, shared_session=shared))

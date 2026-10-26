@@ -7,7 +7,7 @@ import pytest
 
 import gateway.run as gateway_run
 from gateway.channel_memory import bind_channel_memory, channel_memory_binding
-from gateway.config import Platform
+from gateway.config import GatewayConfig, Platform
 from gateway.session import SessionSource
 from tools import memory_tool as mt
 from tools.memory_tool_channel import CHANNEL_MEMORY, ChannelMemoryBinding
@@ -16,6 +16,8 @@ from tools.memory_tool_channel import CHANNEL_MEMORY, ChannelMemoryBinding
 class _Runner:
     """Admits a DM only under the receiving bot's profile home, as the gateway does when a
     shared bot routes a group into another profile (the runtime profile has no allowlist)."""
+
+    config = GatewayConfig(platforms={})  # threads shared, groups per user: the defaults
 
     def __init__(self, bot_home="/homes/receiving-bot"):
         self.bot_home = bot_home
@@ -50,12 +52,20 @@ def test_group_role_grant_does_not_count_as_dm_access():
     assert channel_memory_binding(_Runner(), _group("member", role_authorized=True), {}).owner_writes is False
 
 
-def test_shared_session_keeps_even_the_owner_on_channel_memory():
+def test_shared_session_keeps_even_the_owner_on_channel_memory(tmp_path, monkeypatch):
     # Other members steer a shared thread's running turn and its background review sees their
     # messages: a turn-start grant would let their text reach MEMORY.md / USER.md.
-    runner = _Runner()
-    assert channel_memory_binding(runner, _group("owner"), {}, shared_session=True).owner_writes is False
-    assert channel_memory_binding(runner, _group("owner"), {}, shared_session=False).owner_writes is True
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+
+    def bound(source):
+        bind_channel_memory(_Runner(), source)
+        return CHANNEL_MEMORY.get()
+
+    in_thread = contextvars.copy_context().run(bound, _group("owner", thread_id="t1", parent_chat_id="c1"))
+    in_group = contextvars.copy_context().run(bound, _group("owner"))
+    assert in_thread.scope == in_group.scope == "discord/c1"
+    assert in_thread.owner_writes is False
+    assert in_group.owner_writes is True
 
 
 @pytest.mark.parametrize("settings, expected", [
@@ -71,7 +81,7 @@ def test_config_yaml_reaches_the_turn_binding_and_its_file(tmp_path, monkeypatch
     source = _group("owner", scope_id="G1")
 
     def turn():
-        bind_channel_memory(_Runner(), source, shared_session=False)
+        bind_channel_memory(_Runner(), source)
         binding = CHANNEL_MEMORY.get()
         store = mt.MemoryStore()
         store.load_from_disk()
