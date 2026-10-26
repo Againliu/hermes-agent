@@ -98,3 +98,23 @@ def test_a_pause_no_tick_saw_still_skips_the_slot_that_fell_due_inside_it(fleet,
 
     assert pause["bot_pause_enforced"] is True  # the Desktop's proof this gateway enforces the pause
     assert fired == [] and job["id"] == held and _parse_aware(job["next_run_at"]) > _hermes_now()
+
+
+def test_a_resumed_bot_holds_a_raw_string_schedule_slot_from_its_pause(fleet, monkeypatch):
+    """Programmatic callers and older stores hand the tick the raw schedule string; the resume
+    check classifies it as the scheduler does instead of crashing the tick."""
+    from cron import scheduler
+    from cron.jobs import _hermes_now
+    from tools.bot_mode_pause import record_pause_change
+
+    paused, _active, fired = fleet
+    record_pause_change(paused, True)
+    slot = _hermes_now().isoformat()
+    record_pause_change(paused, False)
+    later = (_hermes_now() + timedelta(seconds=1)).isoformat()
+    legacy = [{"id": "in-pause", "schedule": "every 5m", "next_run_at": slot, "enabled": True},
+              {"id": "after", "schedule": "every 5m", "next_run_at": later, "enabled": True}]
+    monkeypatch.setattr(scheduler, "get_due_jobs", lambda: list(legacy))
+    _tick(paused)
+
+    assert fired == ["after"]
