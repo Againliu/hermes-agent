@@ -22,27 +22,34 @@ def isolated(tmp_path, monkeypatch):
     ad._reset_for_tests()
 
 
-def _complete(monkeypatch, record_extra, result):
+def _complete(monkeypatch, record_extra, result, *, replay=False):
+    """Format the live queued event, or (``replay=True``) the copy a restarted process restores from state.db."""
     record = {"delegation_id": "deleg-schema", "dispatched_at": time.time(), "session_key": "",
               "goal": "review the diff", "model": "test-model", **record_extra}
     ad._persist_dispatch(record)
     target = queue.Queue()
     monkeypatch.setattr(process_registry, "completion_queue", target)
     ad._push_completion_event(record, result, "completed")
+    if replay:
+        ad._reset_for_tests()
+        target = queue.Queue()
+        assert ad.restore_undelivered_completions(target) == 1
     return _format_async_delegation(target.get_nowait())
 
 
-def test_single_async_completion_names_the_failed_schema_verdict(monkeypatch):
+@pytest.mark.parametrize("replay", [False, True], ids=["live", "restart_replay"])
+def test_single_async_completion_names_the_failed_schema_verdict(monkeypatch, replay):
     text = _complete(monkeypatch, {}, {
         "status": "completed", "summary": "looks fine to me", "schema_valid": False,
-        "schema_errors": [ERROR], "schema_retries": 1})
+        "schema_errors": [ERROR], "schema_retries": 1}, replay=replay)
 
     assert "SCHEMA: invalid" in text and ERROR in text and "(after 1 retry)" in text
     assert text.index("SCHEMA: invalid") < text.index("looks fine to me")
 
 
-def test_batch_async_completion_flags_only_the_task_that_failed_its_schema(monkeypatch):
-    text = _complete(monkeypatch, {"is_batch": True, "goals": ["a", "b"]}, {"results": [
+@pytest.mark.parametrize("replay", [False, True], ids=["live", "restart_replay"])
+def test_batch_async_completion_flags_only_the_task_that_failed_its_schema(monkeypatch, replay):
+    text = _complete(monkeypatch, {"is_batch": True, "goals": ["a", "b"]}, replay=replay, result={"results": [
         {"task_index": 0, "status": "completed", "summary": "{\"verdict\": \"ok\"}", "schema_valid": True},
         {"task_index": 1, "status": "completed", "summary": "prose", "schema_valid": False,
          "schema_errors": [ERROR]},
