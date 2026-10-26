@@ -10,11 +10,14 @@ import contextvars
 import pytest
 
 from gateway.channel_memory import channel_memory_binding
-from gateway.config import Platform
+from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter
+from gateway.platforms.event import MessageEvent
 from gateway.private_chat import is_confirmed_private_chat
 from gateway.relay.ws_transport import _event_from_wire
 from gateway.session import SessionSource
+from gateway.session_envelope import restore_native
+from hermes_state_runtime import list_session_admissions
 from tools import memory_tool as mt
 from tools.memory_tool_channel import CHANNEL_MEMORY
 
@@ -93,3 +96,29 @@ def test_owner_note_in_a_slack_group_dm_lands_in_the_chat_file_not_memory_md(tmp
     assert "offsite" in (tmp_path / "memories" / "channels" / "slack" / "T1_G123.md").read_text(encoding="utf-8-sig")
     memory_md = tmp_path / "memories" / "MEMORY.md"
     assert not memory_md.exists() or "offsite" not in memory_md.read_text(encoding="utf-8-sig")
+
+
+@pytest.mark.asyncio
+async def test_adapter_confirmation_survives_native_admission(tmp_path, monkeypatch):
+    """The queued row is replayed through from_dict, which drops the wire-invisible flag."""
+    from gateway.run import GatewayRunner
+    from gateway.session_authority import initialize_session_authority
+    from plugins.platforms.whatsapp.adapter import WhatsAppAdapter
+    chat = "15551234567@s.whatsapp.net"
+    monkeypatch.setenv("WHATSAPP_ALLOWED_USERS", "15551234567")
+    runner = GatewayRunner(GatewayConfig(sessions_dir=tmp_path / "sessions"))
+    adapter = WhatsAppAdapter(PlatformConfig(enabled=True, extra={"session_path": str(tmp_path / "wa")}))
+    adapter.gateway_runner, runner.adapters = runner, {Platform.WHATSAPP: adapter}
+    authority = await initialize_session_authority(runner, profile_id="default", instance_id="pc")
+    runner._wire_adapter_handlers(adapter)
+    try:
+        replays = []
+        for message_id, proof in (("p1", True), ("p2", False)):
+            source = adapter.build_source(chat_id=chat, user_id=chat, chat_type="dm", private_chat=proof)
+            receipt = await authority.admit_native(MessageEvent(text="hi", source=source, message_id=message_id))
+            rows = list_session_admissions(authority.db, session_id=receipt.ref.session_id, pending_only=False)
+            row = next(r for r in rows if r["request_id"] == message_id)
+            replays.append(is_confirmed_private_chat(restore_native(row["payload"], runner).source))
+        assert replays == [True, False]
+    finally:
+        authority.db.close()
