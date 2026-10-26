@@ -62,3 +62,41 @@ def test_child_tool_hooks_carry_parent_tool_call_id_only_inside_a_child(monkeypa
     assert "parent_tool_call_id" not in seen[0]
     assert seen[1]["parent_tool_call_id"] == "call-delegate-7"
     assert seen[1]["tool_call_id"] == "child-call"
+
+
+def test_subagent_stop_names_the_spawning_call_and_carries_each_childs_spend(monkeypatch):
+    """Two same-goal children of one ``delegate_task`` call: each ``subagent_stop`` names that call, its own
+    task index and subagent id, and the child's own model, tokens and cost (observers had to read state.db)."""
+    import tools.delegate_tool as dt
+    from hermes_cli import plugins
+    from unittest.mock import MagicMock
+
+    stops: list[dict] = []
+    manager = plugins.PluginManager()
+    manager._discovered = True
+    manager._hooks["subagent_stop"] = [lambda **kw: stops.append(kw)]
+    monkeypatch.setattr(plugins, "_delivery_manager", lambda: manager)
+
+    def build(task_index, **kw):
+        child = MagicMock(_delegate_saved_tool_names=[], _credential_pool=None, _subagent_id=f"sa-{task_index}",
+                          _delegate_parent_tool_call_id=kw.get("parent_tool_call_id"), session_id=f"c{task_index}")
+        return child
+
+    def run(task_index, goal, child=None, parent_agent=None, **kw):
+        return {"task_index": task_index, "status": "completed", "summary": "ok", "api_calls": 1 + task_index,
+                "duration_seconds": 0.2, "model": "tiny-model", "tokens": {"input": 7, "output": task_index},
+                "cost_usd": 0.001 * (task_index + 1), "cost_status": "estimated"}
+
+    monkeypatch.setattr(dt, "_build_child_agent", build)
+    monkeypatch.setattr(dt, "_run_single_child", run)
+    parent = MagicMock(_delegate_depth=0, session_id="parent-1", _memory_manager=None, _active_children=[],
+                       _print_fn=None, tool_progress_callback=None, _session_db=None)
+    dt.delegate_task(tasks=[{"goal": "identical goal text"}, {"goal": "identical goal text"}], background=False, parent_agent=parent,
+                     tool_call_id="call-delegate-9")
+
+    by_index = {s["task_index"]: s for s in stops}
+    assert sorted(by_index) == [0, 1]
+    for i, stop in by_index.items():
+        assert (stop["parent_tool_call_id"], stop["child_subagent_id"]) == ("call-delegate-9", f"sa-{i}")
+        assert (stop["model"], stop["api_calls"], stop["tokens"]) == ("tiny-model", 1 + i, {"input": 7, "output": i})
+        assert (stop["cost_usd"], stop["cost_status"]) == (0.001 * (i + 1), "estimated")

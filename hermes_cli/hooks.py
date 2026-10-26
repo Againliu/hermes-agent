@@ -175,7 +175,8 @@ _DEFAULT_PAYLOADS = {
             "tool_input": {"argument_keys": ["content", "path"], "targets": {"path": "notes/report.txt"}},
             "input_bytes": 128, "output_bytes": 32, "status": "ok",
         }],
-        "duration_ms": 1234,
+        "duration_ms": 1234, "model": "demo-model", "api_calls": 2, "tokens": {"input": 512, "output": 64},
+        "cost_usd": 0.0012, "cost_status": "estimated",
     },
 }
 
