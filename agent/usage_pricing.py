@@ -795,11 +795,13 @@ def estimate_usage_cost(
         )
 
     entry = get_pricing_entry(model_name, provider=provider, base_url=base_url, api_key=api_key)
-    if route.provider == "anthropic" and _served_fast(usage):
+    # A declared ``pricing_overrides`` rate is final: the served-speed tables only replace bundled prices.
+    overridden = entry is not None and entry.source == "user_override"
+    if not overridden and route.provider == "anthropic" and _served_fast(usage):
         entry = _anthropic_fast_mode_entry(route.model)
         if not entry:
             return _unknown_cost("official_docs_snapshot", "fast-mode pricing unavailable for model")
-    if route.provider == "openai" and _served_openai_tier(usage) == "ultrafast":
+    if not overridden and route.provider == "openai" and _served_openai_tier(usage) == "ultrafast":
         entry = _OPENAI_ULTRAFAST_PRICING.get(route.model)
         if not entry:
             return _unknown_cost("official_docs_snapshot", "ultrafast pricing unavailable for model")

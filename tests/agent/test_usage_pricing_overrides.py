@@ -1,5 +1,6 @@
 """Behaviour contracts: user ``pricing_overrides`` and Anthropic 1-hour cache-write pricing."""
 
+from dataclasses import replace
 from decimal import Decimal
 
 import json
@@ -38,6 +39,21 @@ def test_pricing_overrides_in_config_price_the_route(entry, model, provider, bas
     result = estimate_usage_cost(model, usage, provider=provider, base_url=base_url)
 
     assert (result.source, result.status, result.amount_usd) == ("user_override", "estimated", Decimal(8))
+
+
+@pytest.mark.parametrize("model, provider, served", [
+    ("claude-opus-5", "anthropic", {"speed": "fast"}),
+    ("gpt-6.1-sol", "openai", {"service_tier": "ultrafast"}),
+    ("gpt-6-luna", "openai", {"service_tier": "ultrafast"}),  # no bundled Ultrafast row
+])
+def test_pricing_override_stays_final_at_a_served_speed(model, provider, served):
+    _write_config({"pricing_overrides": [{"model": model, "input_per_million": 1, "output_per_million": 3}]})
+    usage = replace(normalize_usage({"input_tokens": 1_000_000, "output_tokens": 1_000_000}, provider="anthropic"),
+                    raw_usage=served)
+
+    result = estimate_usage_cost(model, usage, provider=provider)
+
+    assert (result.source, result.amount_usd) == ("user_override", Decimal(4))
 
 
 @pytest.mark.parametrize("model, five_min_rate, one_hour_rate", [
