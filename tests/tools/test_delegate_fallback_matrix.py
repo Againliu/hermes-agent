@@ -240,5 +240,37 @@ def test_declared_child_chain_activates_on_primary_failure():
     assert child.provider == "deepseek"
 
 
+@pytest.mark.parametrize(
+    ("declared", "failure_reason", "named"),
+    [
+        (None, "model_not_found", True),             # pinned, no chain: the parent learns which setting is missing
+        (list(DECLARED_CHAIN), "model_not_found", False),  # a chain existed, so the note would be false
+        (None, "context_overflow", False),           # another provider would fail the same request
+    ],
+)
+def test_pinned_child_route_failure_names_the_subagent_fallback_setting(declared, failure_reason, named):
+    from run_agent import AIAgent
+    from tools.delegate_tool_child_run import _SchemaOutcome, _build_result_entry
+
+    chain = _resolve_child_fallback_chain(
+        _parent(list(PARENT_CHAIN)), {"fallback_providers": declared}, pinned=True)
+    with (
+        patch("model_tools.get_tool_definitions", return_value=[]),
+        patch("model_tools.check_toolset_requirements", return_value={}),
+        patch("agent.process_bootstrap.OpenAI"),
+    ):
+        child = AIAgent(api_key="primary-test-key", base_url="https://primary.example/v1", model="pinned-model",
+                        provider="custom", quiet_mode=True, skip_context_files=True, skip_memory=True,
+                        fallback_model=chain)
+    result = {"final_response": "HTTP 404: model not found", "completed": False, "failed": True,
+              "error": "HTTP 404: model not found", "failure_reason": failure_reason, "messages": []}
+
+    entry = _build_result_entry(child, result, 0, 1.0, _SchemaOutcome(None, None, [], 0))
+
+    assert entry["status"] == "failed" and entry["failure_reason"] == failure_reason
+    assert entry["error"].startswith("HTTP 404: model not found")
+    assert ("delegation.fallback_providers" in entry["error"]) is named
+
+
 if __name__ == "__main__":
     unittest.main()
