@@ -157,8 +157,9 @@ CLARIFY_SCHEMA = {
         "cancelled, timed_out or undelivered, with a notice saying why "
         "when the wait ended without a submit. Prefer deciding "
         "low-stakes questions yourself; don't use this for dangerous-command "
-        "confirmation (the terminal tool handles that). Never ask for an API "
-        "key, token or password as a normal question: use secret_env."
+        "confirmation (the terminal tool handles that). To get an API key, "
+        "token or password, pass secret_env with one question: a plain "
+        "question would put the secret in the chat log."
     ),
     "parameters": {
         "type": "object",
@@ -190,10 +191,10 @@ CLARIFY_SCHEMA = {
             "secret_env": {
                 "type": "string",
                 "description": (
-                    "Set this (e.g. WEATHER_API_KEY) to collect an API key, token or password "
-                    "through a masked prompt instead of chat. Ask ONE question without choices "
-                    "saying what it is and where it will be used. The value is stored for this "
-                    "profile and never shown to you; use it as $NAME in commands."),
+                    "Env var NAME, e.g. WEATHER_API_KEY. Required whenever you ask for an API key, "
+                    "token or password: the user types it into a masked prompt, it is stored for "
+                    "this profile and you only get NAME back; use it as $NAME in commands. Ask one "
+                    "question (what it is, where it is used), no choices."),
             },
         },
         "required": ["questions"],
