@@ -109,21 +109,22 @@ class SessionReader:
             return db.get_compression_lineage(session_id) if db else []
 
     def subagents(self, session_id: str) -> list[dict[str, Any]]:
-        """Every delegate-subagent session spawned under ``session_id``, recursively; rebuild the tree
-        from each row's ``delegate_from``/``parent_session_id``. Ordered by start time."""
+        """Every delegate-subagent session spawned under the conversation (any segment of its
+        compression lineage), recursively, with their own compression continuations; rebuild the
+        tree from each row's ``delegate_from``/``parent_session_id``. Ordered by start time."""
         with self._db() as db:
             if db is None:
                 return []
-            rows = [db.get_session(sid) for sid in _subagent_ids(db, [session_id])]
+            rows = [db.get_session(sid) for sid in _subagent_ids(db, _lineage_ids(db, session_id))]
             return sorted((project_session(r) for r in rows if r), key=lambda r: r["started_at"] or 0)
 
     def usage(self, session_id: str, *, include_subagents: bool = False) -> Optional[dict[str, Any]]:
         """Token and cost totals for the whole conversation (its compression lineage), optionally
-        with every delegate subagent under it; ``session_ids`` names the rows summed."""
+        with every session ``subagents()`` lists; ``session_ids`` names the rows summed."""
         with self._db() as db:
             if db is None or not db.get_session(session_id):
                 return None
-            ids = db.get_compression_lineage(session_id) or [session_id]
+            ids = _lineage_ids(db, session_id)
             if include_subagents:
                 ids += _subagent_ids(db, ids)
             rows = [r for r in (db.get_session(sid) for sid in ids) if r]
@@ -157,8 +158,24 @@ class SessionReader:
         return todos if isinstance(todos, list) else None
 
 
-def _subagent_ids(db: Any, parent_ids: list[str]) -> list[str]:
-    from hermes_state_sessions import _collect_delegate_child_ids
+def _lineage_ids(db: Any, session_id: str) -> list[str]:
+    return db.get_compression_lineage(session_id) or [session_id]
 
+
+def _subagent_ids(db: Any, lineage: list[str]) -> list[str]:
+    """Delegates under *lineage* and the compression continuations of each, closed over each other
+    to a fixed point (the walk ``delete_targets`` runs): a delegate's continuation may carry no
+    ``_delegate_from`` marker, and its own delegates hang off whichever segment spawned them."""
+    from hermes_state_sessions import _collect_delegate_child_ids, _expand_compression_lineage_ids
+
+    roots = set(lineage)
+    seen, found = set(roots), []
+    frontier = list(lineage)
     with db._read_ctx() as conn:
-        return _collect_delegate_child_ids(conn, parent_ids)
+        while frontier:
+            delegates = [sid for sid in frontier if sid not in roots]
+            step = _collect_delegate_child_ids(conn, frontier) + _expand_compression_lineage_ids(conn, delegates)
+            frontier = [sid for sid in dict.fromkeys(step) if sid not in seen]
+            seen.update(frontier)
+            found += frontier
+    return found

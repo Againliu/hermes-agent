@@ -54,6 +54,24 @@ def test_ctx_sessions_reads_its_own_profile_store_read_only(tmp_path, monkeypatc
     assert not (launch / "state.db").exists()
 
 
+def test_subagents_and_usage_walk_compression_and_delegation_links_alike(tmp_path):
+    """A delegate spawned before the parent compressed still belongs to the tip, and a compressed
+    delegate's continuation (no ``_delegate_from`` marker) is part of the subagent tree."""
+    with SessionDB(db_path=tmp_path / "state.db") as db:
+        db.create_session("root", source="cli")
+        db.create_session("early", source="cli", parent_session_id="root", model_config={"_delegate_from": "root"})
+        db.end_session("early", "compression")
+        db.create_session("early-2", source="cli", parent_session_id="early")
+        db.update_token_counts("early-2", input_tokens=2, output_tokens=1)
+        db.end_session("root", "compression")
+        db.create_session("tip", source="cli", parent_session_id="root")
+    sessions = _ctx(tmp_path).sessions
+    assert sessions.lineage("tip") == ["root", "tip"]
+    assert sorted(r["id"] for r in sessions.subagents("tip")) == ["early", "early-2"]
+    tree = sessions.usage("tip", include_subagents=True)
+    assert sorted(tree["session_ids"]) == ["early", "early-2", "root", "tip"] and tree["input_tokens"] == 2
+
+
 def _run(capsys, *argv):
     parser = argparse.ArgumentParser()
     build_sessions_parser(parser.add_subparsers(), cmd_sessions=sessions_cmd.cmd_sessions)

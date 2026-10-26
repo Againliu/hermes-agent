@@ -1192,7 +1192,7 @@ def summarize(ctx, session_id):
 | `get(session_id)` | one session (projection below), or `None` |
 | `recent(source=None, limit=20, include_archived=False)` | top-level sessions, newest first; each also carries `preview` and `last_active` |
 | `lineage(session_id)` | compression lineage ids, root first through the live tip |
-| `subagents(session_id)` | delegate-subagent sessions under it, recursively, oldest first |
+| `subagents(session_id)` | delegate-subagent sessions under its conversation (every compression segment), recursively, with their own continuations; oldest first |
 | `usage(session_id, include_subagents=False)` | token/cost totals over the lineage (plus subagents), with the summed `session_ids` |
 | `messages(session_id, limit=50, latest=True, include_ancestors=False)` | active transcript rows: `id`, `role`, `content`, `tool_name`, `tool_call_id`, `tool_calls`, `timestamp`, `finish_reason` |
 | `latest_todo(session_id)` | the newest `todo` list, or `None` |
