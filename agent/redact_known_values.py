@@ -177,10 +177,12 @@ def _forms(value: str) -> set:
 
 
 class _Profile:
-    __slots__ = ("checked_at", "file_values", "forms", "runtime", "signature")
+    __slots__ = ("checked_at", "file_values", "forms", "load_lock", "loaded", "runtime", "signature")
 
     def __init__(self):
         self.checked_at = 0.0
+        self.loaded = False
+        self.load_lock = threading.Lock()
         self.signature = None
         self.file_values: frozenset = frozenset()
         self.runtime: OrderedDict = OrderedDict()
@@ -222,21 +224,32 @@ def register_secret_value(value, *, home=None) -> None:
         profile.rebuild_forms()
 
 
+_LOADING = threading.local()
+
+
 def _current_forms(home) -> tuple:
     key, path = _scope(home)
-    now = time.monotonic()
     with _LOCK:
         profile = _PROFILES.setdefault(key, _Profile())
-        if now - profile.checked_at < _RECHECK_SECONDS:
-            return profile.forms
-        profile.checked_at = now
-    signature = _signature(path)
-    if signature == profile.signature:
+    # A record logged while this thread reads the files re-enters here: it gets what is published.
+    if getattr(_LOADING, "active", False) or (
+            profile.loaded and time.monotonic() - profile.checked_at < _RECHECK_SECONDS):
         return profile.forms
-    values = frozenset(v.strip() for v in _file_values(path) if _usable(v))
-    with _LOCK:
-        profile.signature, profile.file_values = signature, values
-        profile.rebuild_forms()
+    # Other threads wait for the load in progress: before its first publish ``forms`` is empty.
+    with profile.load_lock:
+        if profile.loaded and time.monotonic() - profile.checked_at < _RECHECK_SECONDS:
+            return profile.forms
+        _LOADING.active = True
+        try:
+            signature = _signature(path)
+            if not profile.loaded or signature != profile.signature:
+                values = frozenset(v.strip() for v in _file_values(path) if _usable(v))
+                with _LOCK:
+                    profile.signature, profile.file_values = signature, values
+                    profile.rebuild_forms()
+        finally:
+            _LOADING.active = False
+        profile.checked_at, profile.loaded = time.monotonic(), True
         return profile.forms
 
 

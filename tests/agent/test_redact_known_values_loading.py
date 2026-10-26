@@ -5,11 +5,13 @@ import os
 import subprocess
 import sys
 import textwrap
+import threading
 from pathlib import Path
 
 import pytest
 
-from agent.redact_known_values import MARKER, clear_known_secret_values
+import agent.redact_known_values as known
+from agent.redact_known_values import MARKER, clear_known_secret_values, redact_known_secret_values
 
 # Built by concatenation: opaque, no vendor prefix, never a real credential.
 ENV_VAL = "opaqueEnv" + "Value8812qz"
@@ -21,6 +23,29 @@ def _fresh_registry():
     clear_known_secret_values()
     yield
     clear_known_secret_values()
+
+
+def test_concurrent_first_reader_waits_for_the_load_in_progress(tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_file_values(home):
+        entered.set()
+        release.wait(10)
+        return [ENV_VAL]
+
+    monkeypatch.setattr(known, "_file_values", slow_file_values)
+    text = f"server echoed {ENV_VAL}"
+    results = {}
+    first = threading.Thread(target=lambda: results.update(first=redact_known_secret_values(text, home=tmp_path)))
+    first.start()
+    assert entered.wait(10)
+    second = threading.Thread(target=lambda: results.update(second=redact_known_secret_values(text, home=tmp_path)))
+    second.start()
+    second.join(0.3)  # a reader that does not wait returns the empty pre-load set here
+    release.set()
+    first.join(10)
+    second.join(10)
+    assert results == {"first": f"server echoed {MARKER}", "second": f"server echoed {MARKER}"}
 
 
 @pytest.mark.parametrize("safe_mode", [True, False])
