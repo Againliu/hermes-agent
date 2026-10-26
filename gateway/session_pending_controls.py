@@ -6,7 +6,7 @@ Secret/sudo prompts remain native; no response is published or journaled here.
 from copy import deepcopy
 
 from hermes_state_runtime import RuntimeStoreError
-from tools.approval import list_gateway_approvals, resolve_gateway_approval
+from tools.approval import gateway_approval_open, resolve_gateway_approval
 
 
 class PendingControls:
@@ -69,7 +69,7 @@ class PendingControls:
             for prompt_id, (route, prompt) in list(self.pending.items()):
                 active = (prompt_id in self.remote_responders or
                           (not route.event.is_set() if prompt['kind'] == 'clarify' else
-                           any(p['request_id'] == prompt_id for p in list_gateway_approvals(route))))
+                           gateway_approval_open(route, prompt_id)))
                 if prompt['execution_generation'] != generation or not active:
                     del self.pending[prompt_id]
                     self.remote_responders.pop(prompt_id, None)

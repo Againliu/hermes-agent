@@ -121,6 +121,8 @@ def _denial_breaker_addendum(session_key: str) -> str:
 # instead of only hearing "denied". Ported from qwibitai/nanoclaw#2832.
 _gateway_queues: dict[str, list] = {}        # session_key → [_ApprovalEntry, …]
 _gateway_notify_cbs: dict[str, object] = {}  # session_key → callable(approval_data)
+# (session_key, request_id) of approvals that timed out and whose settle hooks are still announcing it.
+_gateway_expiring: set[tuple[str, str]] = set()
 
 
 def register_gateway_notify(session_key: str, cb) -> None:
@@ -197,6 +199,14 @@ def list_gateway_approvals(session_key: str) -> list[dict]:
     """Return replay-safe snapshots of unresolved approvals for one session."""
     with _lock:
         return [dict(entry.data) for entry in _gateway_queues.get(session_key, [])]
+
+
+def gateway_approval_open(session_key: str, request_id: str) -> bool:
+    """True while the approval is pending, or timed out with its settle hooks still announcing that.
+    A snapshot taken in that gap leaves the card to the hook, which settles it with its reason."""
+    with _lock:
+        return ((session_key, request_id) in _gateway_expiring
+                or any(entry.data.get("request_id") == request_id for entry in _gateway_queues.get(session_key, [])))
 
 
 def register_gateway_settle(session_key: str, request_id: str, settle) -> bool:

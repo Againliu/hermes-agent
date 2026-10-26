@@ -92,3 +92,17 @@ def test_choice_landing_after_the_deadline_check_never_settles_as_timeout(monkey
     assert result["resolved"] is True and result["choice"] == "once"
     assert chat_notice == ["resolved"]
     assert not any(payload.get("reason") == "timeout" for _, payload in published)
+
+
+def test_snapshot_racing_the_timeout_hook_keeps_the_timeout_reason(monkeypatch):
+    controls, published = _controls()
+
+    def notify(data):
+        # An attach / session.active_list snapshot lands after the entry left the queue, before our hook ran.
+        mod.register_gateway_settle(SESSION_KEY, data["request_id"], lambda reason: controls.snapshot("s", 7))
+        controls.register("s", SESSION_KEY, 7, data)
+
+    _wait(monkeypatch, notify, lambda: "timeout")
+
+    assert [p.get("reason") for kind, p in published if kind == "approval.settled"] == ["timeout"]
+    assert controls.pending == {} and mod._gateway_expiring == set()
