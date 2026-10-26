@@ -210,7 +210,21 @@ class TestListSlotShapes:
         assert any(m.startswith("plugins.disabled is a mapping") for m in messages), messages
         assert any("'skills.external_dirs' is a dotted path" in m for m in messages), messages
         hint = next(i.hint for i in issues if i.message.startswith("plugins.enabled"))
-        assert "hermes config set plugins.enabled '[omh]'" in hint
+        assert """hermes config set plugins.enabled '["omh"]'""" in hint
+
+    @pytest.mark.parametrize("value", ["/srv/team,shared", "on"])
+    def test_repair_command_stores_the_value_as_its_one_item(self, value):
+        """The suggested ``config set`` must give back exactly ``[value]``: bare brackets split a
+        comma into two items and turn ``on`` into a boolean."""
+        import shlex
+
+        from hermes_cli.config import _coerce_config_set_value
+
+        issues = validate_config_structure({"skills": {"external_dirs": value}})
+        hint = next(i.hint for i in issues if i.message.startswith("skills.external_dirs"))
+        _cmd, _sub, _verb, key, arg = shlex.split(hint.split("Run: ", 1)[1].split("  (", 1)[0])
+        assert key == "skills.external_dirs"
+        assert _coerce_config_set_value(key, arg, {}) == [value]
 
     def test_lists_unset_values_scalar_readers_and_env_style_roots_are_silent(self):
         issues = validate_config_structure({

@@ -8,6 +8,7 @@ file is never rewritten.
 
 from __future__ import annotations
 
+import json
 import shlex
 from typing import Any
 
@@ -67,8 +68,10 @@ def _scalar_in_list_issue(key: str, value: Any, issues: list[ConfigIssue]) -> No
     user plugin at all and an exclusion list excludes nothing."""
     shape = "a mapping" if isinstance(value, dict) else f"the plain value {value!r}"
     if isinstance(value, (str, int, float)) and not isinstance(value, bool):
-        hint = (f"Run: hermes config set {key} {shlex.quote(f'[{value}]')}  (stores a one-item list), "
-                f"or write it in config.yaml as a list item ('- {value}')")
+        # JSON, not ``[value]``: brackets alone split ``a,b`` in two and turn ``on`` into a bool.
+        item = json.dumps(value, ensure_ascii=False)
+        hint = (f"Run: hermes config set {key} {shlex.quote(f'[{item}]')}  (stores a one-item list), "
+                f"or write it in config.yaml as a list item ('- {item}')")
     else:
         hint = f"Write {key} in config.yaml as a YAML list (one '- item' per line)"
     _issue(issues, "warning",
