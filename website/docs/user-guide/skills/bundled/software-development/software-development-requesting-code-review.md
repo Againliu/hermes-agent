@@ -120,9 +120,13 @@ merge-base in a detached worktree, so your uncommitted work is never touched:
 
 ```bash
 base=$(git merge-base origin/main HEAD)   # or HEAD for uncommitted-only work
-git worktree add --detach ../baseline-check "$base"
-(cd ../baseline-check && python -m pytest path/to/test_file.py::test_name -q)
-git worktree remove --force ../baseline-check
+wt=$(mktemp -d "${TMPDIR:-/tmp}/baseline-check.XXXXXX")   # unique, empty: never another run's
+if git worktree add --detach "$wt" "$base"; then
+  (cd "$wt" && python -m pytest path/to/test_file.py::test_name -q)
+  git worktree remove --force "$wt"     # only the worktree this run created
+else
+  rmdir "$wt"                           # add failed: drop the empty dir, then stop
+fi
 ```
 
 Fails there too → **pre_existing** (report it, it does not block). Passes there →
