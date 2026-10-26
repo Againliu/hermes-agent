@@ -708,10 +708,11 @@ launch_app() { # attempted BEFORE the terminal event (launch acceptance is
     # immediate exec failure (ENOENT, ELF mismatch, dead sandbox) dies
     # within the window and downgrades to manual instead of lying.
     # $(...) carries the pid back without a file; the app's stdio is /dev/null, so the
-    # substitution returns as soon as the wrapper subshell exits.
+    # substitution returns as soon as the wrapper subshell exits. The relaunched app must not
+    # inherit the hand-off's update env. Keep comments OUT of the $(...) body: bash 3.2
+    # (macOS /bin/bash) mis-parses an apostrophe in a comment there as an open quote.
     local lp
     lp="$(cd "${RELAUNCH_CWD:-/}" 2>/dev/null || cd /
-     # The relaunched app must not inherit the hand-off's update env.
      env -u HERMES_UPDATE_STATUS_FILE -u HERMES_UPDATE_STARTED_AT -u HERMES_UPDATE_HANDOFF_PID -u PYTHONUNBUFFERED \
        setsid "$RELAUNCH_TARGET" ${RELAUNCH_ARGS[@]+"${RELAUNCH_ARGS[@]}"} >/dev/null 2>&1 &
      echo $!)" || { log "WARNING: relaunch spawn failed"; return 1; }
