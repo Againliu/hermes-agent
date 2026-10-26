@@ -86,6 +86,22 @@ def _field_type(spec: Mapping[str, Any]) -> str:
     return kind
 
 
+def declared_setting_type(segments: tuple[str, ...]) -> Optional[str]:
+    """Wire field type the plugin's ``config_schema`` declares for the dotted config path
+    ``plugins.entries.<id>.settings.<key>`` (*segments* already split); ``None`` for any other path,
+    an unknown plugin or an undeclared key. ``hermes config set`` reads it so ``off`` stays the
+    string a ``type: str`` field expects instead of turning into ``false``."""
+    if len(segments) < 5 or segments[:2] != ("plugins", "entries") or segments[3] != "settings":
+        return None
+    from hermes_cli.plugins_cmd import _find_plugin_entry
+
+    found = _find_plugin_entry(segments[2])
+    if found is None or not found[4]:
+        return None
+    spec = _manifest_config_schema(Path(str(found[4]))).get(".".join(segments[4:]))
+    return _field_type(spec) if spec is not None else None
+
+
 def plugin_settings_fields(plugin_id: str, plugin_dir: Optional[Path]) -> list[dict[str, Any]]:
     """Renderable settings fields for one plugin: schema + the current value of each key.
 

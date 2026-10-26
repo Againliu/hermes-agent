@@ -3091,9 +3091,14 @@ def _coerce_config_set_value(key: str, value: str) -> Any:
     isinstance-gated readers see real structures; the trigger is conservative.
     Bare ``model`` is the exception: its string default is the model-id shorthand, so a structured
     literal there is parsed for the section guard to gate instead of riding into model.default
-    as a bogus id (#131435)."""
+    as a bogus id (#131435). A plugin setting follows the type its manifest ``config_schema``
+    declares the same way."""
+    from hermes_cli.plugins_settings import declared_setting_type
+
     if isinstance(_default_value_for_key(key), str) and not (
             key == "model" and _looks_structured_value(value)):
+        return value
+    if declared_setting_type(tuple(_split_key_path(key))) in ("string", "enum"):
         return value
     stripped = value.strip()
     lower = stripped.lower()

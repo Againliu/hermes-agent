@@ -33,7 +33,7 @@ def home(tmp_path):
 
 
 def _settings(home):
-    return yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))["plugins"]["entries"]["dreamy"]["settings"]
+    return yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8-sig"))["plugins"]["entries"]["dreamy"]["settings"]
 
 
 def test_declared_string_setting_keeps_the_word_and_numbers_still_coerce(home):
