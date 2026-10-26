@@ -40,6 +40,16 @@ export function draftAsCurrent(draft: ProfileDraftResult): Record<string, unknow
   }
 }
 
+/** A Regenerate reply applied to the LATEST draft: only the requested section changes, so a
+ *  slower reply never puts back another section's older text. */
+export function mergeDraftPart(current: ProfileDraftResult, reply: ProfileDraftResult, only: string): ProfileDraftResult {
+  const text = reply.sections.find(s => s.key === only)?.text
+
+  return text === undefined
+    ? current
+    : { ...current, sections: current.sections.map(s => (s.key === only ? { ...s, text } : s)) }
+}
+
 /** SOUL.md from the reviewed sections — same layout the backend composes. */
 export function composeDraftSoul(heading: string, sections: DraftSection[]): string {
   const parts = heading.trim() ? [`# ${heading.trim()}`] : []

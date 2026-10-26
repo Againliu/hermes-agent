@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyDraftCapabilities, composeDraftSoul, decideField, mergeSoulSections } from './profile-draft'
+import {
+  applyDraftCapabilities,
+  composeDraftSoul,
+  decideField,
+  mergeDraftPart,
+  mergeSoulSections,
+  type ProfileDraftResult
+} from './profile-draft'
 
 const saved = [
   '# Scout',
@@ -34,6 +41,26 @@ describe('mergeSoulSections', () => {
     const out = mergeSoulSections(closed, [{ key: 'role', title: 'Role', text: 'New role.' }])
 
     expect(out).toBe(closed.replace('Old role.', 'New role.'))
+  })
+})
+
+describe('mergeDraftPart', () => {
+  it('applies out-of-order Regenerate replies without restoring the other section', () => {
+    const draft = (role: string, voice: string) =>
+      ({
+        sections: [
+          { key: 'role', title: 'Role', text: role },
+          { key: 'voice', title: 'Voice', text: voice }
+        ]
+      }) as ProfileDraftResult
+
+    // Voice then Role were regenerated from the same snapshot; Role's reply lands first.
+    const latest = mergeDraftPart(draft('Old role.', 'Old voice.'), draft('New role.', 'Old voice.'), 'role')
+
+    expect(mergeDraftPart(latest, draft('Old role.', 'New voice.'), 'voice').sections.map(s => s.text)).toEqual([
+      'New role.',
+      'New voice.'
+    ])
   })
 })
 
