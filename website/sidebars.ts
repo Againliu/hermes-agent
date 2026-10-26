@@ -857,6 +857,7 @@ const sidebars: SidebarsConfig = {
             'developer-guide/relay-connector-contract',
             'developer-guide/relay-shared-metrics',
             'developer-guide/streaming-tts',
+            'developer-guide/desktop-idle-contract',
             'developer-guide/billing-lifecycle',
             'developer-guide/trajectory-format',
           ],
