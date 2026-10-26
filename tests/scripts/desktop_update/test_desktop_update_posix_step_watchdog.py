@@ -21,10 +21,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SHIM = REPO_ROOT / "scripts" / "desktop-update" / "posix.sh"
 IDLE_SECONDS = 3
 
-pytestmark = pytest.mark.skipif(
-    not (os.path.exists("/bin/bash") and os.path.exists("/usr/bin/python3")),
-    reason="posix.sh detaches through /bin/bash and /usr/bin/python3",
-)
+pytestmark = [
+    pytest.mark.platforms("posix"),
+    pytest.mark.skipif(
+        not (os.path.exists("/bin/bash") and os.path.exists("/usr/bin/python3")),
+        reason="posix.sh detaches through /bin/bash and /usr/bin/python3",
+    ),
+]
 
 # Stands in for `hermes`: answers the --help probe, then runs HERMES_TEST_UPDATE_BODY as the update.
 FAKE_HERMES = """#!/usr/bin/env bash
@@ -35,7 +38,7 @@ eval "$HERMES_TEST_UPDATE_BODY"
 
 def _process_alive(pid: int) -> bool:
     try:
-        os.kill(pid, 0)  # windows-footgun: ok -- posix-only module (skipif without /bin/bash)
+        os.kill(pid, 0)  # windows-footgun: ok -- posix-only module (platforms("posix"))
     except ProcessLookupError:
         return False
     stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], check=False, capture_output=True, text=True, encoding="utf-8").stdout
