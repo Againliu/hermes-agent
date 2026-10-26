@@ -65,9 +65,10 @@ class GatewayInboundHooksMixin:
     ) -> Optional[str]:
         """Hold a new turn while the host is nearly out of memory (``gateway/admission_memory.py``).
 
-        None = start the turn; a string = reply instead (``""`` = say nothing: /stop or /new
-        superseded the wait). People get one "waiting" notice and, if memory never frees within
-        ``gateway.memory_guard.max_wait_seconds``, a resend notice; nothing runs half-started."""
+        None = start the turn; a string = reply instead (``_hm_memory_wait_abandoned`` when a
+        Stop, /new or a gateway stop ended the wait). People get one "waiting" notice and, if
+        memory never frees within ``gateway.memory_guard.max_wait_seconds``, a resend notice;
+        nothing runs half-started."""
         from gateway.admission_memory import BACKGROUND, PERSON, get_gate, wait_async
         from gateway.config import Platform
 
@@ -84,14 +85,41 @@ class GatewayInboundHooksMixin:
             except Exception:  # health: allow BLE001 -- a lost notice must not drop the held turn
                 logger.warning("memory guard: waiting notice failed for %s", session_key, exc_info=True)
 
-        verdict = await wait_async(
-            kind, on_hold=tell_waiting, still_wanted=lambda: self._is_session_run_current(session_key, generation))
+        from gateway.session_ingress import executing_claim
+        from gateway.session_managed_memory import claim_still_wanted
+        claim = executing_claim.get()
+
+        def still_wanted() -> bool:
+            # A held turn has not started, so a gateway restart/stop refuses it like any new turn.
+            # A Stop through the session (API, Desktop, TUI) before the turn has an agent only
+            # latches the claim's pending Stop; /stop and /new on a chat move the run generation.
+            return (not getattr(self, "_draining", False)
+                    and (claim is None or claim_still_wanted(*claim))
+                    and self._is_session_run_current(session_key, generation))
+
+        verdict = await wait_async(kind, on_hold=tell_waiting, still_wanted=still_wanted)
         if verdict == "admitted":
             return None
         if verdict == "abandoned":
-            return ""
+            return self._hm_memory_wait_abandoned(claim, kind)
         logger.warning("Refusing %s turn for %s: host memory stayed low for %d min", kind, session_key, minutes)
         return t("gateway.busy.memory_gave_up", minutes=minutes) if kind == PERSON else ""
+
+    def _hm_memory_wait_abandoned(self, claim, kind: str) -> str:
+        """The reply for a memory wait that ended without starting: a Stopped claim settles
+        interrupted (as a Stop delivered to its agent would), a draining gateway tells a person it
+        is not taking the turn, anything else (/stop, /new superseded it) says nothing."""
+        from gateway.admission_memory import PERSON
+        from gateway.session_managed_memory import claim_still_wanted
+        if claim is not None and not claim_still_wanted(*claim):
+            from gateway.session_results import execution_result
+            captured = execution_result.get()
+            if captured is not None:
+                captured["result"] = {"final_response": "", "messages": [], "interrupted": True}
+            return ""
+        if getattr(self, "_draining", False) and kind == PERSON:
+            return t("gateway.busy.drain_rejected", action=self._status_action_gerund())
+        return ""
 
     async def _hm_post_admission_consume(
         self, event: MessageEvent, source: SessionSource, session_key: str
