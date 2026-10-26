@@ -518,4 +518,32 @@ describe('ModelPickerDialog local server scan', () => {
     expect(await screen.findByText(/Detected: LM Studio/i)).toBeTruthy()
     expect(vi.mocked(requestModelOptions).mock.calls.some(([req]) => req.detectLocal)).toBe(true)
   })
+
+  it('still scans when it opens during a composer catalog refresh that does not scan', async () => {
+    client.setDefaultOptions({ queries: { retry: false, staleTime: 60_000 } })
+    const queryKey = modelOptionsQueryKey(null, null)
+    client.setQueryData(queryKey, OPTIONS)
+    let finishComposer: (value: ModelOptionsResult) => void = () => undefined
+    // The composer pill refetches the shared key with its own (non-scanning) query fn.
+    void client.fetchQuery({
+      queryKey,
+      queryFn: () => new Promise<ModelOptionsResult>(resolve => (finishComposer = resolve)),
+      staleTime: 0
+    })
+    vi.mocked(requestModelOptions).mockImplementation(async ({ detectLocal }) =>
+      detectLocal
+        ? {
+            ...OPTIONS,
+            providers: [
+              ...OPTIONS.providers,
+              { slug: 'local-ollama', name: 'Detected: Ollama', models: ['llama3'], source: 'detected' }
+            ]
+          }
+        : OPTIONS
+    )
+    renderPicker()
+    finishComposer(OPTIONS)
+
+    expect(await screen.findByText(/Detected: Ollama/i)).toBeTruthy()
+  })
 })

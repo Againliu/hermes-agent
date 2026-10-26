@@ -13,9 +13,9 @@ import { useStore } from '@nanostores/react'
 import { useQuery } from '@tanstack/react-query'
 import { type ReactElement, useMemo, useRef, useState } from 'react'
 
-import { useLocalServerScan } from '@/hooks/use-local-server-scan'
+import { scanningModelOptions, useLocalServerScan } from '@/hooks/use-local-server-scan'
 import { useI18n } from '@/i18n'
-import { catalogProviderMatches, modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
+import { catalogProviderMatches, modelOptionsQueryKey } from '@/lib/model-options'
 import { currentPickerSelection } from '@/lib/model-status-label'
 import { accountResetMs, formatReset, modelResetMs } from '@/lib/provider-limit'
 import { foldIncludes, normalize } from '@/lib/text'
@@ -95,7 +95,7 @@ export function ModelPickerDialog({
 
   const modelOptions = useQuery({
     queryKey: modelOptionsQueryKey(profile, sessionId, ownerConnectionId),
-    queryFn: () => requestModelOptions({ detectLocal: true, gateway: gw, profile, request, sessionId }),
+    queryFn: ({ queryKey }) => scanningModelOptions(queryKey, { gateway: gw, profile, request, sessionId }),
     enabled: open
   })
 
