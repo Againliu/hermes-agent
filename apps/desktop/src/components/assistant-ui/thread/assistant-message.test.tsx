@@ -493,6 +493,24 @@ describe('scheduled retry at the usage-limit reset (#98852)', () => {
     expect(await screen.findByRole('button', { name: 'Retry' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: armName })).toBeNull()
   })
+
+  it('states the rerun the backend armed and offers no client-side retry that would run it twice', async () => {
+    const onReload = vi.fn(async () => {})
+    const resetsAt = Math.floor(Date.now() / 1000) + 600
+
+    const armed = failedMessage(
+      { code: 'rate_limit', layer: 'provider', provider: 'openai', rerunAt: resetsAt + 45, resetsAt, retryable: true },
+      'HTTP 429: {"error":{"message":"Rate limit reached"}}'
+    )
+
+    render(<Harness assistant={armed} onReload={onReload} />)
+
+    expect((await screen.findByTestId('error-rerun-scheduled')).textContent).toMatch(
+      /^Hermes will rerun this at \d\d:\d\d, when the limit resets$/
+    )
+    expect(screen.queryByRole('button', { name: /^Retry when the limit resets/ })).toBeNull()
+    expect(onReload).not.toHaveBeenCalled()
+  })
 })
 
 describe("a window plan's limit: one-click switch and credits (no silent switch)", () => {

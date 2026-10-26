@@ -943,6 +943,24 @@ const ScheduledRetryAction: FC<{ resetsAt: number }> = ({ resetsAt }) => {
   )
 }
 
+// The backend armed its own rerun of this turn (desktop.quota_resume): say when, and offer no
+// client-side retry that would run it twice. No timer: the backend owns the deadline, and a newer
+// turn (the rerun itself, or anything the user sends) retires the note.
+const ScheduledRerunNote: FC<{ rerunAt: number }> = ({ rerunAt }) => {
+  const { t } = useI18n()
+  const stale = useAuiState(s => s.thread.isRunning || !s.message.isLast)
+
+  if (stale) {
+    return null
+  }
+
+  return (
+    <span className="px-1 text-xs text-muted-foreground" data-testid="error-rerun-scheduled">
+      {t.quotaRerun.scheduled(formatResetClock(rerunAt))}
+    </span>
+  )
+}
+
 // health: allow CC -- usage-window limit card: an Open Billing button, and diagnostics hidden for plan limits; this action bar was over target on main
 const ErrorRecoveryActions: FC = () => {
   const { t } = useI18n()
@@ -1116,7 +1134,10 @@ const ErrorRecoveryActions: FC = () => {
           {copy.errorLimitResets(limitReset)}
         </span>
       )}
-      {plan.retry && surface?.resetsAt !== undefined && <ScheduledRetryAction resetsAt={surface.resetsAt} />}
+      {plan.retry && surface?.rerunAt !== undefined && <ScheduledRerunNote rerunAt={surface.rerunAt} />}
+      {plan.retry && surface?.rerunAt === undefined && surface?.resetsAt !== undefined && (
+        <ScheduledRetryAction resetsAt={surface.resetsAt} />
+      )}
       {plan.openBilling && (
         <button className="aui-error-action" onClick={() => requestBillingSettings()} type="button">
           {copy.errorOpenBillingSettings}

@@ -54,6 +54,14 @@ USAGE_API_PROVIDERS = frozenset({"anthropic", "openai-codex"})
 # show "resets Tuesday" — we just refuse to sit on it.
 DEFAULT_MAX_WAIT_SECONDS = 26 * 3600
 
+# Rerunning a refused turn at the reset is opt-in (``desktop.quota_resume.enabled``) on every
+# surface that offers it: Desktop/TUI sessions and messaging-gateway chats.
+RERUN_ENABLED_DEFAULT = False
+# One re-arm covers the common "provider moved the goalposts" case (the window
+# reopened later than first advertised) without letting a mis-reported deadline
+# loop a session forever.
+RERUN_MAX_ATTEMPTS_DEFAULT = 2
+
 # Provider clocks and ours disagree by a second or two, and a window that reopens
 # "at" T often serves the first request a moment later. Resuming a hair early
 # spends the retry on the same wall.

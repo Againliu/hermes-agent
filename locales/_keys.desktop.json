@@ -2648,6 +2648,7 @@
     "prompts.vaultUnlockPlaceholder",
     "prompts.vaultUnlockSendFailed",
     "prompts.vaultUnlockTitle",
+    "quotaRerun.scheduled",
     "remoteDisplayBanner.message",
     "rightSidebar.addToChat",
     "rightSidebar.aria",

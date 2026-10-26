@@ -1278,6 +1278,10 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             text, reason, retryable = _resolution_failure_reply(exc, ctx.source.platform)
             return stamp_failure({"final_response": text, "messages": [], "api_calls": 0, "tools": [],
                                   "failed": True, "completed": False, "error": str(exc)}, reason, retryable)
+        # A provider at a usage limit (agent/usage_hold.py): answer now instead of failing into it.
+        from gateway.run_turn_usage_hold import held_turn_result
+        if (held := held_turn_result(runner, ctx, runtime_kwargs)) is not None:
+            return held
         from gateway.session_authorities import active_authority
         from gateway.session_worker_construct import session_routing
         pr = session_routing(active_authority(runner), policy) if policy else runner._provider_routing

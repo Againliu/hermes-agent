@@ -25,6 +25,9 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 
+from agent.quota_resume import RERUN_ENABLED_DEFAULT as _QUOTA_RESUME_ENABLED_DEFAULT
+from agent.quota_resume import RERUN_MAX_ATTEMPTS_DEFAULT as _QUOTA_RESUME_MAX_ATTEMPTS_DEFAULT
+
 from .method_ctx import bind_module
 
 # Poll cadence for due resumes. Coarse on purpose: the deadline is minutes-to-hours
@@ -32,11 +35,6 @@ from .method_ctx import bind_module
 # a few seconds of slop costs nothing.
 _QUOTA_RESUME_POLL_SECONDS = 15.0
 
-_QUOTA_RESUME_ENABLED_DEFAULT = False
-# One re-arm covers the common "provider moved the goalposts" case (the window
-# reopened later than first advertised) without letting a mis-reported deadline
-# loop a session forever.
-_QUOTA_RESUME_MAX_ATTEMPTS_DEFAULT = 2
 
 _QUOTA_RESUME_NOTE_PREFIX = "[Resumed after a provider usage limit"
 

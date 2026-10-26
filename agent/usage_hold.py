@@ -46,13 +46,13 @@ def hold_key(provider: Any, base_url: Any = "") -> str:
     return name
 
 
-def _path() -> Path:
-    return get_hermes_home() / _FILE_NAME
+def _path(home: Optional[Path] = None) -> Path:
+    return (home or get_hermes_home()) / _FILE_NAME
 
 
-def _load() -> dict[str, dict[str, Any]]:
+def _load(home: Optional[Path] = None) -> dict[str, dict[str, Any]]:
     try:
-        data = json.loads(_path().read_text(encoding="utf-8-sig"))
+        data = json.loads(_path(home).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -92,24 +92,27 @@ def record_hold(
     return hold
 
 
-def active_hold(provider: Any, base_url: Any = "", *, now: Optional[float] = None) -> Optional[dict]:
-    """The live hold for *provider*, or None (expired holds are inert)."""
+def active_hold(
+    provider: Any, base_url: Any = "", *, now: Optional[float] = None, home: Optional[Path] = None,
+) -> Optional[dict]:
+    """The live hold for *provider*, or None (expired holds are inert). ``home`` reads another
+    profile's holds (the kanban dispatcher deciding for an assignee profile)."""
     key = hold_key(provider, base_url)
     if not key:
         return None
-    return _live(_load(), time.time() if now is None else now).get(key)
+    return _live(_load(home), time.time() if now is None else now).get(key)
 
 
-def claim_notice(provider: Any, base_url: Any = "") -> bool:
+def claim_notice(provider: Any, base_url: Any = "", *, home: Optional[Path] = None) -> bool:
     """True exactly once per hold: the caller that gets True posts the one notice."""
     key = hold_key(provider, base_url)
     with _LOCK:
-        data = _live(_load(), time.time())
+        data = _live(_load(home), time.time())
         hold = data.get(key)
         if not hold or hold.get("notified"):
             return False
         hold["notified"] = True
-        atomic_json_write(_path(), data)
+        atomic_json_write(_path(home), data)
     return True
 
 
@@ -145,3 +148,16 @@ def record_from_plan(plan: Any, *, provider: Any, base_url: Any = "", account: s
 
 def format_until(hold: dict[str, Any]) -> str:
     return time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(float(hold["until"])))
+
+
+def configured_route(cfg: dict[str, Any]) -> tuple[str, str, bool]:
+    """``(provider, base_url, has_fallback)`` a profile's config.yaml routes new work to.
+
+    Only what config states: a route nothing names is never held, and a configured fallback chain
+    means the normal fallback runs instead of a hold.
+    """
+    from hermes_cli.fallback_config import get_fallback_chain
+
+    model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+    return (str(model_cfg.get("provider") or ""), str(model_cfg.get("base_url") or ""),
+            bool(get_fallback_chain(cfg)))
