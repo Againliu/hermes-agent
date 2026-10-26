@@ -1181,9 +1181,11 @@ cache); a profile that never created a store answers `None` / `[]`.
 
 ```python
 def summarize(ctx, session_id):
-    s = ctx.sessions.get(session_id)          # id or unique prefix, else None
-    tree = ctx.sessions.usage(session_id, include_subagents=True)
-    kids = ctx.sessions.subagents(session_id)  # every delegate under it, recursively
+    s = ctx.sessions.get(session_id)  # id or unique prefix, else None
+    if s is None:
+        return "no such session"
+    tree = ctx.sessions.usage(s["id"], include_subagents=True)  # the other calls take a full id
+    kids = ctx.sessions.subagents(s["id"])  # every delegate under it, recursively
     return f"{s['title']}: {tree['input_tokens']} in / {tree['output_tokens']} out over {len(kids)} subagents"
 ```
 
