@@ -701,7 +701,7 @@ def _handle_show(args: dict, **kw) -> str:
             # Capped; full log via CLI.
             "events": [_fields(e, _EVENT_FIELDS) for e in kb.list_events(conn, tid)[-50:]],
             # Newest runs, long fields capped; full history via `hermes kanban runs`.
-            "runs": [_fields(r, _RUN_FIELDS) for r in runs],
+            "runs": [{n: r[n] for n in _RUN_FIELDS} for r in runs],
             "runs_omitted": runs_omitted,
             # Same string build_worker_context hands the dispatcher at spawn time.
             "worker_context": kb.build_worker_context(conn, tid)})

@@ -86,3 +86,17 @@ def test_blank_run_summary_and_error_stay_capped(card):
     run = json.loads(raw)["runs"][0]
     assert (run["summary"], run["error"]) == ("", "")
     assert len(raw) < 20_000
+
+
+def test_capped_run_never_poses_as_a_run_with_text_metadata(card):
+    """Capped metadata is display text; it must not land in ``Run.metadata``
+    (declared ``Optional[dict]``) for later code to treat as a dict."""
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    from hermes_cli import kanban_db_context as kbctx
+    _add_runs(card, ["big"], metadata={"log": "m" * 50_000})
+    with kbc.connect() as conn:
+        runs, _ = kbctx.recent_runs(conn, card)
+    assert all(not isinstance(r, kb.Run) or isinstance(r.metadata, (dict, type(None)))
+               for r in runs)
+    assert "[truncated," in runs[0]["metadata"]

@@ -12,13 +12,13 @@ import json
 import os
 import sqlite3
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import TYPE_CHECKING, Any, Optional
 
 import hermes_cli.kanban_db as _kb
 
 if TYPE_CHECKING:
-    from hermes_cli.kanban_db import Attachment, Comment, Run, Task
+    from hermes_cli.kanban_db import Attachment, Comment, Task
 
 # build_worker_context() caps, sized for a ~100k-char prompt with headroom.
 _CTX_MAX_PRIOR_ATTEMPTS = 10      # most recent N prior runs shown in full
@@ -234,21 +234,23 @@ def recent_comments(conn: sqlite3.Connection, task_id: str) -> tuple[list[Commen
     return capped, len(comments) - len(shown)
 
 
-def recent_runs(conn: sqlite3.Connection, task_id: str) -> tuple[list[Run], int]:
+def recent_runs(conn: sqlite3.Connection, task_id: str) -> tuple[list[dict[str, Any]], int]:
     """The bounded run read ``kanban_show`` returns: the newest
-    ``_CTX_MAX_PRIOR_ATTEMPTS`` runs, each summary/error capped at
-    ``_CTX_MAX_FIELD_BYTES`` (oversized metadata becomes its capped JSON text),
-    and how many older runs were left out. ``list_runs`` is the full history."""
+    ``_CTX_MAX_PRIOR_ATTEMPTS`` runs as response dicts, each summary/error
+    capped at ``_CTX_MAX_FIELD_BYTES`` (oversized metadata becomes its capped
+    JSON text), and how many older runs were left out. Dicts, not ``Run``: the
+    capped display text must not masquerade as ``Run.metadata``. ``list_runs``
+    is the full history."""
     runs = _kb.list_runs(conn, task_id)
     shown, _ = _ctx_tail(runs, _CTX_MAX_PRIOR_ATTEMPTS, "attempt")
     capped = []
     for run in shown:
         meta = run.metadata
         meta_json = json.dumps(meta, ensure_ascii=False, sort_keys=True) if meta else ""
-        capped.append(replace(
-            run, summary=None if run.summary is None else _ctx_cap(run.summary),
-            error=None if run.error is None else _ctx_cap(run.error),
-            metadata=meta if len(meta_json) <= _CTX_MAX_FIELD_BYTES else _ctx_cap(meta_json)))
+        capped.append({
+            **asdict(run), "summary": None if run.summary is None else _ctx_cap(run.summary),
+            "error": None if run.error is None else _ctx_cap(run.error),
+            "metadata": meta if len(meta_json) <= _CTX_MAX_FIELD_BYTES else _ctx_cap(meta_json)})
     return capped, len(runs) - len(shown)
 
 
