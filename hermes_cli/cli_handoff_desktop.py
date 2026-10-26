@@ -10,11 +10,13 @@ one process at a time (the active-session lease), so — exactly like ``/handoff
 
 from __future__ import annotations
 
+import logging
 import os
-import shutil
 import subprocess
 import sys
 from urllib.parse import quote
+
+logger = logging.getLogger(__name__)
 
 
 def _cp(*lines: str) -> None:
@@ -49,16 +51,20 @@ def launch_os_url(url: str) -> str | None:
     """
     try:
         if sys.platform == "win32":
-            os.startfile(url)  # noqa: S606 — protocol dispatch via the shell association
+            os.startfile(url)  # protocol dispatch via the shell association
             return None
-        opener = "open" if sys.platform == "darwin" else shutil.which("xdg-open")
+        if sys.platform == "darwin":
+            opener = "open"
+        else:
+            from hermes_platform.resolver import locate_command
+            opener = next(iter(locate_command("xdg-open").command), None)
         if not opener:
             return "xdg-open is not installed, so no hermes:// handler can be reached from here."
         proc = subprocess.run(
             [opener, url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE, timeout=20, check=False,
         )
-    except Exception as exc:  # opener missing/crashed/timed out — all mean "not opened"
+    except (OSError, subprocess.SubprocessError) as exc:  # opener missing/crashed/timed out
         return f"could not run the URL opener: {exc}"
     if proc.returncode != 0:
         detail = (proc.stderr or b"").decode(errors="replace").strip()
@@ -77,8 +83,8 @@ def handoff_to_desktop(cli) -> bool:
     try:
         from hermes_cli.profiles import current_profile_name
         profile = current_profile_name()
-    except Exception:
-        pass
+    except Exception:  # the hint is optional: Desktop opens the chat without it
+        logger.debug("could not resolve the active profile for /handoff desktop", exc_info=True)
     url = desktop_session_url(cli.session_id, profile)
     reason = launch_os_url(url)
     if reason:

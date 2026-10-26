@@ -146,5 +146,8 @@ describe('resolveDeepLinkAction', () => {
   it('drops a session link whose id is not the stored-session shape', () => {
     expect(resolveDeepLinkAction({ kind: 'session', name: '../settings', params: {} })).toEqual({ type: 'ignore' })
     expect(resolveDeepLinkAction({ kind: 'session', name: '', params: {} })).toEqual({ type: 'ignore' })
+    // The kind is external input: prototype keys never reach a resolver.
+    expect(resolveDeepLinkAction({ kind: 'toString', name: 'x', params: {} })).toEqual({ type: 'ignore' })
+    expect(resolveDeepLinkAction({ kind: '__proto__', name: 'x', params: {} })).toEqual({ type: 'ignore' })
   })
 })
