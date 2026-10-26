@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import agent.redact_known_values as known
+from agent.redact import redact_sensitive_text
 from agent.redact_known_values import MARKER, clear_known_secret_values, redact_known_secret_values
 
 # Built by concatenation: opaque, no vendor prefix, never a real credential.
@@ -53,6 +54,13 @@ def test_malformed_mcp_url_does_not_stop_other_sources(tmp_path):
     (tmp_path / "config.yaml").write_text(
         "mcp_servers:\n  broken:\n    enabled: false\n    url: 'https://[broken/?k=x'\n", encoding="utf-8")
     assert redact_known_secret_values(f"value {ENV_VAL}", home=tmp_path) == f"value {MARKER}"
+
+
+def test_bracketed_authorization_value_is_masked_but_marker_is_kept():
+    opaque = "opaqueCredential" + "12345abcde"
+    out = redact_sensitive_text(f"Authorization: [{opaque}]", force=True)
+    assert opaque not in out
+    assert redact_sensitive_text("Authorization: [REDACTED]", force=True) == "Authorization: [REDACTED]"
 
 
 @pytest.mark.parametrize("safe_mode", [True, False])
