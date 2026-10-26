@@ -4,6 +4,11 @@
       "count": 1
     }
   },
+  "src/app/capabilities/catalog/catalog-featured-slider.tsx": {
+    "no-restricted-properties": {
+      "count": 1
+    }
+  },
   "src/app/chat/composer/hooks/use-voice-conversation.ts": {
     "no-restricted-properties": {
       "count": 1
@@ -24,7 +29,7 @@
       "count": 1
     }
   },
-  "src/app/chat/composer/status-stack/session-control-heartbeat.tsx": {
+  "src/app/chat/composer/status-stack/session-control-utils.ts": {
     "no-restricted-properties": {
       "count": 1
     }
@@ -124,6 +129,11 @@
       "count": 2
     }
   },
+  "src/components/onboarding/onboarding-end.tsx": {
+    "no-restricted-properties": {
+      "count": 1
+    }
+  },
   "src/components/pet/floating-pet.tsx": {
     "no-restricted-properties": {
       "count": 1
@@ -174,18 +184,8 @@
       "count": 1
     }
   },
-  "src/store/free-tier-sign-in.ts": {
-    "no-restricted-properties": {
-      "count": 1
-    }
-  },
   "src/store/mcp-health.ts": {
     "no-restricted-globals": {
-      "count": 1
-    }
-  },
-  "src/store/onboarding.ts": {
-    "no-restricted-properties": {
       "count": 1
     }
   },

@@ -100,6 +100,8 @@
   ),
 :root[data-renderer-animations-paused] .arc-border::before,
 :root[data-renderer-animations-paused] .tour-pop-accent::before,
+/* tw-shimmer sweeps a ::before whose play state is its own custom property. */
+:root[data-renderer-animations-paused] .shimmer::before,
 :root[data-renderer-animations-paused]
   [data-slot='aui_assistant-message-content']
   .aui-md
