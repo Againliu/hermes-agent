@@ -78,6 +78,11 @@ elif role == "hermes":
     time.sleep(0.2)
     info["child"] = json.load(open(report, encoding="utf-8-sig"))
 else:
+    checkpoint = os.path.join(os.environ["HERMES_HOME"], "processes.json")
+    entries = json.load(open(checkpoint, encoding="utf-8-sig")) if os.path.exists(checkpoint) else []
+    info["checkpoint"] = [(e.get("pid"), e.get("host_start_time"), registry._safe_host_start_time(e.get("pid")),
+                           registry._detached_host_fate(e.get("pid"), e.get("host_start_time")), e.get("output_log"))
+                          for e in entries]
     info.update(recovered=registry.recover_from_checkpoint(), pids=[s.pid for s in registry._running.values()])
 with open(out + ".tmp", "w", encoding="utf-8") as f:
     f.write(json.dumps(info))
@@ -259,13 +264,11 @@ def test_gateway_killed_by_terminate_process_frees_its_shell_for_the_reap(world)
     assert not lane.exists()
 
 
-def _gateway_whose_owners_dir_denies_writes(world, lane):
-    """``locks/`` denies writes (the deny stays: it does not stop the temp dir's cleanup deleting
-    it), so the gateway's owner lock cannot be taken: ownership is unknown, not \"nobody\"."""
-    locks = world.home / "locks"
-    locks.mkdir()
-    subprocess.run(["icacls", str(locks), "/deny", "*S-1-1-0:(OI)(CI)(W)"], check=True, capture_output=True,
-                   stdin=subprocess.DEVNULL, timeout=60, creationflags=NO_WINDOW)
+def _gateway_whose_owners_dir_is_unusable(world, lane):
+    """A file squats on the owners dir's path, so the gateway's owner lock cannot be taken:
+    ownership is unknown, not \"nobody\"."""
+    (world.home / "locks").mkdir()
+    (world.home / "locks" / "scratch-owners").write_text("not a dir", encoding="utf-8")
     return world.gateway(lane, shell="cmd")["shell"], "scratch owner locks unavailable"
 
 
@@ -302,9 +305,9 @@ def _background_hermes_command(world, lane):
 
 
 @pytest.mark.parametrize("make", [_recovered_worker, _tui_backend_helper, _background_hermes_command,
-                                  _gateway_whose_owners_dir_denies_writes],
+                                  _gateway_whose_owners_dir_is_unusable],
                          ids=["recovered-by-next-gateway", "tui-backend-helper", "background-hermes-command",
-                              "owners-dir-denies-writes"])
+                              "owners-dir-unusable"])
 def test_a_process_hermes_owns_or_may_own_keeps_its_idle_entry(world, make):
     """Each process is Hermes-owned through an owner lock, or its ownership cannot be known: neither
     it nor its idle entry may be pruned, and an unknown is named in the audit log."""
