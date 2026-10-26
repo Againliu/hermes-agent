@@ -119,19 +119,37 @@ def _delimiter(path: Path) -> str | None:
     return {".csv": ",", ".tsv": "\t"}.get(suffix)
 
 
+def _unique_pairs(pairs: list) -> dict:
+    keys = [k for k, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise SystemExit("a JSON object repeats a key; the later value would hide the earlier one from the scan")
+    return dict(pairs)
+
+
 def read_rows(path: Path):
-    """Return (columns, rows) for tabular files, or (None, [text]) for free text."""
+    """Return (columns, rows) for tabular files, or (None, [text]) for free text.
+
+    Every cell must land under its own column: a repeated header or an overlong
+    row would hide a cell from the per-column scan, so both are refused.
+    """
     delim = _delimiter(path)
     with path.open(encoding="utf-8", errors="replace", newline="") as fh:
         if delim:
             reader = csv.DictReader(fh, delimiter=delim)
-            rows = [{k or "": v or "" for k, v in row.items()} for row in reader]
-            return list(reader.fieldnames or []), rows
+            cols = list(reader.fieldnames or [])
+            if len(set(cols)) != len(cols):
+                raise SystemExit("the header repeats a column name; rename it so every column is scanned")
+            rows = []
+            for row in reader:
+                if None in row:
+                    raise SystemExit(f"line {reader.line_num} has more cells than the header")
+                rows.append({k: v or "" for k, v in row.items()})
+            return cols, rows
         if path.suffix.lower() in {".jsonl", ".ndjson"}:
             rows = []
             for line in fh:
                 if line.strip():
-                    obj = json.loads(line)
+                    obj = json.loads(line, object_pairs_hook=_unique_pairs)
                     rows.append({str(k): v if isinstance(v, str) else json.dumps(v) for k, v in obj.items()})
             cols = sorted({k for r in rows for k in r})
             return cols, rows

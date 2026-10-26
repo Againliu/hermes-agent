@@ -116,6 +116,19 @@ def test_clean_file_reports_all_zero_and_k_anonymity_groups(ds, capsys, tmp_path
     assert report["all_zero"] is False
 
 
+@pytest.mark.parametrize("name,content", [
+    ("dup_header.csv", f"notes,notes\n{EMAIL},ok\n"),
+    ("wide_row.csv", f"notes\nok,{EMAIL}\n"),
+    ("dup_key.jsonl", f'{{"notes": "{EMAIL}", "notes": "ok"}}\n'),
+])
+def test_cells_that_would_hide_from_the_per_column_scan_are_refused(ds, capsys, tmp_path, name, content):
+    path = tmp_path / name
+    path.write_text(content, encoding="utf-8")
+    code, report, raw = _run(ds, capsys, "scan", str(path))
+    assert code == 2 and "all_zero" not in report
+    assert EMAIL not in raw
+
+
 def test_parse_error_reports_only_its_type(ds, capsys, tmp_path):
     bad = tmp_path / "bad.jsonl"
     bad.write_text(f'{{"email": "{EMAIL}"}}\n{{"email": "{EMAIL}", oops}}\n', encoding="utf-8")
