@@ -10,6 +10,8 @@
  * unread > idle. A row shows exactly one of these.
  */
 
+import type { RosterSessionSignals } from '@hermes/plugin-sdk'
+
 export type BotStatusKind = 'failed' | 'idle' | 'needs-you' | 'routine' | 'unread' | 'working'
 
 /** Why a row needs you. Prompt-derived waits (a clarify, an approval, a
@@ -39,8 +41,8 @@ const WORKING_DOTS: ReadonlySet<string> = new Set(['background', 'stalled', 'wor
 
 export interface BotStatusSignals {
   /** Resolved status of the bot's canonical chat (`needs-input`, `working`, …). */
-  dot?: null | string
-  prompt?: null | { kind: 'approval' | 'clarify'; text: string }
+  dot?: null | RosterSessionSignals['dots'][string]
+  prompt?: null | RosterSessionSignals['prompts'][string]
   failure?: null | { message?: string; reason: string }
   routineRunning?: boolean
   /** The roster's own working read (focused turn, live worker, room turn). */

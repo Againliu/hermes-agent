@@ -1,3 +1,5 @@
+import type { RosterSessionSignals } from '@hermes/plugin-sdk'
+
 import { botActivitySession } from './data'
 import { botRosterKey, botSelectionKey, filterBots, preferReachableSameNameRows } from './data'
 import type { $groupChats } from './group-chat'
@@ -270,11 +272,7 @@ export function sortRosterBots(sourceWithSelectedOwner: RosterRow[], allMeta: Re
  *  the Desktop: no field needs a new RPC. */
 export interface RosterStatusInput {
   /** `$rosterSessionSignals` from the SDK. */
-  signals: {
-    dots: Readonly<Record<string, string>>
-    prompts: Readonly<Record<string, { kind: 'approval' | 'clarify'; text: string }>>
-    routines: readonly string[]
-  }
+  signals: RosterSessionSignals
   attention: Record<string, { message: string; reason: string }>
   /** Roster keys whose face reads working (focused turn, live worker, room turn). */
   workingKeys: ReadonlySet<string>

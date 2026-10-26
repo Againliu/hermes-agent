@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { deriveRosterRows, type RosterStatusInput, rosterStatusResolvers } from './roster-pane-derivation'
-import { deriveBotStatus, deriveGroupStatus } from './roster-status'
+import { type BotStatusSignals, deriveBotStatus, deriveGroupStatus } from './roster-status'
 import type { BotMeta, RosterRow } from './types'
 
 const bot = (name: string, extra: Partial<RosterRow> = {}): RosterRow =>
@@ -66,7 +66,7 @@ const bandNames = (out: ReturnType<typeof rows>) =>
 
 describe('deriveBotStatus precedence', () => {
   it('shows exactly one state, loudest first: needs you > routine > working > failed > unread > idle', () => {
-    const everything = {
+    const everything: BotStatusSignals = {
       dot: 'unread',
       prompt: { kind: 'clarify' as const, text: 'Which branch?' },
       failure: { reason: 'provider_quota_limit', message: 'out of credits' },
