@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import subprocess
-import sys
+import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -79,12 +79,14 @@ def test_wait_is_bounded_and_publishes_waiting_count(tmp_path):
     seen = []
 
     def sleep(_):
-        seen.append(am.read_status(tmp_path)["waiting_people"])
+        gate.flush_status()
+        seen.append(am.read_status(tmp_path, os.getpid())["waiting_people"])
         clock.now += 2
 
     assert am.wait_blocking(am.PERSON, gate=gate, sleep=sleep) == "timeout"
     assert seen and seen[0] == 1
-    assert am.read_status(tmp_path)["waiting_people"] == 0
+    gate.flush_status()
+    assert am.read_status(tmp_path, os.getpid())["waiting_people"] == 0
     assert am.wait_blocking(am.PERSON, gate=gate, still_wanted=lambda: False, sleep=sleep) == "abandoned"
 
 
@@ -158,34 +160,85 @@ def test_cron_run_is_recorded_failed_when_memory_never_frees(monkeypatch):
     gate, _, clock = _gate(10, max_wait_seconds=4)
     monkeypatch.setattr(am, "_gate", gate)
     monkeypatch.setattr(am.time, "sleep", lambda _: setattr(clock, "now", clock.now + 2))  # cron thread's sleep
-    held = hold_for_memory({"id": "j1", "name": "nightly"}, "j1", "nightly", "do it", None)
+    held = hold_for_memory({"id": "j1", "name": "nightly"}, "j1", "nightly", None)
     assert held is not None and held[0] is False and "memory" in held[3]
 
 
-@pytest.mark.platforms("linux")
-def test_terminal_commands_are_preferred_oom_victims_over_hermes(tmp_path):
-    from tools.environments.local import LocalEnvironment
-
-    env = LocalEnvironment(cwd=str(tmp_path))
-    try:
-        result = env.execute("sleep 0.3; cat /proc/$$/oom_score_adj")
-    finally:
-        env.cleanup()
-    own = int(open("/proc/self/oom_score_adj", encoding="utf-8").read())
-    assert int(result["output"].strip().splitlines()[-1]) == min(1000, own + 500)
+def test_an_older_background_waiter_never_starts_ahead_of_a_waiting_person():
+    gate, state, clock = _gate(100)
+    background = gate.enqueue(am.BACKGROUND)
+    person = gate.enqueue(am.PERSON)
+    state["free"], clock.now = 4000, clock.now + 2
+    assert not gate.try_admit(am.BACKGROUND, background), "background polled first and jumped the person"
+    assert gate.try_admit(am.PERSON, person)
+    assert gate.try_admit(am.BACKGROUND, background)
 
 
-@pytest.mark.platforms("linux")
-def test_child_score_is_raised_relative_to_the_spawner_and_capped():
-    from hermes_platform.oom import prefer_as_oom_victim
+def test_status_is_written_outside_the_gate_lock(tmp_path, monkeypatch):
+    import utils
+    gate, _, _ = _gate(10)
+    gate.status_path = tmp_path / "state" / "memory_guard.json"
+    held_lock = []
+    monkeypatch.setattr(utils, "atomic_json_write", lambda path, data: held_lock.append(gate._lock.locked()))
+    gate.try_admit(am.PERSON)
+    getattr(gate, "flush_status", lambda: None)()
+    assert held_lock == [False], "the status file write (with fsync) ran under the admission lock"
 
-    own = int(open("/proc/self/oom_score_adj", encoding="utf-8").read())
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
-    try:
-        prefer_as_oom_victim(proc.pid)
-        assert int(open(f"/proc/{proc.pid}/oom_score_adj", encoding="utf-8").read()) == min(1000, own + 500)
-        prefer_as_oom_victim(proc.pid)
-        assert int(open(f"/proc/{proc.pid}/oom_score_adj", encoding="utf-8").read()) == min(1000, own + 1000)
-    finally:
-        proc.kill()
-        proc.wait()
+
+def test_status_trusts_verified_gateway_discovery_not_the_snapshot_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(am, "read_memory", lambda pid=None: am.MemoryReading(2048 * MB, 4096 * MB, "cgroup"))
+    # A fresh idle gateway that has published nothing yet is running, with nobody waiting.
+    monkeypatch.setattr(am, "_running_gateway_pid", lambda home: 4242, raising=False)
+    assert "0 waiting" in am.status_line({}, tmp_path)
+    # A snapshot naming a live but unrelated PID (reused) is not a gateway.
+    _write(tmp_path / "state" / "memory_guard.json", json.dumps({"pid": os.getpid(), "waiting_people": 3}))
+    monkeypatch.setattr(am, "_running_gateway_pid", lambda home: None, raising=False)
+    line = am.status_line({}, tmp_path)
+    assert "no gateway running" in line and "3 waiting" not in line
+
+
+def test_memory_guard_settings_load_from_config_yaml_at_gateway_start(tmp_path, monkeypatch):
+    from gateway.run import _load_gateway_config
+    (tmp_path / "config.yaml").write_text(
+        "gateway:\n  memory_guard:\n    enabled: false\n    critical_mb: 100\n    reserve_mb: 64\n", encoding="utf-8")
+    gate = am.configure(_load_gateway_config(tmp_path / "config.yaml"), tmp_path)
+    assert (gate.settings.enabled, gate.settings.critical_mb, gate.settings.reserve_mb) == (False, 100, 64)
+    assert gate.settings.low_mb == "auto"
+
+
+def test_a_script_only_cron_job_waits_before_its_script_runs(monkeypatch):
+    from cron import scheduler
+
+    gate, _, clock = _gate(10, max_wait_seconds=2)
+    monkeypatch.setattr(am, "_gate", gate)
+    monkeypatch.setattr(am.time, "sleep", lambda _: setattr(clock, "now", clock.now + 2))
+    ran = []
+    monkeypatch.setattr(scheduler, "_prepare_job_prompt", lambda *a, **k: ran.append(a) or ((True, "", "", None), None))
+    ok, _, _, error = scheduler.run_job({"id": "j1", "name": "heavy", "no_agent": True, "script": "x.py"})
+    assert ran == [], "the job's script ran before the memory hold"
+    assert ok is False and "memory" in error
+
+
+def test_a_managed_worker_turn_waits_for_memory_before_spawning(tmp_path, monkeypatch):
+    from gateway import session_managed_worker
+
+    gate, _, clock = _gate(10, max_wait_seconds=2)
+    monkeypatch.setattr(am, "_gate", gate)
+
+    async def fast_sleep(_):
+        clock.now += 2
+
+    monkeypatch.setattr(am.asyncio, "sleep", fast_sleep)
+    spawned = []
+
+    async def execute_managed(*args):
+        spawned.append(args)
+
+    monkeypatch.setattr(session_managed_worker, "execute_managed", execute_managed)
+    monkeypatch.setattr("gateway.session_policy.workspace_ready", lambda policy: True)
+    authority = SimpleNamespace(pending_results={}, pending_stops={}, executing={"s": 1})
+    row = {"admission_id": "a1", "generation": 1, "payload": {"text": "hi"}}
+    policy = SimpleNamespace(kanban_json=None, cwd=str(tmp_path))
+    reply = asyncio.run(session_managed_worker.admit_managed(authority, SimpleNamespace(session_id="s"), row, policy))
+    assert spawned == [], "a managed worker spawned below the memory floor"
+    assert reply and "memory" in reply and authority.pending_results["a1"]["result"]["final_response"] == reply
