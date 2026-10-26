@@ -21,7 +21,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
 # 127.0.0.1, never "localhost": resolving localhost costs ~2s per request on Windows.
@@ -94,17 +93,31 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
 
 
+def _read_body(r, deadline: float) -> bytes | None:
+    """The response body, or ``None`` past the size cap or the deadline. The socket timeout only
+    bounds each read, so a server dripping bytes just under it would otherwise hold the probe."""
+    chunks: list[bytes] = []
+    size = 0
+    while chunk := r.read1(64 * 1024):
+        size += len(chunk)
+        if size > _MAX_BODY_BYTES or time.monotonic() > deadline:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _get_json(url: str, timeout: float):
+    deadline = time.monotonic() + timeout
     try:
         with _OPENER.open(urllib.request.Request(url, headers={"Accept": "application/json"}), timeout=timeout) as r:
             if r.status != 200:
                 return None
-            body = r.read(_MAX_BODY_BYTES + 1)
+            body = _read_body(r, deadline)
     # HTTPException: whatever answers on a scanned port may speak broken HTTP (bad status line,
     # truncated chunked body); that port yields no row instead of failing the whole scan.
     except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
         return None
-    if len(body) > _MAX_BODY_BYTES:
+    if body is None:
         return None
     try:
         return json.loads(body)
@@ -164,12 +177,22 @@ def detect_local_servers(
             return list(_cache[1]) if _cache is not None else []
         if not refresh and _cache is not None and time.monotonic() - _cache[0] < _CACHE_TTL_S:
             return list(_cache[1])
-    pool = ThreadPoolExecutor(max_workers=len(KNOWN_SERVERS), thread_name_prefix="local-model-probe")
-    futures = [pool.submit(probe_port, k.port, expected=k, timeout=timeout) for k in KNOWN_SERVERS]
+    hits: dict[int, DetectedServer | None] = {}
+
+    def _probe(k: _Kind) -> None:
+        hits[k.port] = probe_port(k.port, expected=k, timeout=timeout)
+
+    from agent.memory_provider import spawn_context_thread
+
+    # Daemon threads: a probe still running when the scan gives up never holds interpreter exit.
+    threads = [spawn_context_thread(_probe, args=(k,), name=f"local-model-probe-{k.port}") for k in KNOWN_SERVERS]
+    for t in threads:
+        t.start()
     # Ollama's /api/tags fallback can add a second request; never wait past two probe budgets.
-    done, _ = wait(futures, timeout=timeout * 2 + 0.2)
-    pool.shutdown(wait=False, cancel_futures=True)
-    found = [hit for f in futures if f in done and (hit := f.result()) is not None]
+    give_up = time.monotonic() + timeout * 2 + 0.2
+    for t in threads:
+        t.join(max(0.0, give_up - time.monotonic()))
+    found = [hit for k in KNOWN_SERVERS if (hit := hits.get(k.port)) is not None]
     with _cache_lock:
         _cache = (time.monotonic(), found)
     return list(found)

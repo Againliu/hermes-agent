@@ -316,3 +316,17 @@ def test_a_port_speaking_broken_http_does_not_fail_the_scan(servers, monkeypatch
 
     assert [s.kind for s in detect.detect_local_servers(refresh=True)] == ["ollama"]
 
+
+def test_a_server_dripping_bytes_cannot_hold_a_probe(servers, monkeypatch):
+    """Each byte arrives under the socket timeout, so only a total deadline ends the probe."""
+    def drip(conn):
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n")
+        for _ in range(100):
+            conn.sendall(b" ")
+            time.sleep(0.05)  # health: allow HX013 -- the drip delay is the behaviour under test
+
+    port = _raw_server(drip)
+    started = time.monotonic()
+    assert detect.probe_port(port, expected=detect._Kind("vllm", "vLLM", port), timeout=0.4) is None
+    assert time.monotonic() - started < 2
+
