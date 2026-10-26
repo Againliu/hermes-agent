@@ -328,6 +328,12 @@ def _list_format(args) -> str:
     return "json" if getattr(args, "json", False) else getattr(args, "format", "table")
 
 
+def _prose_stream(args):
+    """stderr while stdout is a machine document (``--json``, ``--format json|tsv``), so an error never
+    lands where a parser reads; stdout otherwise, as before."""
+    return sys.stderr if getattr(args, "json", False) or getattr(args, "format", None) in ("json", "tsv") else sys.stdout
+
+
 def _print_sessions_machine(sessions, output_format, *, truncated=False):
     if output_format == "json":
         from hermes_cli.cli_json import print_json_document
@@ -1439,9 +1445,10 @@ def cmd_sessions(args, sessions_parser=None):
         # mode=ro cannot create the store; a reader on a fresh profile reports empty rather than failing.
         if observational and not path.exists():
             return _print_empty_store(action, args)
+        out = _prose_stream(args)
         print("Could not open your session history database. "
-              "Run: hermes sessions repair to fix it (a backup is made first).")
-        print(f"Details: {e}")
+              "Run: hermes sessions repair to fix it (a backup is made first).", file=out)
+        print(f"Details: {e}", file=out)
         return 1
     try:
         handler = _DB_HANDLERS.get(action)
@@ -1464,7 +1471,8 @@ def cmd_sessions(args, sessions_parser=None):
             if not observational or not _schema_not_built(e):
                 raise
             # A read-only opener skips schema migration, so a store from an older release can lack a column.
-            print(f"Error: session database needs migration — run any writing hermes command first ({e})")
+            print(f"Error: session database needs migration — run any writing hermes command first ({e})",
+                  file=_prose_stream(args))
             return 1
     finally:
         db.close()

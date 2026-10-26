@@ -106,3 +106,24 @@ def test_json_flag_is_format_json(tmp_path, monkeypatch, capsys):
     assert (row["id"], row["workspace"], row["model"]) == ("session-alpha", "/work/alpha", "test-model")
     with pytest.raises(SystemExit):
         _run_list(capsys, "--json", "--format", "tsv")
+
+
+def _unreadable_store(path):
+    path.write_bytes(b"not a sqlite database" * 64)
+
+
+def _store_from_older_release(path):
+    import sqlite3
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY)")
+
+
+@pytest.mark.parametrize("make_store", [_unreadable_store, _store_from_older_release], ids=["unopenable", "needs-migration"])
+def test_json_store_errors_go_to_stderr_with_empty_stdout(tmp_path, monkeypatch, capsys, make_store):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    make_store(tmp_path / "state.db")
+    parser = argparse.ArgumentParser()
+    build_sessions_parser(parser.add_subparsers(), cmd_sessions=sessions_cmd.cmd_sessions)
+    assert sessions_cmd.cmd_sessions(parser.parse_args(["sessions", "list", "--json"])) == 1
+    out = capsys.readouterr()
+    assert out.out == "" and out.err.strip()
