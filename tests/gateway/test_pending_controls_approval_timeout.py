@@ -56,3 +56,19 @@ def test_answered_approval_settles_without_a_timeout_reason(monkeypatch):
     _wait(monkeypatch, notify, lambda: "set")
 
     assert not any(payload.get("reason") == "timeout" for _, payload in published)
+
+
+def test_a_raising_settle_hook_does_not_skip_the_shared_card_teardown(monkeypatch):
+    controls, published = _controls()
+
+    def broken_hook(reason):
+        raise RuntimeError("chat notice failed")
+
+    def notify(data):
+        mod.register_gateway_settle(SESSION_KEY, data["request_id"], broken_hook)
+        controls.register("s", SESSION_KEY, 7, data)
+
+    _wait(monkeypatch, notify, lambda: "timeout")
+
+    assert [p.get("reason") for kind, p in published if kind == "approval.settled"] == ["timeout"]
+    assert controls.pending == {}

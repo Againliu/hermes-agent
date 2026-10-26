@@ -35,7 +35,7 @@ from tools.approval_floors import (
     _command_matches_permanent_allowlist, _hardline_block_result, _match_user_deny_rule, _sudo_stdin_block_result,
     _user_deny_block_result,
 )
-from tools.approval_gateway_wait import _await_gateway_decision
+from tools.approval_gateway_wait import _SettleHooks, _await_gateway_decision
 from tools.approval_prompt import _present_with_selected_transport, _transport_choice, prompt_dangerous_approval
 from tools.approval_smart import _smart_verdict
 
@@ -206,8 +206,9 @@ def register_gateway_settle(session_key: str, request_id: str, settle) -> bool:
     with _lock:
         for entry in _gateway_queues.get(session_key, []):
             if entry.data.get("request_id") == request_id:
-                earlier = entry.settle
-                entry.settle = settle if earlier is None else (lambda reason: (earlier(reason), settle(reason)))
+                if entry.settle is None:
+                    entry.settle = _SettleHooks()
+                entry.settle.append(settle)
                 return True
     return False
 

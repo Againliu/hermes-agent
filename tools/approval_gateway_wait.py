@@ -22,6 +22,17 @@ from tools.approval_human_wait import activity_heartbeat, human_wait_window
 logger = logging.getLogger("tools.approval")
 
 
+class _SettleHooks(list):
+    """An approval's independent settle hooks; one that raises never keeps the next from hearing the outcome."""
+
+    def __call__(self, reason: str) -> None:
+        for hook in self:
+            try:
+                hook(reason)
+            except Exception:
+                logger.debug("approval settle hook failed", exc_info=True)
+
+
 class _ApprovalEntry:
     """One pending dangerous-command approval inside a gateway session."""
     __slots__ = ("acknowledged", "cancelled", "data", "event", "expired", "reason", "result", "settle")
@@ -214,10 +225,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
                 reason = "resolved" if choice is not None else "session_closed"
             else:
                 reason = state
-            try:
-                settle(reason)
-            except Exception:
-                logger.debug("approval settle hook failed", exc_info=True)
+            settle(reason)
         return choice
 
     from tools.human_input_hooks import human_input_request
