@@ -77,3 +77,15 @@ def test_profile_list_json_envelope(tmp_path, monkeypatch, capsys):
     assert by_name["default"]["is_active"] is True and by_name["work"]["is_active"] is False
     assert by_name["default"]["has_env"] is True and by_name["default"]["provider"] == "openrouter"
     assert "sk-secret-value" not in out and "SOUL-CONTENT" not in out
+
+
+def test_doctor_json_connectivity_status_comes_from_the_probe_not_its_symbol(monkeypatch, capsys):
+    """Changing a display symbol must not change which connectivity checks reach the JSON report."""
+    from hermes_cli import doctor, doctor_connectivity
+
+    monkeypatch.setattr(doctor_connectivity, "_GLYPH", {s: (f"[{s}]", "") for s in ("ok", "warn", "fail")})
+    monkeypatch.setattr(doctor, "build_probes", list)
+    monkeypatch.setattr(doctor, "run_probes", lambda _p: [doctor_connectivity._row("Stand-in API", "warn", "(slow)")])
+    run_doctor_json(lambda: doctor._check_api_connectivity(False))
+    rows = json.loads(capsys.readouterr().out)["checks"]
+    assert [(r["status"], r["message"], r["detail"]) for r in rows] == [("warn", "Stand-in API", "slow")]

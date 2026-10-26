@@ -106,20 +106,16 @@ def _check_api_connectivity(should_fix: bool, f: Finding) -> None:
     results = run_probes(probes)
     print("\r" + " " * 70 + "\r", end="")
     for r in results:
-        for glyph, label, detail in r.lines:
-            report = next((fn for mark, fn in _GLYPH_REPORTERS if mark in glyph), None)
-            if report is None:
-                print(f"  {glyph} {label}" + (f" {detail}" if detail else ""))
-            else:
-                report(label, detail)
+        for _glyph, label, detail in r.lines:
+            _STATUS_REPORTERS[r.status](label, detail)
         if r.issues and not _has_healthy_oauth_fallback_for_apikey_provider(r.label):
             f.issues.extend(r.issues)
 
 
+_STATUS_REPORTERS = {"ok": check_ok, "warn": check_warn, "fail": check_fail}
+
+
 # Ordered (section title, check). None title = check prints its own header (or none); order is user-visible.
-_GLYPH_REPORTERS = (("✓", check_ok), ("⚠", check_warn), ("✗", check_fail))
-
-
 DOCTOR_CHECKS = (
     ('Security Advisories', _check_security_advisories), ('MCP Server Security', _check_mcp_security),
     ('Python Environment', _check_python_environment), ('SSL / CA Certificates', _check_certificates),
