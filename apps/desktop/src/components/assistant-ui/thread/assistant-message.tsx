@@ -948,7 +948,14 @@ const ScheduledRetryAction: FC<{ resetsAt: number }> = ({ resetsAt }) => {
 // turn (the rerun itself, or anything the user sends) retires the note.
 const ScheduledRerunNote: FC<{ rerunAt: number }> = ({ rerunAt }) => {
   const { t } = useI18n()
-  const stale = useAuiState(s => s.thread.isRunning || !s.message.isLast)
+
+  // The failure's own trailing notice row ("not processed…") is a system row; only a newer
+  // user/assistant message (or a running turn) means the conversation moved past this card.
+  const stale = useAuiState(s => {
+    const after = s.thread.messages.slice(s.thread.messages.findIndex(m => m.id === s.message.id) + 1)
+
+    return s.thread.isRunning || after.some(m => m.role !== 'system')
+  })
 
   if (stale) {
     return null
