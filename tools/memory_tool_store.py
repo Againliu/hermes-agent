@@ -44,7 +44,7 @@ def _error(message: str, failure_class: str, **extra) -> dict[str, Any]:
 
 
 _WORD_RE = re.compile(r"\w{3,}")
-_REDUNDANCY_FLOOR = 0.5  # share of the smaller entry's words found in the other text
+_REDUNDANCY_FLOOR = 0.5  # share of the candidate's OWN words found in the other text
 
 
 def _redundant_entries(entries: list[str], incoming: str = "", skip: Optional[int] = None,
@@ -63,7 +63,7 @@ def _redundant_entries(entries: list[str], incoming: str = "", skip: Optional[in
         best, other = 0.0, None
         for j, theirs in [(j, w) for j, w in enumerate(words) if j not in (i, skip)] + [("new", new_words)]:
             if theirs:
-                share = len(mine & theirs) / min(len(mine), len(theirs))
+                share = len(mine & theirs) / len(mine)  # a superset of it repeats it; a subset does not
                 if share > best:
                     best, other = share, j
         if best >= _REDUNDANCY_FLOOR:

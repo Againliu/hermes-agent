@@ -48,6 +48,16 @@ def test_overflow_names_redundant_entries_without_mutating_memory(target, tmp_pa
     assert store.format_for_system_prompt(target) == prompt
 
 
+def test_an_entry_with_facts_the_new_text_lacks_is_not_reported_as_repeated(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    store = _full_store("memory", ["Project uses pnpm workspaces; production deploys require manual approval "
+                                   "from the release owner, ticket filed in the tracker"])
+
+    result = _dispatch(store, action="add", target="memory", content="Project uses pnpm workspaces")
+
+    assert result["success"] is False and result["candidates_for_eviction"] == []
+
+
 @pytest.mark.parametrize("target", ["memory", "user"])
 def test_capacity_hints_do_not_escape_the_failure_budget_or_other_errors(target, tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
