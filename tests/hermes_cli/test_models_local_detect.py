@@ -12,6 +12,8 @@ import pytest
 
 from hermes_cli import models_local_detect as detect
 
+pytestmark = pytest.mark.real_local_model_probe
+
 
 class _Server:
     """One loopback server. ``routes`` maps a GET path to ``(status, body, headers)``."""
