@@ -101,7 +101,7 @@ import {
   normalizeComposerEditorDom,
   RICH_INPUT_SLOT
 } from './rich-editor'
-import { useComposerScope, useComposerSurfaceId } from './scope'
+import { ComposerSessionProvider, useComposerScope, useComposerSurfaceId } from './scope'
 import { ComposerStatusStack } from './status-stack'
 import { CodingStatusRow } from './status-stack/coding-row'
 import { StatusDrawerContent, StatusDrawerToggle } from './status-stack/drawer'
@@ -1082,6 +1082,16 @@ export function ChatBar({
     isBotChatSession(sessionId)
   )
 
+  // What a `composer.top` contribution reads through `useComposerSession` (the SDK door).
+  const storedSessionId = useStoresSelector([$sessionStates], () =>
+    sessionId ? ($sessionStates.get()[sessionId]?.storedSessionId ?? sessionId) : null
+  )
+
+  const composerSession = useMemo(
+    () => ({ sessionId: sessionId ?? null, storedSessionId }),
+    [sessionId, storedSessionId]
+  )
+
   // Branch / worktree hand-offs (CodingStatusRow). Owns the worktree open +
   // branch-off/convert/list/switch actions; draft travels into the new session.
   const { handleBranchOff, handleConvertBranch, handleListBranches, handleSwitchBranch, openInWorktree } =
@@ -1504,7 +1514,9 @@ export function ChatBar({
                   {/* Contribution seams: banners above, a row below, inline
                     additions beside the "+" menu and before the controls.
                     All four render nothing until something contributes. */}
-                  <ContribSlot area={COMPOSER_AREAS.top} />
+                  <ComposerSessionProvider value={composerSession}>
+                    <ContribSlot area={COMPOSER_AREAS.top} />
+                  </ComposerSessionProvider>
                   <RestoredDraftNotice
                     freshDraft={activeQueueSessionKey === null}
                     onUndone={clearDraft}
