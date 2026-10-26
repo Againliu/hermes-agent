@@ -235,7 +235,7 @@ def memory_tool(action: str | None = None, target: str = "memory", content: str 
     aliases ``content``."""
     if store is None:
         return tool_error("Memory is not available. It may be disabled in config or this environment.", success=False)
-    store, target, routing_note = route_memory_write(store, target)
+    store, target, operations, routing_note = route_memory_write(store, target, operations)
     token = FAILURE_CLASS.set("other")
     try:
         outcome, result = _memory_tool(action, target, content, old_text, new_text, operations, store)

@@ -111,20 +111,25 @@ def _channel_store_for(store: MemoryStore, binding: ChannelMemoryBinding) -> Cha
     return cached
 
 
-def route_memory_write(store: Optional[MemoryStore], target: Any) -> tuple[Optional[MemoryStore], Any, Optional[str]]:
-    """``(store, target, note)`` for one memory tool call. Outside a group turn nothing
-    changes. In a group turn, a write this sender may not make to the owner's files goes to
-    the chat's channel memory, and ``note`` tells the model where it went."""
+def route_memory_write(store: Optional[MemoryStore], target: Any, operations: Any = None,
+                       ) -> tuple[Optional[MemoryStore], Any, Any, Optional[str]]:
+    """``(store, target, operations, note)`` for one memory tool call. Outside a group turn
+    nothing changes. In a group turn, a write this sender may not make to the owner's files goes
+    to the chat's channel memory, and ``note`` tells the model where it went. A batch op that
+    repeats the requested target follows it there; a different one is left for validation."""
     binding = CHANNEL_MEMORY.get()
     if binding is None or store is None:
-        return store, target, None
+        return store, target, operations, None
     if target == CHANNEL_TARGET:
-        return _channel_store_for(store, binding), CHANNEL_TARGET, None
+        return _channel_store_for(store, binding), CHANNEL_TARGET, operations, None
     if target in ("memory", "user") and not binding.owner_writes:
-        return _channel_store_for(store, binding), CHANNEL_TARGET, (
+        if isinstance(operations, list):
+            operations = [{**op, "target": CHANNEL_TARGET} if isinstance(op, dict) and op.get("target") == target
+                          else op for op in operations]
+        return _channel_store_for(store, binding), CHANNEL_TARGET, operations, (
             "Saved to this group chat's channel memory, not to your owner's personal memory: "
             "writes from this chat go to the chat's own notes, which load only in this chat.")
-    return store, target, None
+    return store, target, operations, None
 
 
 def add_routing_note(result: str, note: Optional[str]) -> str:

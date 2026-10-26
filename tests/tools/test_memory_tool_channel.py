@@ -77,3 +77,19 @@ def test_turn_start_gives_channel_writes_a_fresh_retry_budget(mem_dir):
         CHANNEL_MEMORY.reset(token)
     assert "current_entries" in fresh and "Stop retrying" not in fresh["error"]
 
+
+def test_redundant_nested_target_still_routes_to_channel_memory(mem_dir):
+    store = mt.MemoryStore()
+    store.load_from_disk()
+    token = CHANNEL_MEMORY.set(ChannelMemoryBinding(scope="telegram/-1001", owner_writes=False))
+    try:
+        result = json.loads(mt.memory_tool(
+            target="memory", operations=[{"target": "memory", "action": "add", "content": "Standup is at 9am"}],
+            store=store))
+        mixed = json.loads(mt.memory_tool(
+            target="memory", operations=[{"target": "user", "action": "add", "content": "two stores"}], store=store))
+    finally:
+        CHANNEL_MEMORY.reset(token)
+    assert result["success"] and result["routed_to"] == "channel"
+    assert not (mem_dir / "MEMORY.md").exists()
+    assert mixed["success"] is False  # a different nested target is still one call asking for two stores
