@@ -87,6 +87,21 @@ def test_full_uninstall_still_wipes_a_real_home_reached_through_a_linked_parent(
     assert "Uninstall Complete" in capsys.readouterr().out
 
 
+def test_code_uninstall_still_accepts_a_home_whose_data_was_removed(user_tree, monkeypatch, capsys):
+    """``--data`` erases every marker file; the follow-up lite/full uninstall must not refuse that home."""
+    from types import SimpleNamespace
+
+    root, _user_home, hermes_home, _project = user_tree
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setattr("hermes_cli.gui_uninstall.desktop_userdata_dir", lambda: root / "desktop-userdata")
+
+    uninstall.run_data_uninstall(SimpleNamespace(yes=True, dry_run=False, desktop_userdata=None))
+    assert not (hermes_home / "config.yaml").exists()
+    uninstall.run_uninstall(SimpleNamespace(dry_run=True, yes=False, full=False))
+
+    assert "Nothing was removed" not in capsys.readouterr().out
+
+
 def test_guard_refuses_the_filesystem_root(user_tree):
     """Checked on the guard alone: driving the uninstaller at ``/`` would rmtree it on a regression."""
     from hermes_cli.data_cleanup import guard_data_removal_home, guard_whole_home_removal

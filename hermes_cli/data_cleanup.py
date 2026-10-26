@@ -20,6 +20,9 @@ class DataRemovalPlan:
 # skeleton dirs into whatever HERMES_HOME names, and ``.env`` is common in project dirs,
 # so neither proves a directory is a Hermes home.
 _HOME_MARKERS = ("config.yaml", "state.db", "auth.json")
+# Left by ``remove_data`` in the (already vetted) home it emptied: the markers are gone then,
+# and the follow-up code uninstall must still recognise the directory Hermes itself cleaned.
+_DATA_REMOVED_RECORD = ".hermes-data-removed"
 
 
 def guard_data_removal_home(home: Path, project: Path) -> Path:
@@ -34,7 +37,8 @@ def guard_data_removal_home(home: Path, project: Path) -> Path:
         raise ValueError(f"refusing to remove {resolved_home}: it is a filesystem root or contains your home folder")
     if resolved_home.is_relative_to(project.resolve()):
         raise ValueError(f"refusing to remove {resolved_home}: it is inside the installation directory")
-    if resolved_home.is_dir() and not any((resolved_home / name).exists() for name in _HOME_MARKERS):
+    if resolved_home.is_dir() and not any(
+            (resolved_home / name).exists() for name in (*_HOME_MARKERS, _DATA_REMOVED_RECORD)):
         raise ValueError(
             f"refusing to remove {resolved_home}: it has no {', '.join(_HOME_MARKERS)}, "
             "so it is not a Hermes home"
@@ -69,7 +73,7 @@ def plan_data_removal(home: Path, project: Path, userdata: Path | None = None) -
         installs_root().resolve(), machine / "tools", machine / "bin", machine / "cache",
         machine / "spawn-ledger.json", home / "gateway.lock", home / ".backup.lock",
         home / "runtime" / "active_sessions.lock", home / "cron" / ".tick.lock",
-        store_lock_path(home / "checkpoints"),
+        store_lock_path(home / "checkpoints"), home / _DATA_REMOVED_RECORD,
     }
     if home == machine:
         protected.add(machine / "profiles")
@@ -139,4 +143,11 @@ def remove_data(plan: DataRemovalPlan) -> tuple[list[Path], list[tuple[Path, str
             continue
         except OSError as exc:
             failed.append((path, str(exc)))
+    record = plan.home / _DATA_REMOVED_RECORD
+    try:
+        if record.is_symlink():
+            record.unlink()  # never write through a link into a file elsewhere
+        record.write_text("Hermes removed this home's user data; installed code may remain.\n", encoding="utf-8")
+    except OSError as exc:
+        failed.append((record, f"could not record that this is a Hermes home: {exc}"))
     return removed, failed
