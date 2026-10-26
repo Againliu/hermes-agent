@@ -119,3 +119,45 @@ async def test_a_paused_bot_still_takes_producer_traffic_and_resume_admits_teamm
     resumed = await _send(owner, 'Message from 🤖 Coder (@coder): back?')
     assert resumed.get('reason') is None and resumed['status'] in {'queued', 'claimed', 'settled'}, resumed
     assert len(_admissions(owner)) == 2
+
+
+@pytest.fixture
+def fresh(monkeypatch):
+    """A profile with a real config.yaml and no Bot Chat yet: a first delivery mints it (the
+    follow-profile suite's owner seam)."""
+    from gateway import run
+    from gateway.session_authorities import served_profile_name
+    from hermes_constants import get_hermes_home
+    from tests.gateway.test_follow_profile_followups import _profile
+    from tests.gateway.test_session_follow_profile_config import _owner
+
+    home = get_hermes_home()
+    home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(run, '_hermes_home', home)
+    _profile(home, 'fixture-model', 1, 'fixture-key')
+    store, _runner, _authority, connection = _owner(home)
+    try:
+        yield SimpleNamespace(db=store._db, home=home, connection=connection, profile=served_profile_name(home))
+    finally:
+        store._db.close()
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_before_the_bot_chat_exists_is_saved_and_replays_as_refused(fresh):
+    from gateway.session_bot import deliver
+    from tools.bot_live_delivery import read_delivery_result
+
+    assert fresh.db.get_session_by_title('Bot Chat') is None
+    key = 'e' * 32
+    params = dict(id=key, profile=fresh.profile, message='Message from 🤖 Coder (@coder): ship it?', author=TEAMMATE)
+    _pause(fresh, True)
+    refused = await deliver(fresh.connection, params)
+    _pause(fresh, False)
+    # The sender lost that answer and resends the same id after the resume: still the refusal.
+    replayed = await deliver(fresh.connection, params)
+
+    receipt = read_delivery_result(str(fresh.home), key)
+    assert receipt and receipt['refused'] is True and receipt['reason'] == 'recipient_paused', receipt
+    assert receipt['session_id'] == refused['session_id'] and fresh.db.get_session(receipt['session_id'])
+    assert replayed.get('refused') is True and replayed['reason'] == 'recipient_paused', replayed
+    assert list_session_admissions(fresh.db, session_id=receipt['session_id'], pending_only=False) == []
