@@ -221,7 +221,7 @@ def test_a_backward_clock_step_does_not_disown_a_gateways_new_shell(world):
 DETACHED_SHELL = r'''@echo off
 :wait
 if not exist "%GO%" (ping -n 2 127.0.0.1 >NUL & goto wait)
-"%PY%" -c "import sys; from pathlib import Path; sys.path.insert(0, r'%REPO%'); import hermes_constants_scratch_detach as d; d.spawn_prune(Path(r'%SCRATCH%'))"
+"%PY%" -c "import os, sys; from pathlib import Path; os.chdir(r'%AWAY%'); sys.path.insert(0, r'%REPO%'); import hermes_constants_scratch_detach as d; d.spawn_prune(Path(r'%SCRATCH%'))"
 ping -n 900 127.0.0.1 >NUL
 '''
 
@@ -232,8 +232,9 @@ def test_detached_pass_spares_the_launchers_shell_after_a_clock_step(world):
     that session as the launcher's ancestor: it is never killed and its entry is kept."""
     lane, other = world.entry("lane"), world.entry("other")
     orphan = world.orphan(other)
-    # A large idle entry makes the pass's idle scan outlast the launcher, so the reap runs after
-    # the launcher exited and only the recorded lineage can still name the session.
+    # The Hermes command steps out of the entry before spawning (the pass and its venv launcher
+    # must not keep the lane by their own cwd), and a large idle entry makes the pass's scan
+    # outlast the command, so at reap time only the recorded lineage can still name the session.
     bulk = world.scratch / "bulk"
     for d in range(40):
         (bulk / f"d{d}").mkdir(parents=True)
@@ -244,7 +245,7 @@ def test_detached_pass_spares_the_launchers_shell_after_a_clock_step(world):
     script.write_text(DETACHED_SHELL, encoding="utf-8")
     world.age()
     env = {**os.environ, "HERMES_HOME": str(world.home), "GO": str(go), "PY": sys.executable, "REPO": REPO,
-           "SCRATCH": str(world.scratch)}
+           "SCRATCH": str(world.scratch), "AWAY": str(world.tmp)}
     session = subprocess.Popen(["cmd.exe", "/d", "/c", str(script)], cwd=str(lane), env=env,
                                stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     world.spawned.append(session.pid)  # born before the step; it launches Hermes only after it
