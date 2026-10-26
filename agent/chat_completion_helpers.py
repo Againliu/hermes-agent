@@ -2062,6 +2062,7 @@ def try_activate_fallback(agent, reason: FailoverReason | None = None, reset_at=
 
         try:
             from agent.route_binding import bind_route_entry
+            departing_reasoning = dict(agent.reasoning_config) if getattr(agent, "reasoning_config", None) else None
             bound = bind_route_entry(agent, fb, fb_provider, fb_model)
             if bound is None:
                 logger.warning("Fallback to %s failed: provider not configured", fb_provider)
@@ -2074,7 +2075,7 @@ def try_activate_fallback(agent, reason: FailoverReason | None = None, reset_at=
             notice = (
                 f"⚠️ Model fallback: {old_model} via {old_provider} unavailable "
                 f"({_fallback_reason_text(reason)}); using {fb_model} via {fb_provider}."
-                + effort_change_note((getattr(agent, "_primary_runtime", None) or {}).get("reasoning_config"), agent.reasoning_config))
+                + effort_change_note(departing_reasoning, agent.reasoning_config))
             if cooldown_seconds is not None:
                 remaining = max(0, math.ceil(agent._rate_limited_until - time.monotonic()))
                 notice += f" Primary retry eligible in ~{remaining} s; recovery is not guaranteed."

@@ -128,10 +128,11 @@ def reinstall_runtime_snapshot(agent: Any, rt: dict[str, Any]) -> None:
         from agent.conversation_compression import revalidate_compression_feasibility
         revalidate_compression_feasibility(agent)
     # A recorded None is the route's own default and must replace a fallback's per-model override.
-    from agent.fallback_reasoning import _UNSET, restored_reasoning
-    saved_reasoning = restored_reasoning(agent, rt)
-    if saved_reasoning is not _UNSET:
-        agent.reasoning_config = saved_reasoning
+    # Older snapshots have no key; keep the current value. Fallback-only bookkeeping (a user's
+    # effort change while a fallback served) is reinstall_primary_runtime's, not this installer's.
+    if "reasoning_config" in rt:
+        saved_reasoning = rt["reasoning_config"]
+        agent.reasoning_config = dict(saved_reasoning) if saved_reasoning else None
     # Reset the stale-call circuit breaker: its streak measured the route being left.
     from agent.chat_completion_helpers import _reset_stale_streak, rewrite_prompt_model_identity
     _reset_stale_streak(agent)
@@ -146,7 +147,11 @@ def reinstall_primary_runtime(
 ) -> None:
     """Put ``agent`` back on its ``_primary_runtime`` snapshot ``rt`` and clear the fallback state."""
     from agent.agent_runtime_helpers import _rebind_primary_credential_pool
+    from agent.fallback_reasoning import _UNSET, restored_reasoning
+    serving_reasoning = getattr(agent, "reasoning_config", None)
+    decided = restored_reasoning(agent, rt)  # read before the snapshot overwrites the live effort
     reinstall_runtime_snapshot(agent, rt)
+    agent.reasoning_config = serving_reasoning if decided is _UNSET else decided
     _rebind_primary_credential_pool(
         agent, primary_provider, primary_model, matches_primary, load_primary_pool, prefetched_pool, prefetched
     )
