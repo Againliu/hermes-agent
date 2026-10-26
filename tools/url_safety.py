@@ -392,7 +392,9 @@ def is_safe_url(url: str) -> bool:
 
 def host_address_class(hostname: str) -> str:
     """``"loopback"`` / ``"internal"`` / ``"public"`` / ``"unresolved"`` for *hostname*: internal means
-    every answer is in a private/link-local/CGNAT/reserved class, loopback that every answer is loopback."""
+    every answer is in a private/link-local/CGNAT/reserved class, loopback that every answer is loopback.
+    A declared ``security.fake_ip_ranges`` answer stands in for a public target behind the proxy, so it
+    counts as public: the declaration must not grant the host local-network trust."""
     host = _normalize_hostname(hostname)
     if host == "localhost" or host.endswith(".localhost"):
         return "loopback"
@@ -405,7 +407,7 @@ def host_address_class(hostname: str) -> str:
         except (socket.gaierror, UnicodeError):
             return "unresolved"
     ips = [_embedded_ipv4(ip) for ip in ips]
-    if not ips or not all(_is_blocked_ip(ip) for ip in ips):
+    if not ips or not all(_is_blocked_ip(ip) and not _is_declared_fake_ip(ip) for ip in ips):
         return "public"
     return "loopback" if all(ip.is_loopback for ip in ips) else "internal"
 

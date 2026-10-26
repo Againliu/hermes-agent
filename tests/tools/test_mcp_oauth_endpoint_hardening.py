@@ -84,6 +84,20 @@ def test_sdk_refresh_to_unsafe_token_endpoint_is_refused_before_sending(fake_dns
     reset_manager_for_tests()
 
 
+def test_declared_fake_ip_server_gets_no_local_network_trust(fake_dns, monkeypatch):
+    """A public server reached through a declared fake-IP proxy address is still public: it may not
+    point Hermes at a private address, nor over plain http."""
+    import ipaddress
+    monkeypatch.setitem(_DNS, "proxied.example.com", "198.18.1.125")
+    monkeypatch.setattr(url_safety, "_global_fake_ip_ranges", lambda: (ipaddress.ip_network("198.18.0.0/15"),))
+    for endpoint in ("http://intranet.example.com/token", "https://intranet.example.com/token",
+                     "http://auth.example.com/token"):
+        with pytest.raises(OAuthEndpointRefused):
+            check_oauth_endpoint(endpoint, "https://proxied.example.com/mcp")
+    check_oauth_endpoint("https://auth.example.com/token", "https://proxied.example.com/mcp")
+
+
+
 def test_oversized_oauth_response_is_refused(fake_dns):
     from tools.mcp_tool import sdk_httpx
     httpx = sdk_httpx()
