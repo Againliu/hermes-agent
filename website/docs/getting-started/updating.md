@@ -459,10 +459,10 @@ drain in one step on the gateway's loop, so a turn that arrived after the last p
 behind the update. A busy answer calls the pause off and the update keeps waiting within the same
 bound; past it, the update stops before the checkout moves and exits 75.
 
-While a gateway drains for an update, clients see why: its control-socket `identify` and the
-`runtime.describe` RPC carry `state: "draining"` and
-`drain: {"reason": "update", "target": "v0.23.1", "waiting_for": {"chat": 1}}`, and Python clients
-report "updating to v0.23.1, finishing 1 turn" instead of a bare `not_ready`. The REST API's
+While a gateway drains for an update, clients see why: its control-socket `identify` carries
+`state: "draining"` and `drain: {"reason": "update", "target": "v0.23.1", "waiting_for": {"chat": 1}}`.
+The `runtime.describe` RPC carries the same `drain` block (`null` outside an update drain) but no
+`state` field. Python clients report "updating to v0.23.1, finishing 1 turn" instead of a bare `not_ready`. The REST API's
 `503 gateway_not_ready` answer names the cause and target (`drain: {"reason": "update", "target":
 "v0.23.1"}`) but not the counts: it answers without reading the gateway's work list, so read
 `runtime.describe` for `waiting_for`.
