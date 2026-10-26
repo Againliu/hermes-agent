@@ -10,6 +10,7 @@ export type PauseMessages = {
   pausedToast: (name: string) => string
   resumedToast: (name: string) => string
   saveFailed: (name: string) => string
+  updateRequired: (name: string) => string
   notifications: string
   levelAll: string
   levelNeedsYou: string
@@ -23,6 +24,7 @@ const en: PauseMessages = {
   pausedToast: name => `${name} paused — its routines and teammate messages are on hold`,
   resumedToast: name => `${name} resumed — runs missed while paused are skipped`,
   saveFailed: name => `Couldn't change ${name}'s pause on its gateway`,
+  updateRequired: name => `${name}'s gateway can't pause bots yet — update Hermes on that machine to use Pause`,
   notifications: 'Notifications',
   levelAll: 'All',
   levelNeedsYou: 'Only when it needs me',
@@ -36,6 +38,7 @@ const ja: PauseMessages = {
   pausedToast: name => `${name} を一時停止しました — ルーティンとチームメイトからのメッセージは保留されます`,
   resumedToast: name => `${name} を再開しました — 一時停止中に逃した実行はスキップされます`,
   saveFailed: name => `${name} の一時停止をゲートウェイで変更できませんでした`,
+  updateRequired: name => `${name} のゲートウェイはまだボットの一時停止に対応していません — そのマシンの Hermes を更新してください`,
   notifications: '通知',
   levelAll: 'すべて',
   levelNeedsYou: '対応が必要なときのみ',
@@ -49,6 +52,7 @@ const zh: PauseMessages = {
   pausedToast: name => `${name} 已暂停 — 其例行任务和队友消息已搁置`,
   resumedToast: name => `${name} 已恢复 — 暂停期间错过的运行将被跳过`,
   saveFailed: name => `无法在网关上更改 ${name} 的暂停状态`,
+  updateRequired: name => `${name} 的网关尚不支持暂停机器人 — 请在该机器上更新 Hermes`,
   notifications: '通知',
   levelAll: '全部',
   levelNeedsYou: '仅在需要我时',
@@ -62,6 +66,7 @@ const zhHant: PauseMessages = {
   pausedToast: name => `${name} 已暫停 — 其例行任務和隊友訊息已擱置`,
   resumedToast: name => `${name} 已恢復 — 暫停期間錯過的執行將被略過`,
   saveFailed: name => `無法在閘道上變更 ${name} 的暫停狀態`,
+  updateRequired: name => `${name} 的閘道尚不支援暫停機器人 — 請在該機器上更新 Hermes`,
   notifications: '通知',
   levelAll: '全部',
   levelNeedsYou: '僅在需要我時',

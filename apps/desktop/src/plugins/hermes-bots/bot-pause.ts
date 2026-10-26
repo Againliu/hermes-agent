@@ -18,7 +18,16 @@
 import { host } from '@hermes/plugin-sdk'
 
 import { ensureBotMetadata } from './canonical-chat'
-import { $botMeta, $lastRoster, type BotMetaSnapshot, botOwner, saveBotMeta } from './data'
+import {
+  $botMeta,
+  $lastRoster,
+  type BotMetaSnapshot,
+  botMetaV2Active,
+  botOwner,
+  cachedUnionRoster,
+  persistBotMetaSnapshot,
+  saveBotMeta
+} from './data'
 import { botsText } from './i18n'
 import { displayName } from './labels'
 import { botRosterMeta } from './routing'
@@ -43,17 +52,25 @@ export function botNotificationLevel(bot: RosterRow, metaByName: BotMetaSnapshot
   return level && BOT_NOTIFICATION_LEVELS.includes(level) ? level : 'all'
 }
 
-/** Undo a failed pause save in this window's cache only. A second server
- *  write would be a fresh save that could overwrite another window's newer
- *  pause, and a value someone changed since (`wrote` no longer cached) stays. */
-export function revertCachedPause(bot: RosterRow | string, wrote: boolean, previous: boolean): void {
-  const { key } = botOwner(bot)
+/** Undo a failed pause save in this window's cache and its local storage
+ *  (the save stored the attempt there, and a restart would load it back). A
+ *  second server write would be a fresh save that could overwrite another
+ *  window's newer pause, and a value someone changed since (`wrote` no longer
+ *  cached) stays. */
+export function revertCachedPause(bot: RosterRow | string, wrote: boolean, previous: boolean): Promise<void> {
+  const { key, route } = botOwner(bot)
   const snapshot = $botMeta.get()
   const entry = snapshot[key]
 
-  if (entry?.paused === wrote) {
-    $botMeta.set({ ...snapshot, [key]: { ...entry, paused: previous } })
+  if (entry?.paused !== wrote) {
+    return Promise.resolve()
   }
+
+  const next = { ...snapshot, [key]: { ...entry, paused: previous } }
+
+  $botMeta.set(next)
+
+  return persistBotMetaSnapshot(next, Boolean(route) || botMetaV2Active)
 }
 
 /** Flip the bot's pause. The backend enforces it, so a save that never
@@ -68,8 +85,18 @@ export async function toggleBotPaused(bot: RosterRow): Promise<void> {
     const saved = await saveBotMeta(bot, { paused: !paused })
 
     if (!saved.serverPersisted) {
-      revertCachedPause(bot, !paused, paused)
+      await revertCachedPause(bot, !paused, paused)
       host.notify({ kind: 'error', message: text.saveFailed(name) })
+
+      return
+    }
+
+    if (!paused && !saved.pauseEnforced) {
+      // An older gateway stored the flag but runs the bot's routines and
+      // teammate messages anyway: take the inert pause back off rather than
+      // show a paused bot that is still working.
+      await saveBotMeta(bot, { paused: false })
+      host.notify({ kind: 'error', message: text.updateRequired(name) })
 
       return
     }
@@ -125,9 +152,23 @@ export function botForSession(roster: RosterRow[], query: NotificationLevelQuery
   )
 }
 
+/** The pane publishes `$lastRoster` only once it mounts; before that (a launch
+ *  restored onto Sessions) the roster cache primed at gateway open answers. */
+function notificationRoster(): RosterRow[] {
+  const published = $lastRoster.get()
+
+  if (published.length) {
+    return published
+  }
+
+  const cached = cachedUnionRoster()?.profiles
+
+  return Array.isArray(cached) ? cached.filter(row => !row?.ghost) : []
+}
+
 export function resolveBotNotificationLevel(query: NotificationLevelQuery): BotNotificationLevel | null {
   const activeConnectionId = String(host.state.connectionId?.get?.() || 'local').trim()
-  const bot = botForSession($lastRoster.get(), query, activeConnectionId)
+  const bot = botForSession(notificationRoster(), query, activeConnectionId)
 
   return bot ? botNotificationLevel(bot, $botMeta.get()) : null
 }
