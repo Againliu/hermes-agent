@@ -336,25 +336,26 @@ def release_git_worktrees(repos: set[str]) -> None:
 def _remove_entry(entry: Path, audit: logging.Logger) -> list[str] | None:
     """Delete *entry*; the dirs that refused access (see ``stuck``), or None when it was kept.
 
-    Windows: the tree is first renamed aside. Windows refuses that rename while any process holds
-    a handle inside it (an open file, a cwd), so an entry in use is kept whole instead of being
-    half-deleted around the files ``rmtree`` cannot remove. Residue goes back under its name."""
+    Windows refuses to rename a directory while any process holds a handle inside it (an open
+    file, a cwd). The entry is moved aside and back first, so one in use is kept whole instead of
+    half-deleted around the files ``rmtree`` cannot remove."""
     if not entry.is_dir() or entry.is_symlink():
         entry.unlink()
         return []
-    if os.name != "nt":
-        return stuck.rmtree_collecting_permission_errors(entry)
-    aside = entry.with_name(f".{entry.name}.pruning-{os.getpid()}")
-    try:
-        os.rename(entry, aside)
-    except OSError as exc:
-        audit.info("scratch prune: kept %r — in use: Windows refused to move it aside (%s)", os.fspath(entry), exc)
-        return None
-    denied = stuck.rmtree_collecting_permission_errors(aside)
-    if os.path.lexists(aside):
-        with contextlib.suppress(OSError):
+    if os.name == "nt":
+        aside = entry.with_name(f".{entry.name}.pruning-{os.getpid()}")
+        try:
+            os.rename(entry, aside)
+        except OSError as exc:
+            audit.info("scratch prune: kept %r — in use: Windows refused to move it (%s)", os.fspath(entry), exc)
+            return None
+        try:
             os.rename(aside, entry)
-    return denied
+        except OSError as exc:
+            audit.info("scratch prune: kept %r as %r — could not move it back (%s)",
+                       os.fspath(entry), os.fspath(aside), exc)
+            return None
+    return stuck.rmtree_collecting_permission_errors(entry)
 
 
 def prune_idle_entries(

@@ -36,9 +36,14 @@ _SUFFIX = ".lock"
 _ACQUIRE_TRIES = 200
 _ACQUIRE_PAUSE = 0.01
 
-# lock file path -> fd this process holds it through: its own lock (one per root; tests use many
-# roots) and the locks it holds for children it spawned (:func:`vouch_for_child`).
-_held: dict[str, int] = {}
+# lock file path -> (fd, pid of the process that took the lock): its own lock (one per root; tests
+# use many roots) and the locks it holds for children it spawned (:func:`vouch_for_child`). A fork
+# child inherits this dict but not the locks, so every use checks the pid.
+_held: dict[str, tuple[int, int]] = {}
+
+
+def _ours(path: str) -> bool:
+    return _held.get(path, (None, None))[1] == os.getpid()
 
 
 def owners_dir(home: str | Path | None = None) -> Path:
@@ -81,24 +86,25 @@ def _acquire(home: str | Path | None, pid: int) -> str | None:
     """Lock ``<pid>.lock`` in *home*'s owners dir from this process; its path, or None."""
     directory = owners_dir(home)
     path = os.path.join(directory, f"{pid}{_SUFFIX}")
-    if path in _held:
+    if _ours(path):
         return path
     directory.mkdir(parents=True, exist_ok=True)
     for _ in range(_ACQUIRE_TRIES):
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         if _try_lock(fd) and _still_named(fd, path):
-            _held[path] = fd
+            _held[path] = (fd, os.getpid())
             return path
         os.close(fd)
         time.sleep(_ACQUIRE_PAUSE)
     return None
 
 
-def _release(path: str, owner_pid: int) -> None:
-    """Drop a lock this process holds, and its file. A fork child that runs atexit is not the
-    owner and must not touch the parent's file."""
-    if os.getpid() != owner_pid or (fd := _held.pop(path, None)) is None:
+def _release(path: str) -> None:
+    """Drop a lock this process holds, and its file. A fork child (atexit included) holds none of
+    the parent's locks and must not touch the parent's files."""
+    if not _ours(path):
         return
+    fd, _ = _held.pop(path)
     if not _IS_WINDOWS:
         with contextlib.suppress(OSError):
             os.unlink(path)  # while still holding: no probe can see it free first
@@ -112,10 +118,10 @@ def hold_owner_lock(home: str | Path | None = None) -> bool:
     """Take this process's owner lock for *home*'s root and hold it until the process exits.
     Idempotent. False when it cannot be taken."""
     pid = os.getpid()
-    already = os.path.join(owners_dir(home), f"{pid}{_SUFFIX}") in _held
+    already = _ours(os.path.join(owners_dir(home), f"{pid}{_SUFFIX}"))
     path = _acquire(home, pid)
     if path and not already:
-        atexit.register(_release, path, pid)
+        atexit.register(_release, path)
     return path is not None
 
 
@@ -130,7 +136,7 @@ def vouch_for_child(pid: int, home: str | Path | None = None) -> None:
 
 def release_child(pid: int, home: str | Path | None = None) -> None:
     """The child *pid* finished: stop vouching for it. No-op when it was never vouched for."""
-    _release(os.path.join(owners_dir(home), f"{pid}{_SUFFIX}"), os.getpid())
+    _release(os.path.join(owners_dir(home), f"{pid}{_SUFFIX}"))
 
 
 def live_owner_pids(home: str | Path | None = None) -> set[int]:
@@ -148,7 +154,7 @@ def live_owner_pids(home: str | Path | None = None) -> set[int]:
         if not stem.isdigit():
             continue
         path = os.path.join(directory, name)
-        if path in _held:
+        if _ours(path):
             # Ours: probing it would succeed (a process never conflicts with its own lock) and
             # the close after the probe would drop the lock on POSIX.
             owners.add(int(stem))

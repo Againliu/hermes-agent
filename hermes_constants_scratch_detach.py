@@ -63,7 +63,10 @@ def run(scratch: str, lineage: str) -> None:
     try:
         from hermes_constants import prune_scratch_dir
 
-        rules._launcher_lineage = None if lineage == "-" else frozenset(map(int, lineage.split(",")))
+        # ``pid`` items; an older launcher's ``pid:start`` items (an update between launch and
+        # import) parse too: the pids are only spared.
+        rules._launcher_lineage = None if lineage == "-" else frozenset(
+            int(item.split(":")[0]) for item in lineage.split(","))
         prune_scratch_dir(Path(scratch))
     # health: allow BLE001 -- the detached child's top level: its stderr is /dev/null, so the audit log is the record
     except Exception as exc:

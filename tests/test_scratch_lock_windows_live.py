@@ -32,7 +32,8 @@ from hermes_cli.process_identity import attach_self_to_kill_on_close_job, regist
 ok = register_self("gateway")
 in_job = attach_self_to_kill_on_close_job() if job == "job" else False
 if go != "-":
-    open(out + ".registered", "w", encoding="utf-8").close()
+    with open(out + ".registered", "w", encoding="utf-8") as f:
+        f.write(str(os.getpid()))
     while not os.path.exists(go):
         time.sleep(0.02)
 python = sys.executable.replace("pythonw.exe", "python.exe")
@@ -204,12 +205,17 @@ def test_a_backward_clock_step_does_not_disown_a_gateways_new_shell(world):
     lane = world.entry("lane")
     go = world.tmp / "go"
     out = world.gateway(lane, shell="cmd", go=str(go))
+    gateway = psutil.Process(int(Path(str(out) + ".registered").read_text(encoding="utf-8-sig")))
+    born_before = gateway.create_time()
     with clock_stepped_back():
         go.touch()
         gw = json.loads(wait_until(lambda: out.exists() and out.read_text(encoding="utf-8-sig"), timeout=90, what="shell up"))
-    world.age()
-    world.prune()
-    assert alive(gw["shell"]), "the gateway's shell was killed after a clock step"
+        world.age()
+        world.prune()
+        diag = {"gateway_create_time_before_step": born_before, "during_step": gateway.create_time(),
+                "shell_create_time": psutil.Process(gw["shell"]).create_time() if alive(gw["shell"]) else None}
+    print("DIAG clock-step", json.dumps(diag))
+    assert alive(gw["shell"]), f"the gateway's shell was killed after a clock step: {diag}\n{world.log()}"
     assert lane.exists()
 
 
