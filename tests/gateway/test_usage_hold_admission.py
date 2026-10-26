@@ -188,3 +188,20 @@ def test_offline_adapter_keeps_the_rerun_pending(home):
     adapter = _Adapter()
     assert asyncio.run(uh.rerun_due(_rerun_runner(tail, adapter=adapter), [home], now=at)) == 1
     assert adapter.sent == [resume_note("summarize the doc")]
+
+
+def test_a_rerun_refused_again_spends_its_remaining_attempts(home):
+    """The rerun is an internal producer turn: it may re-queue its own request, nothing else may."""
+    from gateway.response_filters import INTERNAL_NOTIFICATION_DISPLAY_KIND
+    now = time.time()
+    key, ask = "agent:main:telegram:dm:1", "summarize the doc"
+    (home / uh.QUEUE_FILE).write_text(json.dumps({key: {
+        "session_key": key, "session_id": "sess-1", "state": "claimed", "claimed_at": now,
+        "attempt": 1, "queued_at": now - 600, "text": ask}}), encoding="utf-8")
+    hold = {"until": now + 600, "provider": "custom"}
+    internal = INTERNAL_NOTIFICATION_DISPLAY_KIND
+
+    assert uh.queue_rerun(_runner(), _ctx(message="a cron delivery", persist_user_display_kind=internal), hold) is None
+    assert uh.queue_rerun(_runner(), _ctx(message=resume_note(ask), persist_user_display_kind=internal), hold)
+    queued = json.loads((home / uh.QUEUE_FILE).read_text(encoding="utf-8-sig"))[key]
+    assert (queued["state"], queued["attempt"], queued["text"]) == ("pending", 2, ask)

@@ -93,13 +93,27 @@ def _local_owner_live(runner: Any, ctx: Any) -> bool:
     return live is not None and live.route == ctx.session_key
 
 
+def _is_own_rerun(ctx: Any) -> bool:
+    """This internal turn is the rerun this queue claimed for the session: it may spend the rest
+    of the stored request's attempt budget. Any other internal delivery stays unqueueable."""
+    from agent.quota_resume import resume_note
+    from gateway.response_filters import INTERNAL_NOTIFICATION_DISPLAY_KIND
+
+    if ctx.persist_user_display_kind != INTERNAL_NOTIFICATION_DISPLAY_KIND:
+        return False
+    with _LOCK:
+        prior = _load(get_hermes_home() / QUEUE_FILE).get(ctx.session_key) or {}
+    return (prior.get("state") == "claimed" and isinstance(prior.get("text"), str)
+            and _request_text(ctx) == resume_note(prior["text"]))
+
+
 def _rerunnable(runner: Any, ctx: Any) -> bool:
     """A person's plain-text turn in a chat the gateway can admit a turn into later."""
     from gateway.config import Platform
 
     platform = getattr(ctx.source, "platform", None)
     if not (ctx.session_key and ctx.session_id and ctx.message and platform is not None
-            and not ctx.scheduled_heartbeat and not ctx.persist_user_display_kind
+            and not ctx.scheduled_heartbeat and (not ctx.persist_user_display_kind or _is_own_rerun(ctx))
             and not getattr(ctx, "voice_turn", False) and isinstance(_request_text(ctx), str)
             and callable(getattr(ctx.source, "to_dict", None))):
         return False
