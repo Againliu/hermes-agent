@@ -58,7 +58,18 @@ async function writeProposedSoul(
   }
 
   try {
-    await requestForBot(bot, 'profiles.configure', { name: bot.name, soul })
+    // A failed file write resolves with `applied.soul: false`, it does not reject.
+    const res = await requestForBot<null | { applied?: Record<string, boolean>; ok?: boolean }>(
+      bot,
+      'profiles.configure',
+      { name: bot.name, soul }
+    )
+
+    if (res?.ok === false || res?.applied?.soul === false) {
+      host.notify({ kind: 'error', message: botsText().editor.sectionsFailed('soul') })
+
+      return false
+    }
 
     return true
   } catch (err) {
