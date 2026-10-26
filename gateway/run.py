@@ -5105,10 +5105,9 @@ def main():
     os.environ.setdefault("AI_AGENT", "hermes-agent")
     os.environ.setdefault("HERMES_AGENT", "true")
 
-    def _register_identity() -> None:
-        # Ledger registration + Windows job-object attach so update-time reapers can identify this gateway.
-        from hermes_cli.process_identity import attach_self_to_kill_on_close_job, register_self
-        register_self("gateway")
+    def _register_identity() -> None:  # owner lock + ledger entry + Windows job, for update-time reapers
+        from hermes_cli.process_identity import attach_self_to_kill_on_close_job, register_gateway_identity
+        register_gateway_identity()
         attach_self_to_kill_on_close_job()
 
     def _arm_watchdog() -> None:
@@ -5188,8 +5187,7 @@ def _exit_after_graceful_shutdown(exit_code: int) -> None:
     thread — exactly the hang a wedged worker causes. It bypasses ``atexit``, so PID/lock release and the
     bounded log drain (file handlers sit behind a ``QueueListener`` thread) are done here explicitly.
 
-    Graceful teardown is already complete by the time this runs, so there is nothing left that needs a clean
-    interpreter shutdown. See #53107.
+    Graceful teardown is already complete by the time this runs (nothing needs a clean finalization). #53107.
     ``os._exit`` bypasses ``atexit`` handlers, so we cannot rely on the ``atexit``-registered
     ``remove_pid_file`` / ``release_gateway_runtime_lock`` (registered in ``start_gateway``) to run. The
     full-shutdown path releases both explicitly in ``_stop_impl``, but the EARLY exit paths —
@@ -5206,8 +5204,10 @@ def _exit_after_graceful_shutdown(exit_code: int) -> None:
     def _release_locks() -> None:
         # BEFORE the log drain (bounded, but could take its full timeout on a wedged disk); idempotent.
         from gateway.status import remove_pid_file, release_gateway_runtime_lock
+        from hermes_constants_scratch_lock import release_all
         remove_pid_file()
         release_gateway_runtime_lock()
+        release_all()  # scratch owner-lock and vouch files: atexit would have removed them
 
     def _mark_exited() -> None:
         # Single funnel every graceful exit passes through, so the next boot's unclean-death detector

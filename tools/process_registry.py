@@ -37,6 +37,7 @@ from tools.process_registry_notifications import (
 from tools.process_registry_checkpoint import ProcessCheckpointMixin
 from tools.process_registry_output_log import ProcessOutputLogMixin, open_output_log, record_exit_command, worker_output_log
 from tools.process_registry_termination import ProcessTerminationMixin
+from tools.process_registry_host_fate import CHECKPOINT_FILENAME, HostPidFateMixin
 from tools.process_registry_results import load_completed_results, save_completed_result
 from tools.process_registry_env_log import log_delta_command
 from tools.process_registry_wsl import _is_wsl_launcher_command
@@ -45,7 +46,7 @@ from hermes_constants_scratch_lock import vouch_for_child
 logger = logging.getLogger(__name__)
 
 # Crash-recovery checkpoint (gateway only)
-CHECKPOINT_PATH = get_hermes_home() / "processes.json"
+CHECKPOINT_PATH = get_hermes_home() / CHECKPOINT_FILENAME  # health: allow HX005 -- test seam only: _checkpoint_path() resolves the live profile at call time
 _CHECKPOINT_PATH_AT_IMPORT = CHECKPOINT_PATH
 
 
@@ -54,7 +55,7 @@ def _checkpoint_path() -> Path:
     changed it, else live profile-scoped HERMES_HOME — the multiplexed gateway serves every
     profile from one process, so the import-time constant would pin every profile's process
     checkpoint to the launch home."""
-    return CHECKPOINT_PATH if CHECKPOINT_PATH != _CHECKPOINT_PATH_AT_IMPORT else get_hermes_home() / "processes.json"
+    return CHECKPOINT_PATH if CHECKPOINT_PATH != _CHECKPOINT_PATH_AT_IMPORT else get_hermes_home() / CHECKPOINT_FILENAME
 
 MAX_OUTPUT_CHARS = 200_000      # rolling output buffer
 # Tail of the output a completion notification carries. Right for a build log; a spawner whose
@@ -673,7 +674,7 @@ _WSL_CHAIN_NOTE = (
 )
 
 
-class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin):
+class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOutputLogMixin, HostPidFateMixin):
     """In-memory registry of running and finished background processes.
     Thread-safe: accessed from executor threads (terminal_tool, process handlers),
     the gateway asyncio loop (watchers, reset checks) and the cleanup thread."""
@@ -949,55 +950,6 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         for msg in events:
             self.completion_queue.put(msg)
         return admit
-
-    @staticmethod
-    def _is_host_pid_alive(pid: Optional[int]) -> bool:
-        """Best-effort liveness check for host-visible PIDs."""
-        if not pid:
-            return False
-        # ``os.kill(pid, 0)`` is NOT a no-op on Windows (bpo-14484) — use the
-        # cross-platform existence check.
-        from gateway.status import _pid_exists
-        return _pid_exists(pid)
-
-    @staticmethod
-    def _safe_host_start_time(pid: Optional[int]) -> Optional[int]:
-        """Kernel start ticks for a host PID, or None when unavailable."""
-        try:
-            from gateway.status import get_process_start_time
-            return get_process_start_time(pid) if pid else None
-        except Exception:
-            return None
-
-    @classmethod
-    def _host_pid_is_ours(cls, pid: Optional[int], expected_start: Optional[int]) -> bool:
-        """True only if ``pid`` is alive AND still the process we spawned.
-        The kernel recycles PIDs, so a stored number can later name an unrelated
-        process (seen in the wild: a browser's session leader tree-killed). The kernel
-        start time captured at spawn must match the live one; with no baseline
-        (legacy checkpoints, no ``/proc``) degrade to a bare liveness check."""
-        return cls._is_host_pid_alive(pid) and (
-            expected_start is None or cls._safe_host_start_time(pid) == expected_start)
-
-    def _detached_host_fate(self, pid: Optional[int], expected_start: Optional[int]) -> str:
-        """How a recovered host PID should be supervised.
-
-        ``running`` — alive and still ours (start time matches, no baseline, or
-        the start-time probe could not be read). Re-attach; do not invent an exit.
-        ``reused`` — alive, and the start time positively differs. The number
-        belongs to someone else; close our entry and never signal that PID.
-        ``gone`` — the PID is not alive. Prune it; no exit status was collected.
-        """
-        if self._host_pid_is_ours(pid, expected_start):
-            return "running"
-        if not pid or not self._is_host_pid_alive(pid):
-            return "gone"
-        if expected_start is None:
-            return "running"
-        current = self._safe_host_start_time(pid)
-        if current is None or current == expected_start:
-            return "running"
-        return "reused"
 
     def _refresh_detached_session(self, session: Optional[ProcessSession]) -> Optional[ProcessSession]:
         """Re-attach, close, or prune a recovered host-PID session.

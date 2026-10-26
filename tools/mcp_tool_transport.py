@@ -22,6 +22,8 @@ from tools import mcp_tool_lifecycle as _lifecycle
 from tools import mcp_tool_registration as _registration
 
 logger = logging.getLogger("tools.mcp_tool")
+# stdio helper pid -> the scratch owner vouch this process holds for it while its transport runs.
+_helper_vouches: dict[int, str | None] = {}
 
 _PROBE_INITIALIZE_BODY = (  # JSON-RPC ``initialize`` body for the content-type preflight POST
     '{"jsonrpc":"2.0","id":"_probe","method":"initialize","params":{"protocolVersion":"2025-03-26",'
@@ -327,6 +329,12 @@ class MCPServerTransportMixin:
             _stdio_pids.update(dict.fromkeys(new_pids, self.name))
             _stdio_pgids.update(new_pgids)
             _stdio_starttimes.update(new_starts)
+        # Vouch for each helper while this transport tracks it: it is Hermes-owned for the scratch
+        # prune whichever process spawned it, with or without an owner lock of its own. Best-effort.
+        from hermes_constants_scratch_lock import vouch_for_child
+
+        for _pid in new_pids:
+            _helper_vouches[_pid] = vouch_for_child(_pid)
         # Machine spawn ledger (startup sweeps reap orphans after an unclean exit); best-effort.
         for _pid in new_pids:
             try:
@@ -344,6 +352,10 @@ class MCPServerTransportMixin:
         """Drop the ledger entries; a child (or its pgroup) still alive means SDK teardown failed
         (common on mid-way cancel on Linux: setsid() children escape) — mark it orphaned for the sweep."""
         from gateway.status import _pid_exists
+        from hermes_constants_scratch_lock import release_vouch
+
+        for pid in new_pids:  # stopped (or orphaned for the sweep): no longer ours to vouch for
+            release_vouch(_helper_vouches.pop(pid, None))
         # Groups with nothing left alive; the supervisor forgets them after the lock is released.
         # Groups still alive stay registered on purpose, so the supervisor still reaps them if this
         # process dies before the orphan sweep runs.

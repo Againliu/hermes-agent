@@ -119,7 +119,7 @@ helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(900)"]
 
 
 def ready():  # once main() holds the backend's owner lock
-    own = os.path.join(owner_locks.owners_dir(), f"{os.getpid()}.lock")
+    own = owner_locks.own_lock_path()
     while not owner_locks._ours(own):
         time.sleep(0.05)
     with open(out + ".tmp", "w", encoding="utf-8") as f:
@@ -261,6 +261,7 @@ def test_windowless_pythonw_gateway_keeps_its_childs_entry(world):
     world.age()
     world.prune()
     assert alive(gw["shell"]) and lane.exists()
+    assert f"held for pid={gw['gateway']}" in world.log(), world.log()
 
 
 def test_gateway_in_a_kill_on_close_job_keeps_its_childs_entry(world):
@@ -269,6 +270,7 @@ def test_gateway_in_a_kill_on_close_job_keeps_its_childs_entry(world):
     world.age()
     world.prune()
     assert alive(gw["shell"]) and lane.exists(), gw
+    assert f"held for pid={gw['gateway']}" in world.log(), world.log()
 
 
 def test_gateway_killed_by_terminate_process_frees_its_shell_for_the_reap(world):
@@ -303,7 +305,7 @@ def _recovered_worker(world, lane):
     assert alive(worker), "the worker died with the gateway that spawned it"
     nxt = world.registry(lane, "recover")
     assert nxt["recovered"] == 1 and worker in nxt["pids"], (nxt, first)
-    return worker, ""
+    return worker, f"{worker}.vouch-"
 
 
 def _worker_kept_by_the_boot_prune_then_recovered(world, lane):
@@ -324,7 +326,8 @@ def _worker_kept_by_the_boot_prune_then_recovered(world, lane):
 
 
 def _tui_backend_helper(world, lane):
-    return world.tui_backend(lane)["helper"], ""
+    info = world.tui_backend(lane)
+    return info["helper"], f"held for pid={info['backend']}"
 
 
 def _background_hermes_command(world, lane):
@@ -336,7 +339,7 @@ def _background_hermes_command(world, lane):
     assert held and took < 1.0, info
     psutil.Process(info["registry"]).kill()
     wait_until(lambda: gone(info["registry"]), timeout=30, what="the spawning gateway terminated")
-    return child, ""
+    return child, f"held for pid={child}"
 
 
 @pytest.mark.parametrize("make", [_recovered_worker, _worker_kept_by_the_boot_prune_then_recovered,
@@ -372,6 +375,7 @@ def test_corrupt_spawn_ledger_does_not_disown_a_live_gateway(world):
     world.age()
     world.prune()
     assert alive(gw["shell"]) and lane.exists()
+    assert f"held for pid={gw['gateway']}" in world.log(), world.log()
 
 
 def test_a_backward_clock_step_does_not_disown_a_gateways_new_shell(world):
@@ -391,6 +395,7 @@ def test_a_backward_clock_step_does_not_disown_a_gateways_new_shell(world):
                 "shell_create_time": psutil.Process(gw["shell"]).create_time() if alive(gw["shell"]) else None}
     assert alive(gw["shell"]), f"the gateway's shell was killed after a clock step: {diag}\n{world.log()}"
     assert lane.exists()
+    assert f"held for pid={gw['gateway']}" in world.log(), world.log()
 
 
 DETACHED_SHELL = r'''@echo off

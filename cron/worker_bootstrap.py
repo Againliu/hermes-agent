@@ -63,5 +63,9 @@ def finish_worker_boot() -> None:
     not name the module to re-run. In ``__main__`` both are set.
     """
     import hermes_bootstrap
+    from hermes_constants_scratch_lock import hold_owner_lock
 
     os.environ.pop(WORKER_MARKER, None)
+    # Runs in its own scope that outlives a gateway restart: the job's shells and MCP helpers need
+    # a live owner-lock holder on their parent chain for the scratch prune.
+    hold_owner_lock()

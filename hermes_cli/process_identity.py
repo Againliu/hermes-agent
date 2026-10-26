@@ -321,8 +321,11 @@ def register_self(purpose: str, *, project_root: Optional[Path] = None, detail: 
     """Record this process in the machine spawn ledger and take its scratch owner lock
     (``hermes_constants_scratch_lock``). Best-effort.
 
-    Called at the top of every long-lived entry point; dead ``(pid, create_time)`` entries are
-    pruned on every write. ``detail`` may carry ``host``/``port``/``profile`` so the update
+    Called by the entry points the update pipeline and Desktop must find in the ledger (gateway
+    via :func:`register_gateway_identity`, ``hermes serve``/dashboard, CLI chat, TUI chat client).
+    Entry points that only need the scratch prune to know them (``-z``, batch runner, ACP, the TUI
+    backend, ``run_agent``, cron workers) call ``hold_owner_lock`` directly. Dead
+    ``(pid, create_time)`` entries are pruned on every write. ``detail`` may carry ``host``/``port``/``profile`` so the update
     pipeline can relaunch a manually-started serve with its real bind address, and ``isolated``
     so attach-first discovery skips a backend that opted out of the host singleton.
     """
@@ -352,6 +355,27 @@ def register_self(purpose: str, *, project_root: Optional[Path] = None, detail: 
     except Exception:
         pass
     return _append_entry(entry)
+
+
+_gateway_registered_home: Optional[str] = None
+
+
+def register_gateway_identity() -> None:
+    """The gateway's identity, however it was started (``hermes gateway run``, which systemd, the
+    Docker image and the docs use; ``python -m gateway.run``; legacy ``cli.py --gateway``): its
+    scratch owner lock and spawn-ledger entry. Once per process and home, so a start path that
+    passes two of these registers once. Never raises: no registration failure may stop a gateway."""
+    global _gateway_registered_home
+    try:
+        from hermes_constants import hermes_home_key
+
+        home = hermes_home_key()
+        if home != _gateway_registered_home:
+            register_self("gateway")
+            _gateway_registered_home = home
+    # health: allow BLE001 -- best-effort by contract: identity is bookkeeping, never a start blocker
+    except Exception:
+        logger.warning("gateway identity registration failed", exc_info=True)
 
 
 def is_desktop_owned_backend(argv: Optional[Sequence[str]] = None) -> bool:

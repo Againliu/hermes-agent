@@ -4568,7 +4568,9 @@ def run_gateway(verbose: int = 0, quiet: bool = False, replace: bool = False, fo
     sys.path.insert(0, str(PROJECT_ROOT))
     _apply_startup_watchdog_config()
     from hermes_cli.observability.shared_metrics_process import begin_process
+    from hermes_cli.process_identity import register_gateway_identity
     begin_process("gateway")
+    register_gateway_identity()  # owner lock + ledger entry: this path never reaches gateway.run.main()
 
     # Detached Windows runs (HERMES_GATEWAY_DETACHED=1, or non-TTY for older wrappers) ignore
     # console-control broadcasts from sibling CLIs; foreground runs keep Ctrl+C-to-stop.
@@ -4659,10 +4661,8 @@ from hermes_cli.gateway_setup_wizard import (
     _all_platforms,
     _platform_status,
     _set_platform_unauthorized_dm_behavior,
-    print_setup_header,
-    confirm_reconfigure,
-    offer_home_channel,
-    save_env_values,
+    print_setup_header, confirm_reconfigure,
+    offer_home_channel, save_env_values,
     prompt_csv,
     _UNAUTHORIZED_ACCESS_CHOICES,
     _prompt_unauthorized_access,

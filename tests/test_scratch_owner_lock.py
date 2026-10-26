@@ -57,6 +57,8 @@ def test_a_running_gateway_keeps_its_shells_entry_when_the_spawn_ledger_is_lost(
 
         assert _alive(shell), "the live gateway's shell was killed"
         assert lane.exists(), "the entry the live gateway's shell works in was deleted"
+        log = (tmp_path / "logs" / "scratch-prune.log").read_text(encoding="utf-8-sig")
+        assert f"held for pid={gateway.pid}" in log, log  # kept by the gateway's lock, not a fail-closed pass
     finally:
         with contextlib.suppress(psutil.Error):
             for child in psutil.Process(gateway.pid).children(recursive=True):
@@ -141,6 +143,8 @@ def test_a_gateway_that_clones_its_profile_and_reads_its_own_lock_stays_an_owner
 
         assert _alive(shell), "the live gateway's shell was killed"
         assert lane.exists(), "the entry the live gateway's shell works in was deleted"
+        log = (home / "logs" / "scratch-prune.log").read_text(encoding="utf-8-sig")
+        assert f"held for pid={gateway.pid}" in log, log  # kept by the gateway's lock, not a fail-closed pass
         assert not (home / "profiles" / "clonex" / "locks").exists(), "clone_all copied the source's locks"
     finally:
         _stop(gateway)
@@ -151,23 +155,27 @@ def test_a_gateway_that_clones_its_profile_and_reads_its_own_lock_stays_an_owner
 def test_owner_locks_that_cannot_be_taken_make_the_prune_reap_nothing(tmp_path):
     """The gateway could not take its owner lock (``locks/`` not writable), so the owners dir holds
     nothing. That is \"unknown\", not \"nobody\": the prune must leave the gateway's shell and its
-    idle entry alone and say why in the audit log."""
+    idle entry alone and say why in the audit log. An idle entry no process works in is not
+    affected by that unknown and is still deleted."""
     home = tmp_path / ".hermes"
     lane = get_scratch_dir(home, prune=False) / "gateway-lane"
     lane.mkdir(parents=True)
+    empty = lane.parent / "idle-empty"
+    empty.mkdir()
     (home / "locks").mkdir()
     os.chmod(home / "locks", 0o555)
     try:
         gateway, shell = _registered_gateway(tmp_path, lane)
         try:
-            _age(lane)
+            _age(lane, empty)
 
-            prune_scratch_dir(lane.parent)
+            assert prune_scratch_dir(lane.parent) == 1
 
             assert _alive(shell), "the gateway's shell was killed although ownership was unknown"
             assert lane.exists()
+            assert not empty.exists(), "an idle entry no process works in was kept by an unrelated unknown"
             log = (home / "logs" / "scratch-prune.log").read_text(encoding="utf-8-sig")
-            assert "scratch owner locks unavailable" in log, log
+            assert "ownership unknown" in log and "scratch owner locks unavailable" in log, log
         finally:
             _stop(gateway)
     finally:
@@ -241,10 +249,88 @@ def test_a_fork_child_that_outlives_its_owner_does_not_keep_the_owners_lock(tmp_
         owner.wait(timeout=30)
         assert _alive(child), "the fork child died with its owner"
 
-        assert owner.pid not in live_owner_pids(home), "a fork child keeps its dead owner's lock held"
+        # Linux may release a SIGKILLed holder's flock a tick after it is reaped (deferred fput).
+        wait_until(lambda: owner.pid not in live_owner_pids(home), timeout=10,
+                   what="the dead owner's lock freed although its fork child lives")
     finally:
         done.touch()
         owner.kill()
         owner.wait(timeout=30)
         if child:
             wait_until(lambda: not _alive(child), timeout=30, what="the fork child exited")
+
+
+@pytest.mark.platforms("any")
+def test_hermes_gateway_run_holds_the_owner_lock(tmp_path, monkeypatch):
+    """``hermes gateway run`` (the systemd ExecStart, the Docker image, the documented command)
+    enters through ``run_gateway`` and never reaches ``gateway.run.main()``. The gateway it starts
+    must still hold its owner lock, or its foreground shells and MCP helpers read as orphans."""
+    import types
+
+    import gateway.run as gateway_run
+    import hermes_cli.gateway as gateway_cli
+    from hermes_constants_scratch_lock import live_owner_pids, release_all
+
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_GATEWAY_EXIT_DIAG", "0")
+    for guard in ("_guard_official_docker_root_gateway", "_attach_to_host_gateway_or_guard",
+                  "_guard_supervised_gateway_conflict", "_guard_existing_gateway_process_conflict"):
+        monkeypatch.setattr(gateway_cli, guard, lambda *a, **k: None)
+    monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: False)
+    monkeypatch.setattr(gateway_cli.sys, "stdin", types.SimpleNamespace(isatty=lambda: False))
+    monkeypatch.setattr(gateway_run, "_exit_after_graceful_shutdown", lambda code: None)
+    owners_while_running = {}
+
+    def running_gateway(coro):  # stands in for asyncio.run(start_gateway(...))
+        coro.close()
+        owners_while_running.update(live_owner_pids(home))
+        return True
+
+    monkeypatch.setattr(gateway_cli.asyncio, "run", running_gateway)
+    try:
+        gateway_cli.run_gateway()
+    finally:
+        release_all()
+
+    assert os.getpid() in owners_while_running, owners_while_running
+
+
+@pytest.mark.platforms("any")
+def test_an_mcp_helper_is_owned_while_its_transport_tracks_it(tmp_path, monkeypatch):
+    """A stdio MCP helper whose spawner holds no owner lock (``run_agent``, any future spawner) works
+    inside an idle scratch entry. While its transport tracks it, the prune must keep it and that
+    entry; once the transport lets go of it, it is an orphan like any other."""
+    from tools import mcp_tool, mcp_tool_lifecycle
+    from tools.mcp_tool import MCPServerTask
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(mcp_tool, "_update_death_supervisor", lambda verb, pgids: None)
+    entry = get_scratch_dir(tmp_path, prune=False) / "mcp-cwd"
+    entry.mkdir(parents=True)
+    helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], cwd=str(entry),
+                              stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+    task = MCPServerTask("probe")
+    try:
+        task._track_spawned_children({helper.pid})
+        _age(entry)
+
+        prune_scratch_dir(entry.parent)
+
+        assert _alive(helper.pid), "a tracked MCP helper was reaped"
+        assert entry.exists()
+        log = (tmp_path / "logs" / "scratch-prune.log").read_text(encoding="utf-8-sig")
+        assert f"held for pid={helper.pid}" in log and ".vouch-" in log, log
+
+        task._release_spawned_children({helper.pid})
+        _age(entry)
+        assert prune_scratch_dir(entry.parent) == 1
+        wait_until(lambda: not _alive(helper.pid), timeout=30, what="the released helper reaped")
+    finally:
+        mcp_tool_lifecycle._orphan_stdio_pids.discard(helper.pid)
+        mcp_tool_lifecycle._orphan_stdio_pid_servers.pop(helper.pid, None)
+        mcp_tool_lifecycle._stdio_pgids.pop(helper.pid, None)
+        mcp_tool_lifecycle._stdio_starttimes.pop(helper.pid, None)
+        helper.kill()
+        helper.wait(timeout=30)

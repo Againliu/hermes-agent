@@ -1,23 +1,30 @@
 """Scratch owner locks: which processes the scratch prune must treat as Hermes' own.
 
-A Hermes process holds an exclusive OS lock on ``<default root>/locks/scratch-owners/<pid>.lock``
+A Hermes process holds an exclusive OS lock on ``<default root>/locks/scratch-owners/<pid><ns>.lock``
 for as long as it lives. The operating system drops that lock the instant the holder dies (exit,
 SIGKILL, TerminateProcess, OOM), so the prune never has to guess who is alive: a held lock is a
 live holder, and clocks, reboots and pid reuse cannot fake one.
 
+``<ns>`` is ``.ns<inode>`` of the holder's pid namespace on Linux (empty elsewhere): containers
+that share one data dir (the compose gateway and dashboard) have their own pid numbering, so two
+holders with equal pids never contend for one name. A held lock from another namespace names a pid
+this process cannot use directly: it is resolved through ``/proc/<pid>/status`` ``NSpid`` to the
+local pid of a process this prune can see, and dropped when none matches.
+
 POSIX uses ``flock``: the lock belongs to the open file description, so the holder closing some
 other descriptor of the same file (a profile clone or backup reading ``locks/`` in-process) does
 not drop it, as it would a ``lockf``/``fcntl`` record lock. Hermes opens it non-inheritable, so an
-exec'd child never shares it, and a fork child closes its inherited copies at once. Windows uses ``msvcrt.locking`` on a non-inheritable handle. Either
-way a held file names a live process Hermes owns: the holder itself, or an unreaped child the
-holder spawned and vouches for (an unreaped child's pid cannot be reused).
+exec'd child never shares it, and a fork child closes its inherited copies at once. Windows uses
+``msvcrt.locking`` on a non-inheritable handle. Either way a held file names a live process Hermes
+owns: the holder itself, or an unreaped child the holder spawned and vouches for (an unreaped
+child's pid cannot be reused).
 
-Who holds one: every long-lived entry point (``process_identity.register_self``, or
-:func:`hold_owner_lock` directly) for itself, and the process registry for each background session
-it spawned or re-adopted (:func:`vouch_for_child`, ``<child>.vouch-<spawner>-<n>.lock``: a file of
-its own, so the child taking ``<child>.lock`` for itself never waits on it). The owner pid is the
-part of the name before the first dot. Every other process is owned through its live parent chain
-(:func:`owning_holder`).
+Who holds one: Hermes entry points for themselves (``process_identity.register_self`` or
+:func:`hold_owner_lock`), and spawners for children they track until those stop
+(:func:`vouch_for_child`: the process registry's background sessions, MCP stdio helpers),
+``<child><ns>.vouch-<spawner>-<n>.lock``, a file of its own so the child taking its own lock never
+waits on it. The owner pid is the part of the name before the first dot. Every other process is
+owned through its live parent chain (:func:`owning_holder`).
 """
 from __future__ import annotations
 
@@ -41,9 +48,9 @@ logger = logging.getLogger(__name__)
 
 OWNERS_SUBDIR = ("locks", "scratch-owners")
 _SUFFIX = ".lock"
-# A prune probe holds a lock for microseconds: an owner retries for up to ~2 s before giving up.
-_ACQUIRE_TRIES = 200
-_ACQUIRE_PAUSE = 0.01
+# A prune probe holds a lock for microseconds: a contended lock is retried until this deadline.
+_RETRY_SECONDS = 0.05
+_RETRY_PAUSE = 0.001
 # The lock is held by someone else. Any other error (ENOLCK on an NFS mount without lockd,
 # EOPNOTSUPP) means this filesystem cannot lock at all: retrying cannot help.
 _BUSY = {errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES, getattr(errno, "EDEADLK", -1),
@@ -81,11 +88,36 @@ def owners_dir(home: str | Path | None = None) -> Path:
     return root.joinpath(*OWNERS_SUBDIR)
 
 
-def owner_pid(name: str) -> int | None:
-    """The pid a lock file name speaks for: ``<pid>.lock`` or ``<pid>.vouch-...lock``."""
-    stem = name.split(".", 1)[0]
+def _digits(text: str) -> bool:
     # ASCII digits only: str.isdigit() also accepts other scripts' digits ("١٢").
-    return int(stem) if name.endswith(_SUFFIX) and stem.isascii() and stem.isdigit() else None
+    return text.isascii() and text.isdigit()
+
+
+def pid_namespace() -> str:
+    """``.ns<inode>`` of this process's pid namespace on Linux; empty elsewhere (or unreadable)."""
+    if not sys.platform.startswith("linux"):
+        return ""
+    try:
+        return f".ns{os.stat('/proc/self/ns/pid').st_ino}"
+    except OSError:
+        return ""
+
+
+def parse_name(name: str) -> tuple[int, str] | None:
+    """``(pid, namespace tag)`` a lock file name speaks for (``<pid>[.ns<ino>].lock`` or
+    ``<pid>[.ns<ino>].vouch-...lock``); the tag is empty for an untagged name."""
+    if not name.endswith(_SUFFIX):
+        return None
+    parts = name.split(".")
+    if not _digits(parts[0]):
+        return None
+    tag = parts[1] if len(parts) > 2 and parts[1].startswith("ns") and _digits(parts[1][2:]) else ""
+    return int(parts[0]), f".{tag}" if tag else ""
+
+
+def own_lock_path(home: str | Path | None = None) -> str:
+    """This process's own owner-lock file for *home*'s root."""
+    return os.path.join(owners_dir(home), f"{os.getpid()}{pid_namespace()}{_SUFFIX}")
 
 
 def _try_lock(fd: int) -> bool:
@@ -122,24 +154,30 @@ def _still_named(fd: int, path: str) -> bool:
 
 
 def _acquire(path: str) -> str | None:
-    """Lock *path* from this process; *path*, or None when another holder keeps it. Raises
-    ``OSError`` when the file cannot be created or the filesystem cannot lock."""
-    if _ours(path):
-        return path
+    """Lock *path* from this process; *path*, or None when another holder keeps it past the retry
+    deadline. Raises ``OSError`` when the file cannot be created or the filesystem cannot lock."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    for _ in range(_ACQUIRE_TRIES):
+    deadline = time.monotonic() + _RETRY_SECONDS
+    while True:
+        if _ours(path):  # re-checked each try: another thread of this process may have taken it
+            return path
+        created = not os.path.exists(path)
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             locked = _try_lock(fd) and _still_named(fd, path)
         except OSError:
             os.close(fd)
+            if created:  # a filesystem that cannot lock: leave no file behind per start or spawn
+                with contextlib.suppress(OSError):
+                    os.unlink(path)
             raise
         if locked:
             _held[path] = fd
             return path
         os.close(fd)
-        time.sleep(_ACQUIRE_PAUSE)
-    return None
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(_RETRY_PAUSE)
 
 
 def _release(path: str) -> None:
@@ -157,12 +195,19 @@ def _release(path: str) -> None:
             os.unlink(path)
 
 
+def release_all() -> None:
+    """Drop every lock this process holds, and their files. For exit paths that skip ``atexit``
+    (``os._exit``): the kernel would drop the locks anyway, but the files would stay behind."""
+    for path in list(_held):
+        _release(path)
+
+
 def hold_owner_lock(home: str | Path | None = None) -> bool:
     """Take this process's owner lock for *home*'s root and hold it until the process exits.
     Idempotent. False (logged) when it cannot be taken: the prune will not know this process.
     Never raises: entry points call it first thing, and no lock failure may stop one starting."""
     try:
-        path = os.path.join(owners_dir(home), f"{os.getpid()}{_SUFFIX}")
+        path = own_lock_path(home)
         already = _ours(path)
         taken = _acquire(path)
     # health: allow BLE001 -- best-effort by contract: a home that cannot resolve (RuntimeError from Path.home()) must not abort the entry point
@@ -184,7 +229,7 @@ def vouch_for_child(pid: int, home: str | Path | None = None) -> str | None:
     lock cannot be taken. Never raises: the registry calls it right after a spawn or during
     checkpoint recovery, where an exception would kill the fresh child or abort the recovery."""
     try:
-        path = os.path.join(owners_dir(home), f"{pid}.vouch-{os.getpid()}-{next(_vouch_seq)}{_SUFFIX}")
+        path = os.path.join(owners_dir(home), f"{pid}{pid_namespace()}.vouch-{os.getpid()}-{next(_vouch_seq)}{_SUFFIX}")
         return _acquire(path)
     # health: allow BLE001 -- best-effort by contract: a failed vouch only leaves the child unprotected from the prune
     except Exception as exc:
@@ -217,31 +262,81 @@ def _check_usable(directory: Path) -> None:
 
 
 def live_owner_pids(home: str | Path | None = None) -> dict[int, str]:
-    """Pid -> lock file for every owner lock held under *home*'s root, read straight from the OS
-    lock state. A file whose lock this pass can take is stale (its holder died): it is removed.
-    Raises ``OSError`` when ownership cannot be known: the owners dir cannot be created, listed or
-    written, or its filesystem cannot lock (the caller fails closed and reaps nothing)."""
+    """Local pid -> lock file for every owner lock held under *home*'s root, read straight from
+    the OS lock state. A lock from another pid namespace counts only once resolved to a process
+    this one can see (:func:`_resolve_foreign`). A file whose lock this pass can take is stale (its
+    holder died): it is removed. Raises ``OSError`` when ownership cannot be known: the owners dir
+    cannot be created, listed or written, or its filesystem cannot lock (the caller fails closed)."""
     directory = owners_dir(home)
     try:
         _check_usable(directory)
         names = os.listdir(directory)
     except OSError as exc:
         raise OSError(exc.errno, f"scratch owner locks unavailable in {directory}: {exc}") from exc
+    ours = pid_namespace()
     owners: dict[int, str] = {}
+    foreign: dict[tuple[str, int], str] = {}
     for name in sorted(names):
-        pid = owner_pid(name)
-        if pid is None:
-            continue
+        parsed = parse_name(name)
         path = os.path.join(directory, name)
-        if _ours(path) or _held_elsewhere(path):
+        if parsed is None or not (_ours(path) or _held_elsewhere(path)):
+            continue
+        pid, tag = parsed
+        if tag in ("", ours):
             owners.setdefault(pid, path)
+        else:
+            foreign.setdefault((tag, pid), path)
+    for pid, path in _resolve_foreign(foreign).items():
+        owners.setdefault(pid, path)
     return owners
+
+
+def sweep_stale_owner_locks(home: str | Path | None = None) -> None:
+    """Remove every owner-lock file under *home*'s root whose holder is gone. Creates nothing: a
+    root that has no owners dir has nothing to sweep."""
+    directory = owners_dir(home)
+    try:
+        names = os.listdir(directory)
+    except FileNotFoundError:
+        return
+    for name in names:
+        path = os.path.join(directory, name)
+        if parse_name(name) is not None and not _ours(path):
+            _held_elsewhere(path)
+
+
+def _ns_key(pid: int) -> tuple[str, int] | None:
+    """``(namespace tag, pid inside that namespace)`` of a process this one can see (Linux)."""
+    try:
+        tag = f".ns{os.stat(f'/proc/{pid}/ns/pid').st_ino}"
+        with open(f"/proc/{pid}/status", encoding="ascii", errors="replace") as status:
+            line = next((line for line in status if line.startswith("NSpid:")), "")
+        return tag, int(line.split()[-1])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _resolve_foreign(foreign: dict[tuple[str, int], str]) -> dict[int, str]:
+    """Local pid -> lock file for the held locks of other pid namespaces whose holder is a process
+    this one can see (a host prune sees a container's processes). pid 1 of that namespace never
+    owns (a container init adopts every orphan); a lock no visible process matches is dropped."""
+    if not foreign:
+        return {}
+    import psutil
+
+    resolved: dict[int, str] = {}
+    for pid in psutil.pids():
+        key = _ns_key(pid)
+        if key is not None and key[1] != 1 and key in foreign:
+            resolved[pid] = foreign[key]
+    return resolved
 
 
 def _held_elsewhere(path: str) -> bool:
     """Probe *path*: True when another process holds it (or it cannot be probed: an unknown is
     never read as free). A free file is stale and removed."""
-    for _ in range(_ACQUIRE_TRIES):
+    deadline = time.monotonic() + _RETRY_SECONDS
+    while time.monotonic() < deadline:
         verdict = _probe(path)
         if verdict is not None:
             return verdict

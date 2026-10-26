@@ -1603,6 +1603,8 @@ def _run_legacy_gateway():
         from hermes_startup_watchdog import arm_startup_watchdog
         arm_startup_watchdog()
     from gateway.run import start_gateway
+    from hermes_cli.process_identity import register_gateway_identity
+    register_gateway_identity()  # owner lock + ledger entry, as every gateway start path takes them
     print(_t("cli.gateway.starting"))
     asyncio.run(start_gateway())
 

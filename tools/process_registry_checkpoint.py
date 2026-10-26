@@ -12,10 +12,6 @@ logger = logging.getLogger("tools.process_registry")
 
 
 class ProcessCheckpointMixin:
-    def _detached_host_fate(self, pid: Optional[int], expected_start: Optional[int]) -> str:
-        """Subclass supplies the live PID decision. See ProcessRegistry."""
-        raise NotImplementedError
-
     @staticmethod
     def _release_vouch(session) -> None:
         """Drop the scratch owner lock the registry holds for this session (a fresh spawn's or a

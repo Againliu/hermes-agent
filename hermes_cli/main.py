@@ -80,10 +80,8 @@ def _exit_after_oneshot(rc: object) -> None:
     The SIGABRT this guards against fires in a native-extension finalizer
     during ``Py_FinalizeEx``, *after* the response printed. Flush, shut down
     file logging, then ``os._exit`` past finalization. The ``atexit`` chain is
-    deliberately skipped — several handlers re-enter native code that may be
-    the abort source; stateful cleanup lives in ``_cleanup_oneshot_runtime``.
-
-    See #30387, #43055.
+    deliberately skipped — several handlers re-enter native code that may be the abort source;
+    stateful cleanup lives in ``_cleanup_oneshot_runtime`` (#30387, #43055); owner-lock files go here.
     """
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -92,6 +90,8 @@ def _exit_after_oneshot(rc: object) -> None:
             pass
     try:
         logging.shutdown()
+        from hermes_constants_scratch_lock import release_all
+        release_all()
     except Exception:
         pass
     os._exit(rc if isinstance(rc, int) else (0 if rc is None else 1))

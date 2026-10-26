@@ -51,6 +51,8 @@ def test_prune_keeps_a_registered_gateways_shell_after_a_clock_step(tmp_path, mo
 
         assert psutil.Process(shell).status() != psutil.STATUS_ZOMBIE, "the gateway's shell was killed"
         assert lane.exists(), "the entry the gateway's shell works in was deleted"
+        log = (tmp_path / "logs" / "scratch-prune.log").read_text(encoding="utf-8-sig")
+        assert f"held for pid={gateway.pid}" in log, log  # kept by the gateway's lock, not a fail-closed pass
     finally:
         for child in psutil.Process(gateway.pid).children(recursive=True):
             child.kill()

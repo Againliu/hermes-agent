@@ -240,6 +240,7 @@ def test_a_readopted_process_keeps_its_scratch_entry_until_its_session_ends(regi
             "host_start_time": ProcessRegistry._safe_host_start_time(proc.pid), "task_id": "t1"}]))
         monkeypatch.setattr("tools.process_registry.CHECKPOINT_PATH", checkpoint)
         assert registry.recover_from_checkpoint() == 1
+        assert proc.pid in live_owner_pids(tmp_path), "the re-adopted worker has no vouch"
         ancient = time.time() - 30 * 3600
         os.utime(entry, (ancient, ancient))
 
@@ -247,6 +248,8 @@ def test_a_readopted_process_keeps_its_scratch_entry_until_its_session_ends(regi
 
         assert proc.poll() is None, "the re-adopted worker was reaped"
         assert entry.exists(), "the re-adopted worker's entry was deleted"
+        log = (tmp_path / "logs" / "scratch-prune.log").read_text(encoding="utf-8-sig")
+        assert f"held for pid={proc.pid}" in log and ".vouch-" in log, log
         proc.kill()
         proc.wait()
         wait_until(lambda: registry.poll("proc_readopt_owner")["status"] == "not_found",

@@ -7,16 +7,22 @@ someone runs ``git worktree prune``. Both are reaped here, right before ``rmtree
 
 A process Hermes itself started is never an orphan, though: an idle entry a live Hermes
 process still works inside is kept, not reaped (#132401). Ownership is an OS-held lock that
-Hermes' own entry points take automatically (hermes_constants_scratch_lock), never a marker a
-lane must remember to drop, and never a guess from pids, start times or clocks: the kernel
-releases a dead holder's lock the instant it dies.
+Hermes' own entry points and spawners take automatically (hermes_constants_scratch_lock), never a
+marker a lane must remember to drop. The locks decide every kill: the kernel releases a dead
+holder's lock the instant it dies, so a process is only signalled when no live lock holder is on
+its parent chain.
 
 One keep-only addition: a background process a profile's process registry recorded in its
 ``processes.json`` is owned too while the registry's own same-process check (the rule
-``recover_from_checkpoint`` re-adopts by) says it is still that process. A recorded child
-outlives its spawner (a gateway restart, a managed worker between turns) until the next spawner
-re-adopts it and vouches for it with a lock; a prune due in that window must not kill it. This
-check can only add owners, never cause a kill: the locks stay the authority for everything else.
+``recover_from_checkpoint`` re-adopts by: the recorded kernel start time must match, with a bare
+liveness check when none was recorded) says it is still that process. A recorded child outlives
+its spawner (a gateway restart, a managed worker between turns) until the next spawner re-adopts
+it and vouches for it with a lock; a prune due in that window must not kill it. This check can
+only add owners, never cause a kill.
+
+When the locks themselves are unusable (the owners dir cannot be created, written or locked),
+ownership is unknown: every entry a candidate process works in is kept and nothing is signalled,
+while idle entries no process works in are still deleted.
 """
 from __future__ import annotations
 
@@ -31,7 +37,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import hermes_constants_scratch_stuck as stuck
-from hermes_constants_scratch_lock import ancestry, live_owner_pids, owning_holder
+from hermes_constants_scratch_lock import ancestry, live_owner_pids, owning_holder, sweep_stale_owner_locks
 
 logger = logging.getLogger(__name__)
 
@@ -202,12 +208,12 @@ def _recorded_background_pids(home: Path) -> dict[int, str]:
     same-process check. A file that is missing or unreadable adds nothing; the registry itself
     recovers nothing from it either."""
     from hermes_constants import get_default_hermes_root
-    from tools.process_registry import process_registry
+    from tools.process_registry_host_fate import CHECKPOINT_FILENAME, detached_host_fate
 
     root = get_default_hermes_root(home=home)
-    homes = {home, root, *(path.parent for path in (root / "profiles").glob("*/processes.json"))}
+    homes = {home, root, *(path.parent for path in (root / "profiles").glob(f"*/{CHECKPOINT_FILENAME}"))}
     owners: dict[int, str] = {}
-    for path in sorted(base / "processes.json" for base in homes):
+    for path in sorted(base / CHECKPOINT_FILENAME for base in homes):
         try:
             entries = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError):
@@ -216,7 +222,7 @@ def _recorded_background_pids(home: Path) -> dict[int, str]:
             pid = entry.get("pid") if isinstance(entry, dict) else None
             if type(pid) is not int or pid <= 1 or entry.get("pid_scope", "host") != "host":
                 continue
-            if process_registry._detached_host_fate(pid, entry.get("host_start_time")) == "running":
+            if detached_host_fate(pid, entry.get("host_start_time")) == "running":
                 owners.setdefault(pid, f"background process pid={pid} recorded in {os.fspath(path)!r}")
     return owners
 
@@ -253,6 +259,16 @@ def _keep_entries_of(doomed: list[Path], proc, cwd_path: str, audit: logging.Log
             name = "?"
         audit.info("scratch prune: kept %r — live Hermes process pid=%d (%r) works inside; %s",
                    os.fspath(entry), proc.pid, name, why)
+
+
+def _keep_unknown(doomed: list[Path], candidates: list, audit: logging.Logger, exc: Exception) -> None:
+    """Ownership could not be read: keep every doomed entry a candidate works in and signal no one.
+    Entries no process works in are not affected and are still deleted."""
+    for proc, cwd_path in candidates:
+        for entry in [e for e in doomed if _under(cwd_path, os.path.realpath(str(e)))]:
+            doomed.remove(entry)
+            audit.info("scratch prune: kept %r — ownership unknown for pid=%d working inside (%s: %r), "
+                       "nothing signalled", os.fspath(entry), proc.pid, type(exc).__name__, str(exc))
 
 
 def reap_processes_rooted_in(scratch_root: Path, doomed: list[Path], audit: logging.Logger = logger) -> int:
@@ -304,7 +320,13 @@ def reap_processes_rooted_in(scratch_root: Path, doomed: list[Path], audit: logg
     # exists to clear the way for rmtree); one whose cwd is already gone still goes.
     for _read in range(2):
         if victims:
-            victims = _keep_owned(doomed, victims, _owners(home), audit)
+            try:
+                owners = _owners(home)
+            # health: allow BLE001 -- fail-closed boundary, scoped: only the candidates' entries become unknown
+            except Exception as exc:
+                _keep_unknown(doomed, victims, audit, exc)
+                return 0
+            victims = _keep_owned(doomed, victims, owners, audit)
         victims = [(proc, cwd_path) for proc, cwd_path in victims
                    if not os.path.exists(cwd_path) or any(_under(cwd_path, os.path.realpath(str(e))) for e in doomed)]
     if not victims:
@@ -376,25 +398,30 @@ def _remove_entry(entry: Path, audit: logging.Logger) -> list[str] | None:
     """Delete *entry*; the dirs that refused access (see ``stuck``), or None when it was kept.
 
     Windows refuses to rename a directory while any process holds a handle inside it (an open
-    file, a cwd). The entry is moved aside and back first, so one in use is kept whole instead of
-    half-deleted around the files ``rmtree`` cannot remove."""
+    file, a cwd). The entry is moved aside first, so one in use is kept whole instead of
+    half-deleted around the files ``rmtree`` cannot remove, and the tree is removed under the
+    aside name: a process opening the entry by its old path in the meantime finds nothing to hold.
+    Whatever ``rmtree`` could not remove is moved back to the entry's name, best-effort."""
     if not entry.is_dir() or entry.is_symlink():
         entry.unlink()
         return []
-    if os.name == "nt":
-        aside = entry.with_name(f".{entry.name}.pruning-{os.getpid()}")
-        try:
-            os.rename(entry, aside)
-        except OSError as exc:
-            audit.info("scratch prune: kept %r — in use: Windows refused to move it (%s)", os.fspath(entry), exc)
-            return None
+    if os.name != "nt":
+        return stuck.rmtree_collecting_permission_errors(entry)
+    aside = entry.with_name(f".{entry.name}.pruning-{os.getpid()}")
+    try:
+        os.rename(entry, aside)
+    except OSError as exc:
+        audit.info("scratch prune: kept %r — in use: Windows refused to move it (%s)", os.fspath(entry), exc)
+        return None
+    stuck.rmtree_collecting_permission_errors(aside)
+    if os.path.lexists(aside):
         try:
             os.rename(aside, entry)
         except OSError as exc:
-            audit.info("scratch prune: kept %r as %r — could not move it back (%s)",
+            audit.info("scratch prune: could not fully remove %r; the rest is left as %r (%s)",
                        os.fspath(entry), os.fspath(aside), exc)
             return None
-    return stuck.rmtree_collecting_permission_errors(entry)
+    return []
 
 
 def prune_idle_entries(
@@ -412,6 +439,16 @@ def prune_idle_entries(
         if audit is not logger:
             for handler in audit.handlers:
                 handler.close()
+
+
+def _sweep_stale_locks(scratch_root: Path) -> None:
+    """Remove owner-lock files whose holders are gone (an ``os._exit`` skips their release). Its
+    own boundary: housekeeping must never fail the pass or change what it decided."""
+    try:
+        sweep_stale_owner_locks(Path(scratch_root).absolute().parent.parent)
+    # health: allow BLE001 -- housekeeping only: a stale file is never read as an owner
+    except Exception as exc:
+        logger.debug("scratch prune: stale owner-lock sweep failed: %s", exc)
 
 
 def _prune_idle_entries(
@@ -443,6 +480,8 @@ def _prune_idle_entries(
         audit.info("scratch prune: process check failed (%s: %r), nothing deleted this pass",
                    type(exc).__name__, str(exc))
         return 0
+    finally:
+        _sweep_stale_locks(root)
     if not doomed:
         return 0
     repos: set[str] = set()

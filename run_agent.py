@@ -1516,6 +1516,9 @@ def main(
     print("=" * 50)
     if list_tools:
         return _print_tool_listing()
+    from hermes_constants_scratch_lock import hold_owner_lock
+
+    hold_owner_lock()  # its tools' shells and MCP helpers are Hermes-owned for the scratch prune
 
     # One TLS authority: trust the OS store before any outbound call (bare
     # requests/urllib included) resolves a CA bundle — see agent/ssl_verify.py.
