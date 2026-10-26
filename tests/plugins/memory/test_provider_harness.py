@@ -55,7 +55,7 @@ def test_recall_from_turn_one_reaches_the_model_on_turn_two():
         h.end_session()
 
     assert "Miso" in h.prefetched[-1]
-    assert "Miso" in h.requests[-1]
+    assert "Miso" in h.latest_recall  # turn 1's text is also in the history; only recall is here
     assert h.init_kwargs["platform"] == "telegram"
     order = h.hook_order
     assert order[0] == "initialize" and order[-1] == "shutdown"
@@ -70,7 +70,7 @@ def test_harness_catches_a_provider_that_blanks_between_turn_start_and_prefetch(
         h.turn("what is my cat called?")
 
     assert h.prefetched[-1] == ""
-    assert "Miso" not in h.requests[-1].split("what is my cat called?")[-1]
+    assert h.latest_recall == ""
 
 
 def test_harness_unwinds_a_failed_setup_and_unwraps_the_provider_on_exit():

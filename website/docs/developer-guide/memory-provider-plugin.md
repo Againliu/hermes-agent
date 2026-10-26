@@ -467,9 +467,12 @@ def test_recall_reaches_the_model():
         h.turn("what is my cat called?")
         h.end_session()
     assert "Miso" in h.prefetched[-1]   # prefetch returned it on turn 2
-    assert "Miso" in h.requests[-1]     # and it reached the model's input
+    assert "Miso" in h.latest_recall    # and its <memory-context> block reached turn 2's message
     print(h.hook_order, h.init_kwargs)  # what the provider saw, in order
 ```
+
+Check recall with `h.latest_recall`, not `h.requests[-1]`: each request also carries the earlier
+turns as history, so text from turn 1 is there whether or not recall was injected.
 
 Run it from a hermes-agent checkout with `scripts/run_tests.sh` (the suite isolates `HERMES_HOME`;
 the harness writes `memory.provider` to that home's config).

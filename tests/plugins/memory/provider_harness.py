@@ -15,7 +15,7 @@ Usage from a provider's tests (any ``MemoryProvider`` instance)::
         with ProviderHarness(MyProvider(), platform="telegram") as h:
             h.turn("my cat is called Miso")
             h.turn("what is my cat called?")
-        assert "Miso" in h.requests[-1]          # recalled text was in the model's input
+        assert "Miso" in h.latest_recall         # recalled text reached the model with turn 2
         assert h.prefetched[-1]                  # prefetch returned something on turn 2
 
 Run it under the suite's isolated ``HERMES_HOME`` (``scripts/run_tests.sh``); the harness writes
@@ -42,6 +42,8 @@ class ProviderHarness:
 
     ``events`` is ``[(hook, kwargs_or_args), ...]`` in call order, ``prefetched`` holds each
     ``prefetch`` return value, ``requests`` is the flattened text of each model request,
+    ``latest_user_inputs`` is the newest user message of each request (where the turn's recall is
+    injected; earlier turns' text rides along in ``requests`` as history, so check recall here),
     ``init_kwargs`` is what ``initialize`` received.
     """
 
@@ -55,6 +57,7 @@ class ProviderHarness:
         self.events: list[tuple[str, Any]] = []
         self.prefetched: list[str] = []
         self.requests: list[str] = []
+        self.latest_user_inputs: list[str] = []
         self.init_kwargs: dict[str, Any] = {}
         self.history: list[dict[str, Any]] = []
         self.agent = None
@@ -94,7 +97,10 @@ class ProviderHarness:
 
         class _Completions:
             def create(self, **kw):
-                harness.requests.append(json.dumps(kw.get("messages") or [], default=str))
+                messages = kw.get("messages") or []
+                harness.requests.append(json.dumps(messages, default=str))
+                harness.latest_user_inputs.append(next(
+                    (str(m.get("content") or "") for m in reversed(messages) if m.get("role") == "user"), ""))
                 return SimpleNamespace(choices=[SimpleNamespace(
                     message=SimpleNamespace(content=harness.reply, tool_calls=None, reasoning=None,
                                             reasoning_content=None),
@@ -155,3 +161,10 @@ class ProviderHarness:
     @property
     def hook_order(self) -> list[str]:
         return [hook for hook, _ in self.events]
+
+    @property
+    def latest_recall(self) -> str:
+        """The ``<memory-context>`` block on the newest model request's user message, "" if none."""
+        text = self.latest_user_inputs[-1] if self.latest_user_inputs else ""
+        start, end = text.find("<memory-context>"), text.find("</memory-context>")
+        return text[start:end] if 0 <= start < end else ""
