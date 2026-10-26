@@ -63,11 +63,14 @@ migration files with `read_file` and `search_files` first.
 2. **Look up every statement's lock** in `references/engine-lock-tables.md`. Done when each
    statement in the plan has: the lock it takes, what that lock blocks, for how long, its
    timeout, and its rollback. A step missing any of these means the plan is not ready; say which.
-3. **Order a live migration as expand → backfill → switch → contract.**
+3. **Order a live migration as expand → dual-write → backfill → switch → contract.**
    - *Expand:* add the new column/table/index without breaking current code.
+   - *Dual-write:* deploy code (or a trigger) writing both shapes, and confirm every old writer
+     has stopped before backfilling; a row updated after its batch was copied otherwise stays stale.
    - *Backfill:* in batches keyed on the primary key, bounded rows per batch, a pause between
-     batches, progress recorded so it restarts where it stopped.
-   - *Switch:* deploy code reading the new shape; dual-write while both exist.
+     batches, progress recorded so it restarts where it stopped. Done when a comparison query
+     finds no row where the two shapes disagree.
+   - *Switch:* deploy code reading the new shape; keep dual-writing while both exist.
    - *Contract:* drop the old shape only after the switch is observed in production.
    Each phase is its own deploy; a rollback across a contract step is a restore, so say so.
 4. **Indexes only from evidence.** Cite the observed plan the index changes; otherwise mark the
