@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
-import { $gatewayUpdateDrain, updateDrainTurns } from '@/store/gateway-update-drain'
+import { $gatewayUpdateDrains, sessionUpdateDrain, updateDrainTurns } from '@/store/gateway-update-drain'
 import type { SessionControlEntry } from '@/store/session-control'
 
 import { SessionControlGoalSection } from './session-control-goal'
@@ -38,7 +38,8 @@ export const SessionControlSections = memo(function SessionControlSections({
 
   // Action failures arrive through onFeedback (which wins below); a store
   // error with no feedback is a read/hydration failure, not a failed action.
-  const updateDrain = useStore($gatewayUpdateDrain)
+  // The cause read from THIS session's own gateway: another gateway's update is not this refusal.
+  const updateDrain = sessionUpdateDrain(useStore($gatewayUpdateDrains), sessionId)
   // A refusal because the owner is finishing its turns for an update is that update, not a fault.
   const updating = entry.error === 'runtime_draining' && updateDrain
 

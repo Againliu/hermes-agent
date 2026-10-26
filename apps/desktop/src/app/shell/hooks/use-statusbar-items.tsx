@@ -390,7 +390,7 @@ export function useStatusbarItems({
   const gatewayOpen = gatewayState === 'open'
   const gatewayConnecting = gatewayState === 'connecting'
 
-  const healthCopy = useGatewayHealthCopy(copy, gatewayState, requestGateway)
+  const healthCopy = useGatewayHealthCopy(copy, gatewayState, requestGateway, activeGatewayProfile)
 
   const gatewayHealth = statusBarGatewayHealth({
     connectionState: gatewayState,
