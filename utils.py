@@ -495,13 +495,8 @@ def _delete_rt_entry(container, key, parent=None) -> None:
     index = keys.index(key)
     # Lead-in lines an earlier deletion in this collection parked on this entry.
     lead = (container.ca.items.get(key) or [None] * 4)[1] or []
-    holder, holder_key = _trailing_comment_holder(container, key)
-    slot = 2 if isinstance(holder, CommentedMap) else 0
-    token = (holder.ca.items.get(holder_key) or [None] * 4)[slot]
+    below = "".join(" " * t.start_mark.column + t.value for t in lead) + _take_trailing_lines(container, key)
     del container[key]
-    # The first line ends the deleted entry itself: its end-of-line comment, or just the newline.
-    below = token.value.split("\n", 1)[1] if token is not None and "\n" in token.value else ""
-    below = "".join(" " * t.start_mark.column + t.value for t in lead) + below
     if not below:
         return
     if index > 0:
