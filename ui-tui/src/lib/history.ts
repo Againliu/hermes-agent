@@ -25,8 +25,15 @@ function readTail(): string {
     readSync(fd, buf, 0, length, size - length)
     const text = buf.toString('utf8')
 
-    // A cut tail starts mid-entry: drop everything before the first complete record.
-    return length < size ? text.slice(text.indexOf('\n#') + 1) : text
+    if (length === size) {
+      return text
+    }
+
+    // A cut tail starts mid-entry: drop everything before the first complete record. No header at
+    // all means one record outgrew the window; its tail alone is not the prompt, so recall nothing.
+    const boundary = text.indexOf('\n#')
+
+    return boundary === -1 ? '' : text.slice(boundary + 1)
   } finally {
     closeSync(fd)
   }

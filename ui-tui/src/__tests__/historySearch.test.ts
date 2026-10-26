@@ -55,6 +55,14 @@ describe('history file', () => {
     expect(readFileSync(file, 'utf8')).toContain('+new prompt')
   })
 
+  it('drops a newest record that outgrew the read window instead of recalling its tail', async () => {
+    const huge = Array.from({ length: 20_000 }, (_, i) => `+line ${i} ${'x'.repeat(60)}`).join('\n')
+    writeFileSync(join(home, '.hermes_history'), `\n# 2026-01-01\n+old prompt\n\n# 2026-01-02\n${huge}\n`)
+    const history = await import('../lib/history.js')
+
+    expect(history.load()).toEqual([])
+  })
+
   it.skipIf(process.platform === 'win32')('refuses to follow a symlink planted at the history path', async () => {
     const target = join(home, 'elsewhere')
     writeFileSync(target, '')
