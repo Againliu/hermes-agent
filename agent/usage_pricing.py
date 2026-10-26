@@ -478,22 +478,11 @@ _MODEL_NORMALIZERS = {"anthropic": _normalize_anthropic_model_name, "bedrock": _
 
 
 def _load_user_pricing_overrides() -> list:
-    """Read the ``pricing_overrides:`` list from ``~/.hermes/config.yaml``.
+    """The ``pricing_overrides:`` list from the active profile's config.yaml (the loader caches
+    on the file signature, so a live edit applies on the next priced call)."""
+    from hermes_cli.config import load_config_readonly
 
-    Returns an empty list when the key is absent, the config can't be
-    loaded, or the value isn't a list. Imports ``load_config`` lazily so
-    that ``agent.usage_pricing`` doesn't pull in the CLI config module at
-    import time (which would invert the dependency direction).
-    """
-    try:
-        from hermes_cli.config import load_config
-    except Exception:
-        return []
-    try:
-        cfg = load_config()
-    except Exception:
-        return []
-    raw = cfg.get("pricing_overrides") if isinstance(cfg, dict) else None
+    raw = load_config_readonly().get("pricing_overrides")
     return raw if isinstance(raw, list) else []
 
 
@@ -524,49 +513,29 @@ def _entry_from_user_override(entry: dict[str, Any]) -> Optional[PricingEntry]:
 
 
 def _lookup_user_override_pricing(route: BillingRoute) -> Optional[PricingEntry]:
-    """Match the first ``pricing_overrides`` entry whose ``provider`` matches
-    ``route.provider`` and whose ``model`` matches either the full
-    ``route.model`` or its last path segment (basename).
+    """First ``pricing_overrides`` entry matching this route, else None.
 
-    Provider strings of the form ``custom:<name>`` are preserved by
-    ``resolve_billing_route``; for those, ``route.model`` is the basename
-    (e.g. ``kimi-k2p6``). For ``provider == "custom"`` (no suffix),
-    ``route.model`` is the full id (e.g. ``accounts/fireworks/models/kimi-k2p6``).
-    Matching against both forms means users don't have to think about
-    that distinction.
+    ``provider`` matches the billing route's provider; ``custom:<name>`` also matches the
+    canonical name a recognized custom endpoint routes as (``custom:fireworks`` → ``fireworks``),
+    and an entry without ``provider`` matches every route. ``model`` matches the full id or its
+    last path segment on either side. An entry missing a required rate is skipped, so it never
+    masks a later valid one.
     """
-    overrides = _load_user_pricing_overrides()
-    if not overrides:
-        return None
     target_provider = (route.provider or "").lower()
     target_model = (route.model or "").lower()
-    target_basename = target_model.rsplit("/", 1)[-1]
-    for raw in overrides:
+    target_names = {target_model, target_model.rsplit("/", 1)[-1]}
+    for raw in _load_user_pricing_overrides():
         if not isinstance(raw, dict):
             continue
-        ep = str(raw.get("provider", "")).strip().lower()
-        em = str(raw.get("model", "")).strip().lower()
-        if not ep or not em:
+        ep = str(raw.get("provider") or "").strip().lower()
+        em = str(raw.get("model") or "").strip().lower()
+        if not em or (ep and target_provider not in (ep, ep.removeprefix("custom:"))):
             continue
-        # ``resolve_billing_route`` normalizes recognized custom endpoints to
-        # their canonical provider name (e.g. ``custom:fireworks`` routes as
-        # ``fireworks``). Accept the ``custom:<name>`` spelling users see in
-        # their config alongside the normalized name so overrides keep
-        # matching regardless of which form the router produces.
-        ep_normalized = ep.split(":", 1)[1] if ep.startswith("custom:") else ep
-        if target_provider not in (ep, ep_normalized):
-            continue
-        em_basename = em.rsplit("/", 1)[-1]
-        # Match either form on either side: lets users write the full
-        # "accounts/.../kimi-k2p6" or just "kimi-k2p6" without caring
-        # which form their custom_providers setup routes with.
-        if em != target_model and em_basename != target_model and em != target_basename:
+        if em not in target_names and em.rsplit("/", 1)[-1] != target_model:
             continue
         entry = _entry_from_user_override(raw)
         if entry is not None:
             return entry
-        # Bad entry (missing required rates) — keep scanning so a single
-        # malformed item doesn't mask a later valid one for the same model.
     return None
 
 
