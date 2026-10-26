@@ -45,3 +45,11 @@ def test_edit_without_on_limit_leaves_it_and_bad_values_are_refused(tmp_cron_dir
     assert "on_limit" not in get_job(job["id"])
     with pytest.raises(SystemExit):
         _parse("edit", job["id"], "--on-limit", "retry")
+
+
+def test_a_refused_edit_leaves_on_limit_unchanged(tmp_cron_dir, capsys):
+    """--on-limit rides the one validated update: a bad --schedule in the same edit changes nothing."""
+    job = create_job(prompt="Daily report", schedule="every 1h")
+    assert cron_command(_parse("edit", job["id"], "--on-limit", "skip", "--schedule", "not a schedule")) == 1
+    assert "on_limit" not in get_job(job["id"])
+    assert "Failed to update job" in capsys.readouterr().out

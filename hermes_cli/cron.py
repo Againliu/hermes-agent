@@ -850,15 +850,11 @@ def cron_edit(args):
     elif add_skills or remove_skills:
         final_skills = [skill for skill in existing_skills if skill not in remove_skills]
         final_skills += [skill for skill in add_skills if skill not in final_skills]
-    updated_on_limit = _set_on_limit(job["id"], args)
     result = _cron_api(action="update", job_id=args.job_id,
                        schedule=getattr(args, "schedule", None),
                        prompt=getattr(args, "prompt", None), skills=final_skills,
-                       no_agent=getattr(args, "no_agent", None), **_job_api_kwargs(args))
-    if updated_on_limit and not result.get("success") and "No updates" in str(result.get("error")):
-        print(color(f"Updated job: {job['id']}", Colors.GREEN))
-        print(f"  On usage limit: {updated_on_limit.get('on_limit')}")
-        return 0
+                       no_agent=getattr(args, "no_agent", None), on_limit=getattr(args, "on_limit", None),
+                       **_job_api_kwargs(args))
     if not result.get("success"):
         print(color(f"Failed to update job: {result.get('error', 'unknown error')}", Colors.RED))
         return 1
@@ -867,7 +863,7 @@ def cron_edit(args):
     print(f"  Name: {updated['name']}\n  Schedule: {updated['schedule']}")
     print(f"  Skills: {', '.join(updated['skills'])}" if updated.get("skills") else
           "  Skills: none")
-    _print_job_details({**updated, "on_limit": (updated_on_limit or {}).get("on_limit")})
+    _print_job_details(updated)
     return 0
 
 
