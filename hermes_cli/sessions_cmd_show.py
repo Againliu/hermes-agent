@@ -25,20 +25,6 @@ def add_show_parser(sessions_subparsers) -> None:
     add_json_flag(parser, "Emit one JSON object (the ctx.sessions projection)")
 
 
-def session_detail(reader: SessionReader, session_id: str) -> dict | None:
-    """``{"session", "lineage", "subagents", "usage"}`` for one id or unique prefix, else None."""
-    session = reader.get(session_id)
-    if session is None:
-        return None
-    sid = session["id"]
-    return {
-        "session": session,
-        "lineage": reader.lineage(sid),
-        "subagents": reader.subagents(sid),
-        "usage": reader.usage(sid, include_subagents=True),
-    }
-
-
 def _print_text(detail: dict) -> None:
     session, usage = detail["session"], detail["usage"]
     for key, value in session.items():
@@ -55,7 +41,7 @@ def _print_text(detail: dict) -> None:
 
 def cmd_show(args) -> int | None:
     as_json = getattr(args, "json", False)
-    detail = session_detail(SessionReader(get_hermes_home()), args.session_id)
+    detail = SessionReader(get_hermes_home()).detail(args.session_id)
     if detail is None:
         if as_json:
             print(f"hermes: error: session '{args.session_id}' not found", file=sys.stderr)

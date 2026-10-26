@@ -105,3 +105,22 @@ def test_sessions_show_json_is_the_plugin_projection(tmp_path, monkeypatch, caps
     # A miss under --json keeps stdout empty for `| jq` and reports on stderr with exit 2.
     code, out, err = _run(capsys, "show", "nope", "--json")
     assert (code, out) == (2, "") and "nope" in err
+
+
+def test_sessions_show_reports_not_found_when_the_session_is_deleted_mid_read(tmp_path, monkeypatch, capsys):
+    """Another client deleting the row after it resolved must read as "not found", not a crash."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _seed(tmp_path)
+    original = SessionDB.get_compression_lineage
+    deleted = []
+
+    def delete_then_read(self, session_id):
+        if not deleted:
+            with SessionDB(db_path=tmp_path / "state.db") as writer:
+                writer.delete_session("root")
+            deleted.append(session_id)
+        return original(self, session_id)
+
+    monkeypatch.setattr(SessionDB, "get_compression_lineage", delete_then_read)
+    code, out, _ = _run(capsys, "show", "ro")
+    assert deleted and code == 1 and "not found" in out

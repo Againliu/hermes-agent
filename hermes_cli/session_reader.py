@@ -89,8 +89,7 @@ class SessionReader:
     def get(self, session_id: str) -> Optional[dict[str, Any]]:
         """One session by id or unambiguous id prefix, else None."""
         with self._db() as db:
-            resolved = db.resolve_session_id(session_id) if db and session_id else None
-            row = db.get_session(resolved) if resolved else None
+            row = _resolved_row(db, session_id)
             return project_session(row) if row else None
 
     def recent(self, *, source: Optional[str] = None, limit: int = 20,
@@ -117,29 +116,26 @@ class SessionReader:
         compression lineage), recursively, with their own compression continuations; rebuild the
         tree from each row's ``delegate_from``/``parent_session_id``. Ordered by start time."""
         with self._db() as db:
-            if db is None:
-                return []
-            rows = [db.get_session(sid) for sid in _subagent_ids(db, _lineage_ids(db, session_id))]
-            return sorted((project_session(r) for r in rows if r), key=lambda r: r["started_at"] or 0)
+            return _subagents(db, session_id) if db else []
 
     def usage(self, session_id: str, *, include_subagents: bool = False) -> Optional[dict[str, Any]]:
         """Token and cost totals for the whole conversation (its compression lineage), optionally
         with every session ``subagents()`` lists; ``session_ids`` names the rows summed."""
         with self._db() as db:
-            if db is None or not db.get_session(session_id):
+            return _usage(db, session_id, include_subagents) if db else None
+
+    def detail(self, session_id: str) -> Optional[dict[str, Any]]:
+        """``{"session", "lineage", "subagents", "usage"}`` for one id or unique prefix, read over one
+        open of the store; None when no session matches or it is deleted between the reads."""
+        with self._db() as db:
+            row = _resolved_row(db, session_id)
+            if row is None:
                 return None
-            ids = _lineage_ids(db, session_id)
-            if include_subagents:
-                ids += _subagent_ids(db, ids)
-            rows = [r for r in (db.get_session(sid) for sid in ids) if r]
-        totals: dict[str, Any] = {name: 0 for name in USAGE_FIELDS}
-        for name in ("estimated_cost_usd", "actual_cost_usd"):
-            totals[name] = None if all(r.get(name) is None for r in rows) else 0.0
-        for row in rows:
-            for name in USAGE_FIELDS:
-                if row.get(name) is not None:
-                    totals[name] += row[name]
-        return {"session_ids": [r["id"] for r in rows], **totals}
+            sid = row["id"]
+            detail = {"session": project_session(row), "lineage": db.get_compression_lineage(sid),
+                      "subagents": _subagents(db, sid), "usage": _usage(db, sid, True)}
+            # Ids are never reused, so a row still present here was present for every read above.
+            return detail if db.get_session(sid) else None
 
     def messages(self, session_id: str, *, limit: Optional[int] = 50, latest: bool = True,
                  include_ancestors: bool = False) -> list[dict[str, Any]]:
@@ -160,6 +156,33 @@ class SessionReader:
         except (ValueError, AttributeError):
             return None
         return todos if isinstance(todos, list) else None
+
+
+def _resolved_row(db: Any, session_id: str) -> Optional[dict[str, Any]]:
+    resolved = db.resolve_session_id(session_id) if db and session_id else None
+    return db.get_session(resolved) if resolved else None
+
+
+def _subagents(db: Any, session_id: str) -> list[dict[str, Any]]:
+    rows = [db.get_session(sid) for sid in _subagent_ids(db, _lineage_ids(db, session_id))]
+    return sorted((project_session(r) for r in rows if r), key=lambda r: r["started_at"] or 0)
+
+
+def _usage(db: Any, session_id: str, include_subagents: bool) -> Optional[dict[str, Any]]:
+    if not db.get_session(session_id):
+        return None
+    ids = _lineage_ids(db, session_id)
+    if include_subagents:
+        ids += _subagent_ids(db, ids)
+    rows = [r for r in (db.get_session(sid) for sid in ids) if r]
+    totals: dict[str, Any] = {name: 0 for name in USAGE_FIELDS}
+    for name in ("estimated_cost_usd", "actual_cost_usd"):
+        totals[name] = None if all(r.get(name) is None for r in rows) else 0.0
+    for row in rows:
+        for name in USAGE_FIELDS:
+            if row.get(name) is not None:
+                totals[name] += row[name]
+    return {"session_ids": [r["id"] for r in rows], **totals}
 
 
 def _lineage_ids(db: Any, session_id: str) -> list[str]:
