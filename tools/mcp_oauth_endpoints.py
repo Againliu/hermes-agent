@@ -17,6 +17,7 @@ Responses are capped at :data:`OAUTH_MAX_RESPONSE_BYTES` and :data:`OAUTH_FETCH_
 
 from __future__ import annotations
 
+import functools
 import time
 from typing import Any
 from urllib.parse import urlsplit
@@ -66,32 +67,45 @@ async def check_oauth_endpoint_async(url: str, server_url: str | None) -> None:
     await anyio.to_thread.run_sync(check_oauth_endpoint, url, server_url)
 
 
+# Request extension marking OAuth traffic: ``(server_url, url already checked)``. httpx copies a
+# request's extensions onto every redirect hop it builds, so the MCP transport recognises those hops.
+OAUTH_REQUEST_EXTENSION = "hermes_mcp_oauth"
+
+
 async def guard_oauth_request(request: Any, server_url: str | None) -> None:
-    """Validate an outgoing OAuth request and bound each of its network phases."""
-    await check_oauth_endpoint_async(str(request.url), server_url)
-    request.extensions = {**request.extensions, "timeout": dict.fromkeys(
-        ("connect", "read", "write", "pool"), OAUTH_FETCH_TIMEOUT)}
+    """Validate an outgoing OAuth request, mark it as OAuth traffic and bound each network phase."""
+    url = str(request.url)
+    await check_oauth_endpoint_async(url, server_url)
+    request.extensions = {**request.extensions, OAUTH_REQUEST_EXTENSION: (server_url, url),
+                          "timeout": dict.fromkeys(("connect", "read", "write", "pool"), OAUTH_FETCH_TIMEOUT)}
 
 
-def cap_oauth_response(response: Any) -> None:
+async def guard_oauth_hop(request: Any) -> bool:
+    """At the transport: True when *request* is marked OAuth traffic. A hop whose URL the auth flow did
+    not check (a redirect the client follows on its own) passes the endpoint rules here first."""
+    mark = request.extensions.get(OAUTH_REQUEST_EXTENSION)
+    if mark is None:
+        return False
+    server_url, checked_url = mark
+    if str(request.url) != checked_url:
+        await check_oauth_endpoint_async(str(request.url), server_url)
+    return True
+
+
+def cap_oauth_response(httpx_mod: Any, response: Any, url: str) -> None:
     """Bound the not-yet-read body of an OAuth *response* by size and wall-clock time; reading past
-    either raises :class:`OAuthEndpointRefused`. A body already read is left alone."""
-    stream = getattr(response, "stream", None)
-    if stream is None or getattr(response, "is_stream_consumed", True) or hasattr(response, "_content"):
-        return
+    either raises :class:`OAuthEndpointRefused`. ``httpx_mod`` is the httpx flavour that built the
+    response (httpx or the SDK's httpx2: each checks ``isinstance`` against its own stream base)."""
     declared = response.headers.get("content-length", "")
     # An oversized declaration is refused on the first read, inside the reader's own flow.
     oversized = declared.isdigit() and int(declared) > OAUTH_MAX_RESPONSE_BYTES
-    response.stream = _capped_stream_cls(type(stream).__mro__)(
-        stream, str(response.request.url), time.monotonic() + OAUTH_FETCH_TIMEOUT, oversized)
+    response.stream = _oauth_stream_cls(httpx_mod)(
+        response.stream, url, time.monotonic() + OAUTH_FETCH_TIMEOUT, oversized)
 
 
-def _capped_stream_cls(stream_mro: tuple) -> type:
-    """A byte-stream wrapper deriving from the same httpx flavour's ``AsyncByteStream`` as the
-    stream it wraps (httpx and the SDK's httpx2 each check ``isinstance`` against their own)."""
-    base = next((cls for cls in stream_mro if cls.__name__ == "AsyncByteStream"), object)
-
-    class _CappedOAuthStream(base):  # type: ignore[misc, valid-type]
+@functools.cache
+def _oauth_stream_cls(httpx_mod: Any) -> type:
+    class _CappedOAuthStream(httpx_mod.AsyncByteStream):
         def __init__(self, inner, url: str, deadline: float, oversized: bool):
             self._inner, self._url, self._deadline, self._oversized = inner, url, deadline, oversized
 
@@ -119,13 +133,13 @@ def _capped_stream_cls(stream_mro: tuple) -> type:
     return _CappedOAuthStream
 
 
-def oauth_client_event_hooks(server_url: str | None) -> dict[str, list]:
-    """``event_hooks=`` for an httpx client Hermes owns for OAuth traffic: every request (redirect
-    hops included) is checked and every response capped, through the same rules as the SDK flow."""
+def oauth_client_event_hooks(httpx_mod: Any, server_url: str | None) -> dict[str, list]:
+    """``event_hooks=`` for an *httpx_mod* client Hermes owns for OAuth traffic: every request (redirect
+    hops included: httpx runs the hooks per hop) is checked and every response capped before any read."""
     async def _on_request(request):
         await guard_oauth_request(request, server_url)
 
     async def _on_response(response):
-        cap_oauth_response(response)
+        cap_oauth_response(httpx_mod, response, str(response.request.url))
 
     return {"request": [_on_request], "response": [_on_response]}

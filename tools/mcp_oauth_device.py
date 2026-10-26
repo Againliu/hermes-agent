@@ -218,7 +218,7 @@ async def login_device(name, server_url, oauth_config):
     try:
         from tools.mcp_oauth_endpoints import oauth_client_event_hooks
         async with httpx.AsyncClient(timeout=10, follow_redirects=False,
-                                     event_hooks=oauth_client_event_hooks(server_url)) as client:
+                                     event_hooks=oauth_client_event_hooks(httpx, server_url)) as client:
             await _discover(client, provider)
             await _register(client, provider, cfg)
             tokens = await _authorize(client, provider, cfg)

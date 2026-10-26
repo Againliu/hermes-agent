@@ -97,6 +97,73 @@ def test_declared_fake_ip_server_gets_no_local_network_trust(fake_dns, monkeypat
     check_oauth_endpoint("https://auth.example.com/token", "https://proxied.example.com/mcp")
 
 
+def _expired_session(tmp_path, monkeypatch, token_endpoint="https://auth.example.com/token"):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    tokens = tmp_path / "mcp-tokens"
+    tokens.mkdir()
+    (tokens / "srv.json").write_text(json.dumps({
+        "access_token": "old", "refresh_token": "refresh-secret", "token_type": "Bearer", "expires_in": 0,
+        "expires_at": time.time() - 60, "hermes_issuer": "https://auth.example.com"}), encoding="utf-8")
+    (tokens / "srv.client.json").write_text(json.dumps({"client_id": "cid", "redirect_uris": ["http://127.0.0.1:1/cb"]}), encoding="utf-8")
+    (tokens / "srv.meta.json").write_text(json.dumps({
+        "issuer": "https://auth.example.com", "authorization_endpoint": "https://auth.example.com/authorize",
+        "token_endpoint": token_endpoint, "response_types_supported": ["code"]}), encoding="utf-8")
+    from tools.mcp_oauth_manager import get_manager, reset_manager_for_tests
+    reset_manager_for_tests()
+    return get_manager().get_or_build_provider("srv", "https://mcp.example.com/mcp", None)
+
+
+def _drive_through_mcp_transport(provider, handler):
+    """Send one MCP request through the transport stack every Hermes MCP HTTP client uses."""
+    from tools.mcp_tool import sdk_httpx
+    from tools.mcp_tool_errors import _make_mcp_body_cap_transport
+    httpx = sdk_httpx()
+
+    async def _drive():
+        transport = _make_mcp_body_cap_transport(httpx, httpx.MockTransport(handler))
+        async with httpx.AsyncClient(transport=transport, auth=provider, follow_redirects=True) as client:
+            await client.post("https://mcp.example.com/mcp", json={})
+    return httpx, _drive
+
+
+def test_token_endpoint_redirect_to_unsafe_endpoint_is_refused(fake_dns, tmp_path, monkeypatch):
+    """httpx follows a token endpoint's 307 on its own, outside the auth flow: the hop still passes the
+    endpoint rules, so the refresh token never reaches a plain-http private address."""
+    provider = _expired_session(tmp_path, monkeypatch)
+    seen = []
+
+    def _handler(request):
+        seen.append(str(request.url))
+        if request.url.host == "auth.example.com":
+            return httpx.Response(307, headers={"location": "http://intranet.example.com/token"})
+        return httpx.Response(401)
+    httpx, drive = _drive_through_mcp_transport(provider, _handler)
+    with pytest.raises(OAuthEndpointRefused):
+        asyncio.run(drive())
+    assert "https://auth.example.com/token" in seen
+    assert not any("intranet" in url for url in seen)
+
+
+def test_token_error_body_is_capped_before_any_reader(fake_dns, tmp_path, monkeypatch):
+    """A 400 from the token endpoint is read (dead-registration sniff) before the SDK sees it; the
+    OAuth body bound applies to that read too."""
+    provider = _expired_session(tmp_path, monkeypatch)
+    pulled = []
+
+    async def _huge():
+        for _ in range(4):
+            pulled.append(1)
+            yield b"x" * (OAUTH_MAX_RESPONSE_BYTES // 2 + 1)
+
+    def _handler(request):
+        if request.url.host == "auth.example.com":
+            return httpx.Response(400, content=_huge())
+        return httpx.Response(401)
+    httpx, drive = _drive_through_mcp_transport(provider, _handler)
+    with pytest.raises(Exception):
+        asyncio.run(drive())
+    assert len(pulled) <= 2
+
 
 def test_oversized_oauth_response_is_refused(fake_dns):
     from tools.mcp_tool import sdk_httpx
@@ -109,7 +176,7 @@ def test_oversized_oauth_response_is_refused(fake_dns):
     async def _fetch():
         transport = httpx.MockTransport(lambda request: httpx.Response(200, content=_huge()))
         async with httpx.AsyncClient(transport=transport,
-                                     event_hooks=oauth_client_event_hooks("https://mcp.example.com/mcp")) as client:
+                                     event_hooks=oauth_client_event_hooks(httpx, "https://mcp.example.com/mcp")) as client:
             await client.get("https://auth.example.com/.well-known/oauth-authorization-server")
     with pytest.raises(OAuthEndpointRefused, match="exceeds"):
         asyncio.run(_fetch())

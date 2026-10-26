@@ -61,7 +61,7 @@ async def _revoke(plan, server_url: str | None) -> str:
     try:
         async with asyncio.timeout(REVOKE_BUDGET_SECONDS):
             async with httpx.AsyncClient(timeout=REVOKE_BUDGET_SECONDS, follow_redirects=False,
-                                         event_hooks=oauth_client_event_hooks(server_url)) as client:
+                                         event_hooks=oauth_client_event_hooks(httpx, server_url)) as client:
                 for token, hint in pending:
                     response = await client.post(endpoint, data={"token": token, "token_type_hint": hint, **fields},
                                                  headers=headers)

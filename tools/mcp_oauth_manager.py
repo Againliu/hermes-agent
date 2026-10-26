@@ -120,7 +120,7 @@ class HermesMCPOAuthProvider(HermesProviderMixin, *_SDK_BASES):
                 logger.debug("MCP OAuth '%s': %s discovery to %s failed: %s", self._hermes_server_name, label, url, exc)
                 return None
         from tools.mcp_oauth_endpoints import oauth_client_event_hooks
-        async with httpx.AsyncClient(timeout=10.0, event_hooks=oauth_client_event_hooks(server_url)) as client:
+        async with httpx.AsyncClient(timeout=10.0, event_hooks=oauth_client_event_hooks(httpx, server_url)) as client:
             # PRM discovery to learn the authorization_server URL.
             for url in build_protected_resource_metadata_discovery_urls(None, server_url):
                 resp = await _send(client, url, "PRM")

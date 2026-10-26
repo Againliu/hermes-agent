@@ -11,6 +11,7 @@ import os
 import re
 from typing import Any, List, Optional
 from urllib.parse import urlparse
+from tools.mcp_oauth_endpoints import cap_oauth_response, guard_oauth_hop
 from tools.mcp_tool_common import _exc_str, _sanitize_error, _core
 from tools.mcp_tool_node_abi import NodeAbiMismatchError
 
@@ -383,7 +384,13 @@ def _make_mcp_body_cap_transport(httpx_mod, inner_transport, limit: int = _MCP_H
             self._inner = inner
 
         async def handle_async_request(self, request):
+            # OAuth traffic the auth flow marked, redirect hops included: endpoint rules before the
+            # dial, and the tighter OAuth body bound before any reader (the SDK's or Hermes').
+            oauth = await guard_oauth_hop(request)
             response = await self._inner.handle_async_request(request)
+            if oauth:
+                cap_oauth_response(httpx_mod, response, str(request.url))
+                return response
             declared = response.headers.get("content-length")
             with contextlib.suppress(ValueError):  # malformed header: the streamed cap still applies
                 if declared is not None and int(declared) > limit:

@@ -13,7 +13,7 @@ import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-from tools.mcp_oauth_endpoints import cap_oauth_response, check_oauth_endpoint_async, guard_oauth_request
+from tools.mcp_oauth_endpoints import check_oauth_endpoint_async, guard_oauth_request
 
 if TYPE_CHECKING:
     from tools.mcp_oauth import HermesTokenStorage
@@ -273,7 +273,8 @@ class HermesProviderMixin:
                         raise
                     if out is not request:
                         stamp_default_user_agent(out)
-                        # Every OAuth request the SDK makes, redirect hops included.
+                        # Every OAuth request the SDK makes; the MCP transport checks the redirect
+                        # hops httpx follows on its own and caps every OAuth response body.
                         await guard_oauth_request(out, self.context.server_url)
                     # Full bidirectional delegation: the SDK drives this flow with
                     # asend(response), so `async for` would swallow the response and
@@ -287,8 +288,6 @@ class HermesProviderMixin:
                     except BaseException as exc:
                         sent, thrown = None, exc
                     else:
-                        if out is not request:
-                            cap_oauth_response(sent)
                         failure = _asm_discovery_failure(sent)
                         if failure:
                             discovery_failures.append(failure)
