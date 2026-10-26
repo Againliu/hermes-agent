@@ -131,17 +131,16 @@ def settle_pending_desktop_update(desktop_dir: Path, project_root: Path) -> bool
 def _scoped_argv(argv: list[str]) -> tuple[list[str], dict]:
     """Run *argv* in its own transient user scope when systemd can make one, so stopping the
     gateway or terminal unit that ran this update cannot take the waiter with it (the same
-    cgroup-escape rule as the update's own recovery processes)."""
+    cgroup-escape rule and scope builder as restart-safe workers)."""
     if not sys.platform.startswith("linux"):
         return argv, dict(os.environ)
-    from tools.process_registry import _systemd_run_user_scope_available, systemd_user_bus_env
+    from tools.process_registry import (
+        _build_systemd_scope_argv, _systemd_run_user_scope_available, systemd_user_bus_env)
 
     env = systemd_user_bus_env()
-    binary = shutil.which("systemd-run")
-    if binary is None or not _systemd_run_user_scope_available():
+    if not _systemd_run_user_scope_available():
         return argv, env
-    unit = f"hermes-desktop-promotion-{os.getpid()}-{int(time.time())}.scope"
-    return [binary, "--user", "--scope", "--quiet", "--collect", "--unit", unit, "--", *argv], env
+    return _build_systemd_scope_argv(argv, f"desktop-promotion-{os.getpid()}-{int(time.time())}"), env
 
 
 def spawn_promotion_waiter(desktop_dir: Path) -> Optional[int]:
