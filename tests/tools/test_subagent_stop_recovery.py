@@ -8,14 +8,16 @@ import subprocess
 import sys
 
 _PRODUCER = r"""
-import os, sys, time
+import os, threading
 from unittest.mock import MagicMock
 import tools.delegate_tool as dt
+import tools.delegate_tool_dispatch as dd
 parent = MagicMock(); parent._delegate_depth = 0; parent.session_id = "parent-sess"; parent._interrupt_requested = False
 parent._active_children = []; parent._active_children_lock = None
+recorded, parked = threading.Event(), threading.Event()
 def child(task_index, goal, child=None, parent_agent=None, **kw):
     if task_index == 1:
-        time.sleep(600)
+        parked.wait()  # never set: the owner dies with this child still running
     return {"task_index": task_index, "status": "completed", "summary": f"done: {goal}", "api_calls": 2,
             "duration_seconds": 0.5, "model": "m", "exit_reason": "completed", "tokens": {"input": 10, "output": 3},
             "cost_usd": 0.0012, "cost_status": "estimated"}
@@ -24,13 +26,18 @@ def build(**kw):
     c._delegate_role = "leaf"; c._subagent_id = f"sa-{i}"; c.session_id = f"child-sess-{i}"
     c._delegate_parent_tool_call_id = kw.get("parent_tool_call_id")
     return c
+record = dd.record_unit_child
+def record_then_signal(delegation_id, entry):
+    record(delegation_id, entry)
+    recorded.set()
+dd.record_unit_child = record_then_signal
 creds = {"model": "m", "provider": None, "base_url": None, "api_key": None, "api_mode": None, "command": None, "args": None}
 dt._build_child_agent = build; dt._run_single_child = child; dt._resolve_delegation_credentials = lambda *a, **k: creds
 dt.delegate_task(tasks=[{"goal": "fast member of the group", "group": "g"},
                         {"goal": "slow member of the group", "group": "g"}], background=True,
                  parent_agent=parent, tool_call_id="call-delegate-1")
-time.sleep(2.0)
-os._exit(1)
+# Die only once the fast child's result is committed to the ledger.
+os._exit(0 if recorded.wait(20) else 3)
 """
 
 _CONSUMER = r"""
@@ -54,7 +61,7 @@ def test_owner_death_replays_one_subagent_stop_per_started_child(tmp_path):
     repo = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     env = {**os.environ, "HERMES_HOME": str(tmp_path), "PYTHONPATH": repo}
     subprocess.run([sys.executable, "-c", _PRODUCER], cwd=repo, env=env, text=True, encoding="utf-8",
-                   capture_output=True, timeout=30, check=False, stdin=subprocess.DEVNULL)
+                   capture_output=True, timeout=30, check=True, stdin=subprocess.DEVNULL)
     out = subprocess.run([sys.executable, "-c", _CONSUMER], cwd=repo, env=env, text=True, encoding="utf-8",
                          capture_output=True, timeout=30, check=True, stdin=subprocess.DEVNULL)
     stops = json.loads(out.stdout.strip().splitlines()[-1])
