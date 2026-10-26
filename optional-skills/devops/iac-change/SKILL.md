@@ -52,7 +52,7 @@ contain secrets).
 | Pulumi | `pulumi refresh --preview-only` | `pulumi preview --diff` (`--save-plan` + `pulumi up --plan` to pin it) | `pulumi preview` shows no changes, plus the service's own signal | revert and `pulumi up` the prior program |
 | CloudFormation | `aws cloudformation detect-stack-drift` | a change set (`create-change-set`, `describe-change-set`) reviewed before `execute-change-set` | stack reaches `UPDATE_COMPLETE`, plus the service's own signal | automatic rollback on failure, or a change set to the prior template |
 | Kubernetes / kustomize | `kubectl diff -f <manifests>` | `kubectl diff -f` or `kustomize build` output | `kubectl rollout status <kind>/<name> --timeout=<t>` | `kubectl rollout undo` for a workload; re-apply the prior manifest otherwise |
-| Helm | `helm diff upgrade` (plugin) or `helm get manifest` | `helm diff upgrade` or `helm template` | `helm upgrade --wait --timeout <t>`, then the release's probes | `helm rollback <release> <revision>` |
+| Helm | `helm get manifest <release> \| kubectl diff -n <ns> -f -` (saved release manifest vs live objects) | `helm diff upgrade` or `helm template` | `helm upgrade --wait --timeout <t>`, then the release's probes | `helm rollback <release> <revision>` |
 
 Replacement markers: Terraform `-/+` or `+/-` / "must be replaced"; CloudFormation change set
 `Replacement: True`; Pulumi `replace`; Kubernetes immutable-field errors (a forced delete+create).
