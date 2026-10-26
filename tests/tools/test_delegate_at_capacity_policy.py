@@ -155,3 +155,14 @@ def test_reject_policy_does_not_apply_to_a_schedule_failure(tmp_path, monkeypatc
 
     assert child.ran
     assert "SYNCHRONOUSLY" in result["note"]
+
+
+def test_list_reports_pool_capacity(full_pool):
+    """``action=list`` names the pool's cap, busy slots and policy, so a caller can
+    see a full pool before dispatching into it."""
+    from tools.delegate_tool import delegate_task
+    full_pool("reject")
+
+    out = json.loads(delegate_task(action="list", parent_agent=_Parent()))
+
+    assert out["pool"] == {"cap": 1, "running": 1, "free": 0, "at_capacity": "reject"}
