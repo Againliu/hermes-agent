@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { botForSession } from './bot-pause'
+import { botForSession, revertCachedPause } from './bot-pause'
+import { $botMeta, botOwner } from './data'
 import type { RosterRow } from './types'
 
 const roster: RosterRow[] = [
@@ -20,8 +21,31 @@ describe('botForSession', () => {
       .toBeUndefined()
   })
 
+  it('an alias owner matches its backend row once the roster shows that row instead', () => {
+    const backend: RosterRow[] = [{ name: 'writer', connectionId: 'cloud', canonical_session: { id: 'w' } }]
+    const owner = { connectionId: 'cloud', profile: 'scribe-alias', targetProfile: 'writer' }
+
+    expect(botForSession(backend, { owner, storedSessionId: 'x' }, 'local')).toBe(backend[0])
+  })
+
   it("falls back to the bot whose canonical Bot Chat the session is (durable id or lineage tip)", () => {
     expect(botForSession(roster, { owner: null, storedSessionId: 'chat-scribe-tip' }, 'local')).toBe(roster[2])
     expect(botForSession(roster, { owner: null, storedSessionId: 'unrelated' }, 'local')).toBeUndefined()
+  })
+})
+
+describe('revertCachedPause', () => {
+  const bot: RosterRow = { name: 'scribe' }
+
+  it('restores only the value this save wrote, never a newer one', () => {
+    const { key } = botOwner(bot)
+
+    $botMeta.set({ [key]: { paused: true } })
+    revertCachedPause(bot, true, false)
+    expect($botMeta.get()[key]?.paused).toBe(false)
+
+    $botMeta.set({ [key]: { paused: true } }) // another window paused it since: that stays
+    revertCachedPause(bot, false, true)
+    expect($botMeta.get()[key]?.paused).toBe(true)
   })
 })

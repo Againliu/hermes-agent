@@ -18,7 +18,7 @@
 import { host } from '@hermes/plugin-sdk'
 
 import { ensureBotMetadata } from './canonical-chat'
-import { $botMeta, $lastRoster, type BotMetaSnapshot, saveBotMeta } from './data'
+import { $botMeta, $lastRoster, type BotMetaSnapshot, botOwner, saveBotMeta } from './data'
 import { botsText } from './i18n'
 import { displayName } from './labels'
 import { botRosterMeta } from './routing'
@@ -43,6 +43,19 @@ export function botNotificationLevel(bot: RosterRow, metaByName: BotMetaSnapshot
   return level && BOT_NOTIFICATION_LEVELS.includes(level) ? level : 'all'
 }
 
+/** Undo a failed pause save in this window's cache only. A second server
+ *  write would be a fresh save that could overwrite another window's newer
+ *  pause, and a value someone changed since (`wrote` no longer cached) stays. */
+export function revertCachedPause(bot: RosterRow | string, wrote: boolean, previous: boolean): void {
+  const { key } = botOwner(bot)
+  const snapshot = $botMeta.get()
+  const entry = snapshot[key]
+
+  if (entry?.paused === wrote) {
+    $botMeta.set({ ...snapshot, [key]: { ...entry, paused: previous } })
+  }
+}
+
 /** Flip the bot's pause. The backend enforces it, so a save that never
  *  reached the bot's gateway is reported and rolled back, never shown as done. */
 export async function toggleBotPaused(bot: RosterRow): Promise<void> {
@@ -55,7 +68,7 @@ export async function toggleBotPaused(bot: RosterRow): Promise<void> {
     const saved = await saveBotMeta(bot, { paused: !paused })
 
     if (!saved.serverPersisted) {
-      await saveBotMeta(bot, { paused })
+      revertCachedPause(bot, !paused, paused)
       host.notify({ kind: 'error', message: text.saveFailed(name) })
 
       return
@@ -77,7 +90,7 @@ export async function setBotNotificationLevel(bot: RosterRow, level: BotNotifica
 }
 
 interface NotificationLevelQuery {
-  owner: null | { connectionId: null | string; profile: string }
+  owner: null | { connectionId: null | string; profile: string; targetProfile?: string }
   storedSessionId: string
 }
 
@@ -86,12 +99,20 @@ const isLocalRow = (bot: RosterRow, activeConnectionId: string) =>
 
 /** The roster row a session belongs to: its owner `(connection, profile)`,
  *  else the bot whose canonical Bot Chat it is. Two same-named bots on
- *  different connections never answer for each other. */
+ *  different connections never answer for each other. An alias owner (a
+ *  Desktop name routed to a differently named backend profile) also matches
+ *  that backend's row, so its level survives the roster swapping rows. */
 export function botForSession(roster: RosterRow[], query: NotificationLevelQuery, activeConnectionId: string) {
   const { owner, storedSessionId } = query
 
   if (owner) {
-    const named = roster.filter(bot => (bot.name || 'default') === owner.profile)
+    const byName = roster.filter(bot => (bot.name || 'default') === owner.profile)
+    const target = owner.targetProfile
+
+    const named =
+      byName.length || !target || target === owner.profile
+        ? byName
+        : roster.filter(bot => (bot.targetProfile || bot.name || 'default') === target)
 
     return owner.connectionId
       ? named.find(bot => bot.connectionId === owner.connectionId) ||

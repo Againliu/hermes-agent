@@ -9,8 +9,9 @@ import type { SessionOwnerScope } from './session-request-router'
 export type NotificationLevel = 'all' | 'needs-you' | 'off'
 
 export interface NotificationLevelQuery {
-  /** Connection-qualified owner when known; `connectionId` is null for a bare profile owner. */
-  owner: null | { connectionId: null | string; profile: string }
+  /** Connection-qualified owner when known; `connectionId` is null for a bare profile owner.
+   *  `targetProfile` is the backend profile when a Desktop alias routes to a differently named one. */
+  owner: null | { connectionId: null | string; profile: string; targetProfile?: string }
   runtimeSessionId: string
   storedSessionId: string
 }
@@ -41,7 +42,11 @@ function ownerOf(scope: SessionOwnerScope): NotificationLevelQuery['owner'] {
 
   return typeof scope === 'string'
     ? { connectionId: null, profile: scope }
-    : { connectionId: scope.connectionId || null, profile: scope.profile || 'default' }
+    : {
+        connectionId: scope.connectionId || null,
+        profile: scope.profile || 'default',
+        targetProfile: scope.targetProfile || undefined
+      }
 }
 
 /** The level the registered resolvers give this session; the first that knows it wins. */
