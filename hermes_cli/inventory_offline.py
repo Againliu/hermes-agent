@@ -87,9 +87,10 @@ def _endpoint_rows(ctx: ConfigContext, current: str, seen: set[str]) -> list[dic
     ``custom_providers:``, so camelCase keys, ``api_key_env`` and API-mode aliases are interpreted
     once, by the runtime's own normalizer. A keyed entry keeps its config key as the slug (as the live
     picker does); a legacy entry gets :func:`hermes_cli.providers.custom_provider_slug`. Entries that
-    share a slug (one legacy entry per model) merge into one row.
+    share a slug (one legacy entry per model) merge into one row. A row is current under any
+    :func:`hermes_cli.providers.custom_provider_aliases` identity, so a saved ``custom:<key>`` marks it.
     """
-    from hermes_cli.providers import custom_provider_slug
+    from hermes_cli.providers import custom_provider_aliases, custom_provider_slug
 
     current_url = _norm_url(ctx.current_base_url)
     rows: dict[str, dict] = {}
@@ -97,7 +98,7 @@ def _endpoint_rows(ctx: ConfigContext, current: str, seen: set[str]) -> list[dic
         if not isinstance(entry, dict) or not str(entry.get("name") or "").strip():
             continue
         name, key = str(entry["name"]).strip(), str(entry.get("provider_key") or "").strip()
-        slug = key or custom_provider_slug(name)
+        slug, aliases = key or custom_provider_slug(name), custom_provider_aliases(name, key)
         row = rows.get(slug.lower())
         if row is None:
             if slug.lower() in seen:  # a canonical row already represents this provider
@@ -105,7 +106,7 @@ def _endpoint_rows(ctx: ConfigContext, current: str, seen: set[str]) -> list[dic
             row = rows[slug.lower()] = _row(slug, name, [], is_current=False, user_defined=True,
                                             source="user-config", key_env=str(entry.get("key_env") or ""))
         url = _norm_url(entry.get("base_url"))
-        row["is_current"] = row["is_current"] or slug.lower() == current or (
+        row["is_current"] = row["is_current"] or current in aliases or (
             current == "custom" and bool(current_url) and url == current_url)
         row["models"] = list(dict.fromkeys([*row["models"], *_config_model_ids(entry.get("model"), entry.get("models"))]))
     for row in rows.values():
@@ -122,7 +123,8 @@ def build_offline_models_payload(ctx: ConfigContext, *, include_unconfigured: bo
     rows = _canonical_rows(ctx, current, include_unconfigured)
     seen = {row["slug"].lower() for row in rows}
     rows += _endpoint_rows(ctx, current, seen)
-    if current and current not in seen:
+    # A saved provider no row represents (removed from config, or bare ``custom`` + base_url).
+    if current and current not in seen and not any(row["is_current"] for row in rows):
         models = [ctx.current_model] if ctx.current_model else []
         rows.append(_row(ctx.current_provider, ctx.current_provider, models, is_current=True, user_defined=True,
                          source="model-config"))

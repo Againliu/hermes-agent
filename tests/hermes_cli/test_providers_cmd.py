@@ -91,6 +91,14 @@ def test_offline_inventory_lists_a_keyed_provider_once_with_its_normalized_field
     assert set(rows[0]["models"]) == {"gw-default", "gw-other"}
 
 
+def test_offline_inventory_marks_a_saved_custom_key_current_on_its_own_row(monkeypatch):
+    ctx = _config_ctx(monkeypatch, {
+        "model": {"provider": "custom:local", "default": "picked"},
+        "providers": {"local": {"name": "Local", "base_url": "http://localhost:9000/v1", "models": ["a", "b"]}}})
+    rows = [row for row in build_offline_models_payload(ctx)["providers"] if row["is_user_defined"]]
+    assert [(row["slug"], row["is_current"], row["models"]) for row in rows] == [("local", True, ["picked", "a", "b"])]
+
+
 def _run(monkeypatch, capsys, argv):
     monkeypatch.setattr("hermes_cli.config.load_config", lambda: {
         "model": {"provider": "local", "default": "m1"},
