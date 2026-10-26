@@ -729,6 +729,21 @@ const WORK_GATE_OUTCOMES: Record<string, (result: DesktopUpdateApplyResult) => v
     })
 }
 
+function applyStartState(opts: DesktopUpdateApplyOptions): UpdateApplyState {
+  return opts.mode === 'when-idle'
+    ? { ...IDLE, stage: 'waiting', waitingFor: $updateApply.get().waitingFor }
+    : { ...IDLE, applying: true, stage: 'prepare', message: 'Starting update…' }
+}
+
+// Agent work is running (or "when idle" ran out its bound / was cancelled):
+// nothing was touched. True when the overlay now shows that outcome.
+function handledByWorkGate(result: DesktopUpdateApplyResult | undefined): boolean {
+  const outcome = result?.error && Object.hasOwn(WORK_GATE_OUTCOMES, result.error) ? WORK_GATE_OUTCOMES[result.error] : undefined
+  outcome?.(result!)
+
+  return Boolean(outcome)
+}
+
 /** Stop a pending "update when idle" and return the overlay to its idle view. */
 export async function cancelUpdateWhenIdle(): Promise<void> {
   $updateApply.set(IDLE)
@@ -749,22 +764,12 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
   }
 
   dismissNotification(UPDATE_TOAST_ID)
-  const previous = $updateApply.get()
-
-  $updateApply.set(
-    opts.mode === 'when-idle'
-      ? { ...IDLE, stage: 'waiting', waitingFor: previous.waitingFor }
-      : { ...IDLE, applying: true, stage: 'prepare', message: 'Starting update…' }
-  )
+  $updateApply.set(applyStartState(opts))
 
   try {
     const result = await bridge.apply(opts)
 
-    // Agent work is running (or "when idle" ran out its bound / was cancelled):
-    // nothing was touched. The overlay offers the choice again.
-    if (result?.error && result.error in WORK_GATE_OUTCOMES) {
-      WORK_GATE_OUTCOMES[result.error](result)
-
+    if (handledByWorkGate(result)) {
       return result
     }
 

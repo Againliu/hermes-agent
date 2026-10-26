@@ -169,6 +169,35 @@ function UpdateChangeList({
   )
 }
 
+type OverlayPhase = 'idle' | 'applying' | 'manual' | 'guiSkew' | 'error' | 'busy' | 'waiting'
+
+// Terminal stages a close dismisses for good (the next open starts fresh).
+const CLOSE_RESETS_STAGE = new Set<DesktopUpdateStage>(['error', 'restart', 'manual', 'guiSkew', 'busy'])
+
+// Stage → view. The work-gate stages only exist for the client update.
+const STAGE_PHASE: Partial<Record<DesktopUpdateStage, OverlayPhase>> = {
+  manual: 'manual',
+  guiSkew: 'guiSkew',
+  restart: 'applying',
+  error: 'error',
+  busy: 'busy',
+  waiting: 'waiting'
+}
+
+function overlayPhase(apply: UpdateApplyState, isBackend: boolean): OverlayPhase {
+  const phase = STAGE_PHASE[apply.stage]
+
+  if (phase === 'manual' || phase === 'guiSkew') {
+    return phase
+  }
+
+  if (apply.applying) {
+    return 'applying'
+  }
+
+  return phase && !(isBackend && (phase === 'busy' || phase === 'waiting')) ? phase : 'idle'
+}
+
 export function UpdatesOverlay() {
   const open = useStore($updateOverlayOpen)
   const target = useStore($updateOverlayTarget)
@@ -197,18 +226,7 @@ export function UpdatesOverlay() {
   const behind = status?.behind ?? 0
   const updateAvailable = status?.updateAvailable || behind > 0
 
-  const phase: 'idle' | 'applying' | 'manual' | 'guiSkew' | 'error' | 'busy' | 'waiting' =
-    apply.stage === 'manual'
-      ? 'manual'
-      : apply.stage === 'guiSkew'
-        ? 'guiSkew'
-        : apply.applying || apply.stage === 'restart'
-          ? 'applying'
-          : apply.stage === 'error'
-            ? 'error'
-            : !isBackend && (apply.stage === 'busy' || apply.stage === 'waiting')
-              ? apply.stage
-              : 'idle'
+  const phase = overlayPhase(apply, isBackend)
 
   const handleClose = (next: boolean) => {
     if (phase === 'applying') {
@@ -217,14 +235,7 @@ export function UpdatesOverlay() {
 
     setUpdateOverlayOpen(next)
 
-    if (
-      !next &&
-      (apply.stage === 'error' ||
-        apply.stage === 'restart' ||
-        apply.stage === 'manual' ||
-        apply.stage === 'guiSkew' ||
-        apply.stage === 'busy')
-    ) {
+    if (!next && CLOSE_RESETS_STAGE.has(apply.stage)) {
       resetUpdateApplyState()
     }
   }
