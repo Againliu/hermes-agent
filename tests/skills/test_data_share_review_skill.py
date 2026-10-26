@@ -91,6 +91,18 @@ def test_key_inside_the_shipped_folder_is_refused_before_anything_is_written(ds,
     assert list(out_dir.iterdir()) == []
 
 
+def test_empty_key_file_from_an_interrupted_run_is_refused_before_the_export_opens(ds, capsys, tmp_path, export):
+    key = tmp_path / "keys" / "vendor.key"
+    key.parent.mkdir()
+    key.write_text("", encoding="utf-8")
+    shipped = tmp_path / "share" / "share.csv"
+    shipped.parent.mkdir()
+    code, report, _ = _run(ds, capsys, "pseudonymize", str(export), str(shipped),
+                           "--columns", "email", "--key-file", str(key))
+    assert code == 2 and "key" in report["error"]
+    assert not shipped.exists()
+
+
 def test_clean_file_reports_all_zero_and_k_anonymity_groups(ds, capsys, tmp_path):
     clean = _write_csv(tmp_path / "clean.csv", [
         {"region": "west", "plan": "pro", "orders": "3"},

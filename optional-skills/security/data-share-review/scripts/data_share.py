@@ -51,6 +51,7 @@ SECRET_PATTERNS = [re.compile(p) for p in (
     r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@/]+@",
 )]
 TEXT_FREE_THRESHOLD = 40  # mean length above which a column is reported as free text
+MIN_KEY_BYTES = 16  # generated keys are 32 bytes; anything shorter is a truncated or hand-made file
 
 
 def _luhn(digits: str) -> bool:
@@ -164,7 +165,12 @@ def _load_key(key_file: Path, out_path: Path) -> bytes:
     if out_dir == key_file.resolve().parent or out_dir in key_file.resolve().parents:
         raise SystemExit("refused: keep --key-file outside the shipped file's folder")
     if key_file.exists():
-        return bytes.fromhex(key_file.read_text(encoding="utf-8").strip())
+        key = bytes.fromhex(key_file.read_text(encoding="utf-8").strip())
+        # An empty file (an interrupted first run) would make b"" the HMAC key: pseudonyms anyone can recompute.
+        if len(key) < MIN_KEY_BYTES:
+            raise SystemExit(f"refused: --key-file holds fewer than {MIN_KEY_BYTES} key bytes; "
+                             "delete it to generate a new key")
+        return key
     key_file.parent.mkdir(parents=True, exist_ok=True)
     key = secrets.token_bytes(32)
     fd = os.open(str(key_file), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
