@@ -28,6 +28,14 @@ def admin_ids_from_extra(extra: Any) -> frozenset[str]:
     return _coerce_id_list(extra.get("allow_admin_from")) | _coerce_id_list(extra.get("group_allow_admin_from"))
 
 
+def runner_admin_ids(source: Any) -> frozenset[str]:
+    """Admins of the profile whose bot received *source*: the same policy the text ``/approve`` uses."""
+    from gateway.run import _gateway_runner_ref
+    from gateway.slash_access import policy_for_runner_source
+
+    return policy_for_runner_source(_gateway_runner_ref(), source).admin_user_ids
+
+
 def approval_refusal(session_key: str, actor_id: Any, *, admin_ids: Iterable[str] = (),
                      request_id: Optional[str] = None, extra: Any = None) -> Optional[str]:
     """``None`` when *actor_id* may answer *session_key*'s pending approval (the one matching

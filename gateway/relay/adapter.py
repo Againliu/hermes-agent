@@ -2029,9 +2029,10 @@ class RelayAdapter(RelayDiscordInteractionMixin, BasePlatformAdapter):
             )
             return True
         pending = self._pending_prompts.get(str(prompt_id)) or {}
-        from gateway.approval_actor import approval_refusal, refusal_text
+        from gateway.approval_actor import approval_refusal, refusal_text, runner_admin_ids
         if pending.get("kind") == "exec_approval" and (requester := approval_refusal(
-                str(pending.get("session_key") or ""), getattr(event.source, "user_id", ""))):
+                str(pending.get("session_key") or ""), getattr(event.source, "user_id", ""),
+                admin_ids=runner_admin_ids(event.source))):
             # Left pending: only the requester (or an approver) can consume it.
             self._send_lifecycle_ack(str(pending.get("chat_id") or getattr(event.source, "chat_id", "")),
                                      refusal_text(requester), self._prompt_reply_metadata(event))
