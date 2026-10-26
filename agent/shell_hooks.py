@@ -102,55 +102,50 @@ def _payload_fields(kwargs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def normalize_matcher(raw: Any) -> tuple[Optional[str], bool]:
-    """``(matcher, ok)`` for a configured ``matcher``: a regex string, or a list of them matching
-    ANY entry (``[terminal, write_file]``). A list joins into one alternation, so the consent key,
-    ``hermes hooks list`` and every consumer keep seeing a single string; an entry that is not a
-    valid regex is matched literally, like a lone invalid string. ``ok`` is False for any other
-    shape. A dropped list used to make a tool-scoped hook fire on EVERY tool. Inspired by Devin's
-    Oct 2026 "hook matchers written as a list" (docs.devin.ai/release-notes/2026)."""
+def normalize_matcher(raw: Any) -> tuple[Any, bool]:
+    """``(matcher, ok)``: a regex string, or a non-empty list of them that matches when ANY entry
+    does (``[terminal, write_file]``); ``ok`` is False (and the matcher dropped) for other shapes.
+    A list used to be dropped, which made a tool-scoped hook fire on EVERY tool. Inspired by
+    Devin's Oct 2026 "hook matchers written as a list" (docs.devin.ai/release-notes/2026)."""
     if raw is None or isinstance(raw, str):
         return raw, True
-    if not isinstance(raw, list) or not raw or not all(isinstance(p, str) and p.strip() for p in raw):
-        return None, False
-    parts = []
-    for pattern in (p.strip() for p in raw):
-        try:
-            re.compile(pattern)
-        except re.error:
-            pattern = re.escape(pattern)
-        parts.append(pattern if re.escape(pattern) == pattern else f"(?:{pattern})")
-    return "|".join(parts), True
+    if isinstance(raw, list) and raw and all(isinstance(p, str) and p.strip() for p in raw):
+        return raw, True
+    return None, False
 
 
 class _ToolMatcherMixin:
     """``matcher`` regex handling shared by shell-hook specs and outbound webhook targets."""
 
     _MATCHER_KIND = "shell hook"
-    matcher: Optional[str]
-    compiled_matcher: Optional[re.Pattern]
+    matcher: Any
+    compiled_matcher: tuple
 
     def __post_init__(self) -> None:
         # Strip YAML folding whitespace — " terminal" would silently never match.
-        if isinstance(self.matcher, str):
-            self.matcher = self.matcher.strip() or None
-        if self.matcher:
-            try:
-                self.compiled_matcher = re.compile(self.matcher)
-            except re.error as exc:
-                logger.warning(
-                    "%s matcher %r is invalid (%s) — treating as literal equality", self._MATCHER_KIND, self.matcher, exc,
-                )
-                self.compiled_matcher = None
+        entries = self.matcher if isinstance(self.matcher, list) else [self.matcher]
+        entries = [e.strip() for e in entries if isinstance(e, str) and e.strip()]
+        # A list joins only for display and the registration key; each entry compiles and matches
+        # on its own, so inline flags and group names never collide across entries.
+        self.matcher = "|".join(entries) or None
+        self.compiled_matcher = tuple((self._compile_entry(e), e) for e in entries)
+
+    def _compile_entry(self, pattern: str) -> Optional[re.Pattern]:
+        try:
+            return re.compile(pattern)
+        except re.error as exc:
+            logger.warning(
+                "%s matcher %r is invalid (%s) — treating as literal equality", self._MATCHER_KIND, pattern, exc,
+            )
+            return None  # literal fallback
 
     def matches_tool(self, tool_name: Optional[str]) -> bool:
-        if not self.matcher:
+        if not self.compiled_matcher:
             return True
         if tool_name is None:
             return False
-        if self.compiled_matcher is None:  # regex failed to compile: literal fallback
-            return tool_name == self.matcher
-        return self.compiled_matcher.fullmatch(tool_name) is not None
+        return any(tool_name == text if rx is None else rx.fullmatch(tool_name) is not None
+                   for rx, text in self.compiled_matcher)
 
 
 @dataclass
@@ -159,10 +154,10 @@ class ShellHookSpec(_ToolMatcherMixin):
 
     event: str
     command: str
-    matcher: Optional[str] = None
+    matcher: Optional[str] = None  # a list is joined by __post_init__
     timeout: int = DEFAULT_TIMEOUT_SECONDS
     fail_closed: bool = False
-    compiled_matcher: Optional[re.Pattern] = field(default=None, repr=False)
+    compiled_matcher: tuple = field(default=(), repr=False)
 
 
 # --- Public API ---

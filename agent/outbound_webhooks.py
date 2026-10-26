@@ -60,9 +60,9 @@ class WebhookTarget(_ToolMatcherMixin):
     events: list[str]
     name: str = ""
     secret: Optional[str] = None
-    matcher: Optional[str] = None
+    matcher: Optional[str] = None  # a list is joined by __post_init__
     timeout: int = DEFAULT_TIMEOUT_SECONDS
-    compiled_matcher: Optional[re.Pattern] = field(default=None, repr=False)
+    compiled_matcher: tuple = field(default=(), repr=False)
 
     @property
     def label(self) -> str:
