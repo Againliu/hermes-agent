@@ -341,9 +341,9 @@ def disable_cwd_executable_search() -> bool:
     future spawn site; it is deliberately left in child environments because cmd.exe,
     libuv/Node, Go and Bun children honor it too. ``shutil.which`` honors it from 3.12
     (via ``NeedCurrentDirectoryForExePath``); 3.11 gets the PATH-only walk above.
-    ``HERMES_CWD_EXE_SEARCH=1`` restores the legacy lookup. True only when applied.
+    True only when applied.
     """
-    if not _IS_WINDOWS or os.environ.get("HERMES_CWD_EXE_SEARCH", "").strip() == "1":
+    if not _IS_WINDOWS:
         return False
     os.environ.setdefault(_NO_CWD_EXE_SEARCH_VAR, "1")
     if sys.version_info < (3, 12) and shutil.which is _stdlib_which:

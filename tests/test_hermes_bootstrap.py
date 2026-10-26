@@ -657,6 +657,7 @@ class TestNeverFreeEnviron:
             assert grown < 64 * 1024, f"20k set/del of 4 names grew the heap by {grown} bytes"
         """)], check=True, cwd=str(Path(__file__).resolve().parents[1]), timeout=120)
 
+
 class TestCwdExecutableSearch:
     """Windows resolves bare program names through the parent's cwd before PATH — the repo
     the agent works in. The bootstrap flips Microsoft's process-wide switch
@@ -683,6 +684,7 @@ class TestCwdExecutableSearch:
         # An explicit directory is not a search: the stdlib handles it unchanged.
         assert hb._which_skipping_cwd(str(planted / "tool.exe"), path="") == str(planted / "tool.exe")
 
+    @pytest.mark.platforms("linux", "macos")
     def test_posix_host_untouched(self, monkeypatch):
         monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)
         hb = _fresh_import()
@@ -692,7 +694,7 @@ class TestCwdExecutableSearch:
         assert "NoDefaultCurrentDirectoryInExePath" not in os.environ
         assert shutil.which is hb._stdlib_which
 
-    @pytest.mark.windows_only
+    @pytest.mark.platforms("windows")
     def test_planted_cwd_binary_loses_after_bootstrap(self, tmp_path):
         """Live repro with a PATH program (the ``git``/``rg``/``node`` shape): a real ``probe.exe``
         (a copy of cmd.exe) on PATH and a zero-byte ``probe.exe`` planted in the child's cwd.
@@ -709,8 +711,8 @@ class TestCwdExecutableSearch:
         planted.mkdir()
         (planted / "probe.exe").write_bytes(b"")
         root = str(Path(__file__).resolve().parents[1])
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("NoDefaultCurrentDirectoryInExePath", "HERMES_CWD_EXE_SEARCH")}
+        # Windows upper-cases os.environ keys, and the suite's own bootstrap import armed the switch.
+        env = {k: v for k, v in os.environ.items() if k.upper() != "NODEFAULTCURRENTDIRECTORYINEXEPATH"}
         env["PATH"] = str(real_bin) + os.pathsep + env.get("PATH", "")
         probe = textwrap.dedent("""
             import os, shutil, subprocess, sys
@@ -729,7 +731,7 @@ class TestCwdExecutableSearch:
 
         def run(mode: str) -> list[str]:
             result = subprocess.run([sys.executable, "-c", probe, root, mode], cwd=planted, env=env,
-                                    capture_output=True, text=True, timeout=60)
+                                    capture_output=True, text=True, timeout=60, check=False)
             assert result.returncode == 0, result.stderr
             print(mode, result.stdout.strip())
             return result.stdout.split()
@@ -738,11 +740,3 @@ class TestCwdExecutableSearch:
         assert legacy[-1] == "True", legacy  # which() resolved the planted cwd copy
         hardened = run("hardened")
         assert hardened == ["ok", "ok", "False"], hardened
-
-    @pytest.mark.windows_only
-    def test_opt_out_restores_legacy_lookup(self, monkeypatch):
-        monkeypatch.setenv("HERMES_CWD_EXE_SEARCH", "1")
-        monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)
-        hb = _fresh_import()
-        assert "NoDefaultCurrentDirectoryInExePath" not in os.environ
-        assert hb.disable_cwd_executable_search() is False
