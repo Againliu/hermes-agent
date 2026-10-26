@@ -1330,14 +1330,20 @@ async function runEverythingUpdate(): Promise<void> {
 
 // How an "update when idle" wait ended, broadcast to every window (not only the one that started it).
 function ingestWaitEnding(payload: DesktopUpdateProgress): boolean {
-  if ($updateApply.get().stage !== 'waiting') {
-    return false
-  }
+  const { applying, stage } = $updateApply.get()
 
-  if (payload.stage === 'idle') {
-    $updateApply.set(IDLE)
+  // The window that pressed Cancel already reset itself, so its own `idle` broadcast lands on a
+  // window that is no longer waiting; it must never start a spinner there.
+  if (payload.stage === 'idle' && !applying) {
+    if (stage === 'waiting') {
+      $updateApply.set(IDLE)
+    }
 
     return true
+  }
+
+  if (stage !== 'waiting') {
+    return false
   }
 
   if (payload.stage === 'error' && payload.error === 'idle-timeout') {

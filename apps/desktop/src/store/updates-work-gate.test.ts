@@ -72,6 +72,22 @@ describe('in-app update while agent work runs', () => {
     expect($updateApply.get().stage).toBe('idle')
   })
 
+  it('the cancelling window stays closeable when its own cancel broadcast lands after the local reset', async () => {
+    let resolve: (result: DesktopUpdateApplyResult) => void = () => undefined
+    apply.mockReturnValue(new Promise(r => (resolve = r)))
+    startUpdatePoller()
+
+    const pending = applyUpdates({ mode: 'when-idle' })
+    await cancelUpdateWhenIdle()
+
+    // Main answers the cancel by telling every window the wait ended, this one included.
+    progress?.({ stage: 'idle', message: '', percent: null, error: null, at: 2 })
+    resolve({ ok: false, error: 'cancelled' })
+    await pending
+
+    expect($updateApply.get()).toMatchObject({ applying: false, stage: 'idle' })
+  })
+
   it('a wait that ran out its bound ends on a closeable error, not a spinner', async () => {
     apply.mockResolvedValue({ ok: false, error: 'idle-timeout', waitingFor: [CHAT] })
 
