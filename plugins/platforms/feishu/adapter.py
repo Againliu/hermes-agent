@@ -221,6 +221,7 @@ FALLBACK_ATTACHMENT_TEXT = "[Attachment]"
 _PREFERRED_LOCALES = ("zh_cn", "en_us")
 _MARKDOWN_SPECIAL_CHARS_RE = re.compile(r"([\\`*_{}\[\]()#+\-!|>~])")
 _MENTION_PLACEHOLDER_RE = re.compile(r"@_user_\d+")
+_MENTION_WITH_SPACING_RE = re.compile(r"[ \t]*(@_user_\d+)[ \t]*")
 _MENTION_BOUNDARY_CHARS = frozenset(" \t\n\r.,;:!?、，。；：！？()[]{}<>\"'`")
 _TRAILING_TERMINAL_PUNCT = frozenset(" \t\n\r.!?。！？")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -499,7 +500,8 @@ def parse_feishu_post_payload(
         if not isinstance(row, list):
             continue
         row_text = _normalize_feishu_text(
-            "".join(_render_post_element(item, image_keys, media_refs, mentions_map) for item in row)
+            "".join(_render_post_element(item, image_keys, media_refs, mentions_map) for item in row),
+            keep_layout=any(isinstance(item, dict) and item.get("tag") in {"code_block", "pre"} for item in row),
         )
         if row_text:
             parts.append(row_text)
@@ -661,7 +663,7 @@ def normalize_feishu_message(
         if "@_all" in text and "@_all" not in mentions_map:
             mentions_map["@_all"] = FeishuMentionRef(is_all=True)
         return FeishuNormalizedMessage(
-            raw_type=normalized_type, text_content=_normalize_feishu_text(text, mentions_map),
+            raw_type=normalized_type, text_content=_normalize_feishu_text(text, mentions_map, keep_layout=True),
             mentions=list(mentions_map.values()),
         )
     if normalized_type == "post":
@@ -893,14 +895,25 @@ def _first_text_field(payload: dict[str, Any], *keys: str, deep: tuple[str, ...]
 
 # --- General text utilities ---
 
-def _normalize_feishu_text(text: str, mentions_map: Optional[dict[str, FeishuMentionRef]] = None) -> str:
+def _normalize_feishu_text(
+    text: str, mentions_map: Optional[dict[str, FeishuMentionRef]] = None, *, keep_layout: bool = False,
+) -> str:
+    """Resolve mention placeholders and tidy whitespace. ``keep_layout`` (typed text, code blocks)
+    removes only the bot's own mention with its spacing, keeping indentation and blank lines;
+    otherwise each line is collapsed (labels, card and forward summaries)."""
+    refs = mentions_map or {}
+
     def _sub(match: re.Match[str]) -> str:
-        ref = (mentions_map or {}).get(match.group(0))
+        ref = refs.get(match.group(0))
         return " " if ref is None else f"@{ref.name or ref.open_id or 'user'}"
 
+    if keep_layout:
+        text = _MENTION_WITH_SPACING_RE.sub(lambda m: m.group(0) if m.group(1) in refs else " ", text or "")
     cleaned = _MENTION_PLACEHOLDER_RE.sub(_sub, text or "")
     cleaned = cleaned.replace("@_all", "@all")
     cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    if keep_layout:
+        return "\n".join(line.rstrip() for line in cleaned.split("\n")).strip()
     cleaned = "\n".join(_WHITESPACE_RE.sub(" ", line).strip() for line in cleaned.split("\n"))
     cleaned = "\n".join(line for line in cleaned.split("\n") if line)
     cleaned = _MULTISPACE_RE.sub(" ", cleaned)
