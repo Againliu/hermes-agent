@@ -35,7 +35,15 @@ class CatalogEntry:
     _tokens: list[str] = field(default_factory=list)  # pre-tokenized for BM25
 
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+# ASCII alphanumeric runs, plus individual CJK characters: Chinese, Japanese and Korean don't put
+# spaces between words, so each character is its own token — the lightweight approach for BM25
+# without a segmentation dependency (#78985).
+_TOKEN_RE = re.compile(
+    r"[A-Za-z0-9]+"
+    r"|[\u4e00-\u9fff\u3400-\u4dbf]"   # CJK Unified Ideographs (+ Ext A)
+    r"|[\u3040-\u309f\u30a0-\u30ff]"   # Hiragana + Katakana
+    r"|[\uac00-\ud7af]"                # Hangul Syllables
+)
 _thread_local = threading.local()
 
 
