@@ -31,6 +31,7 @@ from agent.shell_hooks import (
     _home_key,
     _payload_fields,
     _utc_now_iso,
+    normalize_matcher,
 )
 
 logger = logging.getLogger(__name__)
@@ -190,10 +191,9 @@ def _parse_single_target(index: int, raw: Any) -> Optional[WebhookTarget]:
     if not events:
         warn(" has no valid events — skipped")
         return None
-    matcher = raw.get("matcher")
-    if matcher is not None and not isinstance(matcher, str):
-        warn(".matcher must be a string regex; ignoring")
-        matcher = None
+    matcher, ok = normalize_matcher(raw.get("matcher"))
+    if not ok:
+        warn(".matcher must be a regex string or a non-empty list of them; ignoring")
     if matcher is not None and not any(e in _TOOL_SCOPED_EVENTS for e in events):
         warn(".matcher=%r will be ignored — matcher is only honored for pre_tool_call / post_tool_call.", matcher)
         matcher = None

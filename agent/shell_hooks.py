@@ -102,6 +102,27 @@ def _payload_fields(kwargs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalize_matcher(raw: Any) -> tuple[Optional[str], bool]:
+    """``(matcher, ok)`` for a configured ``matcher``: a regex string, or a list of them matching
+    ANY entry (``[terminal, write_file]``). A list joins into one alternation, so the consent key,
+    ``hermes hooks list`` and every consumer keep seeing a single string; an entry that is not a
+    valid regex is matched literally, like a lone invalid string. ``ok`` is False for any other
+    shape. A dropped list used to make a tool-scoped hook fire on EVERY tool. Inspired by Devin's
+    Oct 2026 "hook matchers written as a list" (docs.devin.ai/release-notes/2026)."""
+    if raw is None or isinstance(raw, str):
+        return raw, True
+    if not isinstance(raw, list) or not raw or not all(isinstance(p, str) and p.strip() for p in raw):
+        return None, False
+    parts = []
+    for pattern in (p.strip() for p in raw):
+        try:
+            re.compile(pattern)
+        except re.error:
+            pattern = re.escape(pattern)
+        parts.append(pattern if re.escape(pattern) == pattern else f"(?:{pattern})")
+    return "|".join(parts), True
+
+
 class _ToolMatcherMixin:
     """``matcher`` regex handling shared by shell-hook specs and outbound webhook targets."""
 
@@ -414,10 +435,9 @@ def _parse_single_entry(event: str, index: int, raw: Any) -> Optional[ShellHookS
     if not isinstance(command, str) or not command.strip():
         warn(" is missing a non-empty 'command' field")
         return None
-    matcher = raw.get("matcher")
-    if matcher is not None and not isinstance(matcher, str):
-        warn(".matcher must be a string regex; ignoring")
-        matcher = None
+    matcher, ok = normalize_matcher(raw.get("matcher"))
+    if not ok:
+        warn(".matcher must be a regex string or a non-empty list of them; ignoring")
     if matcher is not None and event not in _TOOL_EVENTS:
         warn(".matcher=%r will be ignored at runtime — the matcher field is only honored for "
              "pre_tool_call / post_tool_call.  The hook will fire on every %s event.", matcher, event)
