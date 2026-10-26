@@ -70,18 +70,21 @@ Run each through `terminal`. Exit 2 with `{"error": ...}` means the step did not
 
 | Subcommand | Prints | Use for |
 |---|---|---|
-| `inventory FILE` | per column: non-empty, distinct, mean length, free-text flag, shape counts | classifying fields without reading rows |
+| `inventory FILE` | per column: non-empty, distinct, mean length, free-text flag, shape counts; header shape counts | classifying fields without reading rows |
 | `pseudonymize IN OUT --columns a,b --key-file K [--drop c] [--lowercase]` | rows, columns kept/dropped/pseudonymized | HMAC-SHA256 pseudonyms (`p_<20 hex>`); creates a 0600 key if absent; refuses a key inside OUT's folder |
-| `scan FILE [--originals SRC --columns a,b] [--quasi x,y --k N]` | totals and per-column counts for email, phone, card (Luhn), IP, secret; original-value hits; k-anonymity groups; `all_zero` | the residual scan |
+| `scan FILE [--originals SRC --columns a,b] [--quasi x,y --k N]` | totals and per-column counts for email, phone, card (Luhn), IP, secret (column names included); original-value hits; k-anonymity groups; `all_zero` | the residual scan |
 | `record FILE --destination D` | destination, date, fields, rows, sha256 | the share record |
+
+A column whose name is itself identifier- or secret-shaped prints as `#<n> (name redacted)`: the
+header is data (a pivoted export) and counts like any other cell.
 
 ## Procedure
 
 1. **Destination and need.** Ask where the file goes and what the destination needs it for. Done
    when every field the destination asked for is named with its purpose.
 2. **Inventory.** Run `inventory`; read the header with `read_file` (small `limit`) only if the
-   counts leave a column's class unclear. Never page through rows — every row read enters the
-   session and the provider. Classify each field as direct identifier, quasi-identifier, secret,
+   counts leave a column's class unclear and no column name is redacted. Never page through rows —
+   every row read enters the session and the provider. Classify each field as direct identifier, quasi-identifier, secret,
    free text or not personal, using `references/data-share-method.md` §1 (class comes from content,
    not the column name). Done when every field has a class and the evidence for it.
 3. **Minimization plan.** Give each field exactly one action — drop, generalize, mask or pseudonymize

@@ -155,6 +155,21 @@ def test_short_original_name_in_kept_free_text_is_counted(ds, capsys, tmp_path):
     assert "Amy" not in raw
 
 
+def test_identifier_shaped_header_is_counted_and_never_echoed(ds, capsys, tmp_path):
+    pivot = tmp_path / "pivot.csv"
+    pivot.write_text(f"month,{EMAIL}\n2026-09,3\n2026-10,5\n", encoding="utf-8")
+    code, report, raw = _run(ds, capsys, "scan", str(pivot))
+    assert code == 0
+    assert report["totals"]["email"] == 1 and report["all_zero"] is False
+    assert report["header"] == {"email": 1}
+    outputs = [raw]
+    for argv in (["inventory", str(pivot)], ["record", str(pivot), "--destination", "vendor"]):
+        code, _, raw = _run(ds, capsys, *argv)
+        assert code == 0
+        outputs.append(raw)
+    assert all(EMAIL not in out for out in outputs)
+
+
 def test_parse_error_reports_only_its_type(ds, capsys, tmp_path):
     bad = tmp_path / "bad.jsonl"
     bad.write_text(f'{{"email": "{EMAIL}"}}\n{{"email": "{EMAIL}", oops}}\n', encoding="utf-8")

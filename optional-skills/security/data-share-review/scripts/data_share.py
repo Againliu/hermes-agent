@@ -156,11 +156,24 @@ def read_rows(path: Path):
         return None, [fh.read()]
 
 
+def _labels(cols: list[str]) -> dict[str, str]:
+    """Printable name per column; a header that is itself identifier- or secret-shaped (a pivoted
+    export headed by an address) prints as its position so the report never echoes it."""
+    return {c: f"#{i} (name redacted)" if any(shape_counts(c).values()) else c for i, c in enumerate(cols, 1)}
+
+
+def _header_hits(cols: list[str]) -> dict:
+    total = Counter()
+    for col in cols:
+        total.update(shape_counts(col))
+    return {k: v for k, v in total.items() if v}
+
+
 def cmd_inventory(args) -> dict:
     cols, rows = read_rows(Path(args.file))
     if cols is None:
         return {"file": args.file, "format": "text", "shapes": dict(shape_counts(rows[0]))}
-    out = {}
+    out, labels = {}, _labels(cols)
     for col in cols:
         values = [str(r.get(col, "")) for r in rows]
         filled = [v for v in values if v.strip()]
@@ -168,14 +181,14 @@ def cmd_inventory(args) -> dict:
         for v in filled:
             shapes.update(shape_counts(v))
         mean_len = round(sum(map(len, filled)) / len(filled), 1) if filled else 0
-        out[col] = {
+        out[labels[col]] = {
             "non_empty": len(filled),
             "distinct": len(set(filled)),
             "mean_length": mean_len,
             "looks_free_text": mean_len >= TEXT_FREE_THRESHOLD,
             "shapes": {k: v for k, v in shapes.items() if v},
         }
-    return {"file": args.file, "rows": len(rows), "columns": out}
+    return {"file": args.file, "rows": len(rows), "header_shapes": _header_hits(cols), "columns": out}
 
 
 def _load_key(key_file: Path, out_path: Path) -> bytes:
@@ -224,7 +237,7 @@ def cmd_pseudonymize(args) -> dict:
                     row[col] = "p_" + hmac.new(key, value.encode(), hashlib.sha256).hexdigest()[:20]
             writer.writerow(row)
     return {"output": str(dst), "rows": len(rows), "pseudonymized": pseudo, "dropped": sorted(drop),
-            "columns_out": kept, "key_file": str(Path(args.key_file))}
+            "columns_out": [_labels(cols)[c] for c in kept], "key_file": str(Path(args.key_file))}
 
 
 def _originals_count(text_cells: list[str], src: Path, columns: list[str]) -> dict:
@@ -271,12 +284,15 @@ def cmd_scan(args) -> dict:
     path = Path(args.file)
     cols, rows = read_rows(path)
     columns, quasi = _scan_requests(args, cols)
-    cells = [rows[0]] if cols is None else [str(v) for r in rows for v in r.values()]
+    cells = [rows[0]] if cols is None else [*cols, *(str(v) for r in rows for v in r.values())]
     totals = Counter()
     per_column = {}
+    header = {} if cols is None else _header_hits(cols)
+    totals.update(header)
     if cols is None:
         totals.update(shape_counts(rows[0]))
     else:
+        labels = _labels(cols)
         for col in cols:
             c = Counter()
             for r in rows:
@@ -284,10 +300,10 @@ def cmd_scan(args) -> dict:
             totals.update(c)
             hits = {k: v for k, v in c.items() if v}
             if hits:
-                per_column[col] = hits
+                per_column[labels[col]] = hits
     report = {"file": str(path), "sha256": _sha256(path), "rows": len(rows) if cols else None,
               "totals": {k: totals.get(k, 0) for k in ("email", "phone", "card_luhn", "ip_address", "secret")},
-              "per_column": per_column}
+              "header": header, "per_column": per_column}
     if columns:
         report["original_values"] = _originals_count(cells, Path(args.originals), columns)
     if quasi:
@@ -309,8 +325,9 @@ def _sha256(path: Path) -> str:
 def cmd_record(args) -> dict:
     path = Path(args.file)
     cols, rows = read_rows(path)
+    fields = None if cols is None else list(_labels(cols).values())
     return {"destination": args.destination, "date": _dt.date.today().isoformat(), "file": path.name,
-            "fields": cols, "rows": len(rows) if cols is not None else None, "sha256": _sha256(path)}
+            "fields": fields, "rows": len(rows) if cols is not None else None, "sha256": _sha256(path)}
 
 
 def build_parser() -> argparse.ArgumentParser:
