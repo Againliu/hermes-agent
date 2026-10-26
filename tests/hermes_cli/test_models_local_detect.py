@@ -359,24 +359,18 @@ def test_a_key_saved_for_another_address_is_never_claimed(servers):
     assert load_config()["providers"]["local-ollama"] == remote
 
 
-@pytest.mark.asyncio
-async def test_a_new_gateway_chat_pinned_to_a_detected_row_runs_on_that_server(servers, monkeypatch):
-    """Desktop creates chats through the gateway's session authority; a composer pick of a detected
-    row froze ``local-lmstudio`` with no ``providers:`` entry behind it, and the first turn failed."""
+async def _gateway_owner(monkeypatch):
+    """A session authority over the test home (its state.db and config.yaml share one home, as in
+    production) and one client connection to it."""
     from gateway import run
     from gateway.config import GatewayConfig
-    from gateway.run_turn_prepare import _resolve_policy_agent_runtime
     from gateway.session import SessionStore
     from gateway.session_authority import initialize_session_authority
     from gateway.session_controls import AuthorityConnection
-    from gateway.session_local_recovery import local_identity
-    from gateway.session_policy import restore_policy
-    from hermes_state_local import local_receipt
 
     from hermes_constants import get_hermes_home
 
-    srv = servers("lmstudio", {"/v1/models": _models(["qwen/qwen3-4b"], "organization_owner")})
-    home = get_hermes_home()  # the authority's state.db and config.yaml share one home, as in production
+    home = get_hermes_home()
     (home / "config.yaml").write_text("platform_toolsets: {cli: []}\nmodel: {provider: custom, default: m, "
                                       "base_url: http://127.0.0.1:9/v1}\n", encoding="utf-8")
     monkeypatch.setattr(run, "_hermes_home", home)
@@ -386,7 +380,20 @@ async def test_a_new_gateway_chat_pinned_to_a_detected_row_runs_on_that_server(s
                              _evict_cached_agent=lambda route: None,
                              _resolve_session_agent_runtime=lambda **k: (None, {}))
     owner = await initialize_session_authority(runner, profile_id=str(home), instance_id="fixture")
-    connection = AuthorityConnection(owner, object(), {"user_id": "owner"})
+    return home, runner, owner, AuthorityConnection(owner, object(), {"user_id": "owner"})
+
+
+@pytest.mark.asyncio
+async def test_a_new_gateway_chat_pinned_to_a_detected_row_runs_on_that_server(servers, monkeypatch):
+    """Desktop creates chats through the gateway's session authority; a composer pick of a detected
+    row froze ``local-lmstudio`` with no ``providers:`` entry behind it, and the first turn failed."""
+    from gateway.run_turn_prepare import _resolve_policy_agent_runtime
+    from gateway.session_local_recovery import local_identity
+    from gateway.session_policy import restore_policy
+    from hermes_state_local import local_receipt
+
+    srv = servers("lmstudio", {"/v1/models": _models(["qwen/qwen3-4b"], "organization_owner")})
+    home, runner, owner, connection = await _gateway_owner(monkeypatch)
     try:
         await connection.create(None, {"request_id": "r1", "source": "cli", "cwd": str(home), "toolsets": [],
                                        "model": "qwen/qwen3-4b", "provider": "local-lmstudio"})
@@ -397,6 +404,25 @@ async def test_a_new_gateway_chat_pinned_to_a_detected_row_runs_on_that_server(s
         await connection.close()
         owner.db.close()
     assert runtime["base_url"].rstrip("/") == f"http://127.0.0.1:{srv.port}/v1"
+
+
+@pytest.mark.asyncio
+async def test_a_refused_create_retry_saves_no_detected_server(servers, monkeypatch):
+    """Retrying a staged request_id with a different (detected) pick is refused; the refused request
+    must not have written that server into the profile's config.yaml first."""
+    from hermes_state_runtime import RuntimeStoreError
+
+    servers("lmstudio", {"/v1/models": _models(["qwen/qwen3-4b"], "organization_owner")})
+    home, _, owner, connection = await _gateway_owner(monkeypatch)
+    base = {"request_id": "r1", "source": "cli", "cwd": str(home), "toolsets": []}
+    try:
+        await connection.create(None, dict(base))
+        with pytest.raises(RuntimeStoreError, match="invalid_params"):
+            await connection.create(None, {**base, "model": "qwen/qwen3-4b", "provider": "local-lmstudio"})
+    finally:
+        await connection.close()
+        owner.db.close()
+    assert "local-lmstudio" not in (home / "config.yaml").read_text(encoding="utf-8")
 
 
 def test_an_unprobed_lmstudio_row_does_not_hide_the_running_server(servers):
