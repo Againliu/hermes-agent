@@ -59,6 +59,12 @@ jobs:
           test-environment: 'true'
           prune-python-cache: true
 
+      - name: pain5 l2a psutil GIL probes (#142085)
+        shell: bash
+        run: |
+          set -uo pipefail
+          bash scripts/run_tests.sh tests/gateway/test_status.py tests/hermes_cli/test_process_identity.py -- -k "windows or Windows" -v -rA
+
       - name: Run venv-holder live E2E
         # Canonical runner (scripts/run_tests.sh) — never bare pytest: it
         # enforces credential hygiene, TZ, temp HERMES_HOME and subprocess
