@@ -42,7 +42,6 @@ def _link(link: Path, target: Path) -> Path:
 _UNSAFE_HOMES = {
     "user-home": lambda root, user, hermes: user,
     "ancestor-of-home": lambda root, user, hermes: user.parent,
-    "filesystem-root": lambda root, user, hermes: Path(root.anchor),
     "link-to-user-home": lambda root, user, hermes: _link(root / "hermes-link", user),
     "dir-without-hermes-marker": lambda root, user, hermes: user / "Pictures",
     "linked-hermes-home": lambda root, user, hermes: _link(root / "linked-hermes", hermes),
@@ -86,3 +85,13 @@ def test_full_uninstall_still_wipes_a_real_home_reached_through_a_linked_parent(
     assert not project.exists()
     assert (user_home / "Documents" / "taxes.txt").read_text(encoding="utf-8-sig") == "keep"
     assert "Uninstall Complete" in capsys.readouterr().out
+
+
+def test_guard_refuses_the_filesystem_root(user_tree):
+    """Checked on the guard alone: driving the uninstaller at ``/`` would rmtree it on a regression."""
+    from hermes_cli.data_cleanup import guard_data_removal_home, guard_whole_home_removal
+
+    root, _user_home, _hermes_home, project = user_tree
+    for guard in (guard_data_removal_home, guard_whole_home_removal):
+        with pytest.raises(ValueError, match="filesystem root"):
+            guard(Path(root.anchor), project)
