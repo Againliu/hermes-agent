@@ -102,6 +102,34 @@ describe('remote backend update deadline', () => {
     await expect(promise).resolves.toMatchObject({ ok: true })
   })
 
+  it('output under a fixed last line still counts once the log is at its cap', async () => {
+    // A gateway drain at the 2,000-line cap: a countdown line changes every 30 s
+    // above an unchanged last line, and the receipt stage does not move.
+    getActionStatusSpy.mockImplementation(async () => {
+      const countdown = Math.floor(Date.now() / 30_000)
+      const lines = Array.from({ length: 2000 }, (_line, index) => `line ${countdown + index}`)
+
+      return {
+        ...running('drain', 't0'),
+        lines: [...lines.slice(1, -1), `draining: ${countdown}`, 'Waiting for gateways...']
+      }
+    })
+
+    const promise = applyBackendUpdate()
+    await vi.advanceTimersByTimeAsync(3 * BUSY_STAGE_STALL_MS.pull)
+
+    expect($backendUpdateApply.get().applying).toBe(true)
+    expect(checkHermesUpdateSpy).not.toHaveBeenCalled()
+
+    getActionStatusSpy.mockImplementation(async () => ({
+      ...running('completion', 'tz'),
+      running: false,
+      receipt: { ...running('completion', 'tz').receipt, outcome: 'success', finished_at: new Date().toISOString() }
+    }))
+    await vi.advanceTimersByTimeAsync(5000)
+    await expect(promise).resolves.toMatchObject({ ok: true })
+  })
+
   it('a stalled action whose backend already reached the target is a success, not a failure', async () => {
     getActionStatusSpy.mockResolvedValue(running('fetch', 't0'))
     checkHermesUpdateSpy.mockResolvedValue({ behind: 0, current_version: '9.9.9', commits: [] })

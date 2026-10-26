@@ -831,13 +831,14 @@ const BACKEND_ACTION_MAX_MS = 45 * 60 * 1000
 const BACKEND_RETURN_MAX_MS = BUSY_STAGE_STALL_MS.restart
 
 /** Changes whenever the remote update shows life: a new log line, or its
- *  durable receipt refreshed at a stage boundary (or finished). */
+ *  durable receipt refreshed at a stage boundary (or finished). The whole tail
+ *  is compared: once the log reaches the requested cap its length stops
+ *  growing, and a drain countdown changes lines above a fixed last one. */
 function backendActionProgress(status: Awaited<ReturnType<typeof getActionStatus>>): string {
   const receipt = status.receipt
 
   return [
-    status.lines.length,
-    status.lines.at(-1) ?? '',
+    status.lines.join('\n'),
     receipt?.outcome ?? '',
     receipt?.stage ?? '',
     receipt?.stage_at ?? '',
