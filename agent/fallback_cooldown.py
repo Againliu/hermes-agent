@@ -103,7 +103,9 @@ def arm_primary_cooldown(agent, reason: FailoverReason | None, reset_at=None) ->
     """Arm the primary's cooldown for a failover that leaves it; seconds armed, or None."""
     agent._primary_probe_pending = False
     if reason in _RATE_LIMIT_FAILOVER_REASONS:
-        agent._primary_outage_cooldown = False
+        # A backup's own throttle says nothing about the primary: its outage probe stays owed.
+        if _leaving_primary(agent):
+            agent._primary_outage_cooldown = False
         return _arm_rate_limit_cooldown(agent, reason, reset_at=reset_at)
     return _arm_outage_cooldown(agent, reason, reset_at=reset_at)
 

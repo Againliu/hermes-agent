@@ -49,3 +49,14 @@ def test_shared_snapshot_installer_leaves_fallback_bookkeeping_alone():
         reinstall_runtime_snapshot(agent, rt)
     assert agent._fallback_bound_reasoning == {"effort": "low"}
 
+
+
+def test_a_backup_rate_limit_keeps_the_primary_probe_owed():
+    from agent.fallback_cooldown import arm_primary_cooldown
+
+    agent = SimpleNamespace(_fallback_activated=True, provider="zai", model="glm-5.2",
+                            _primary_runtime={"provider": "openrouter", "model": "primary/model"},
+                            _primary_outage_cooldown=True, _primary_probe_pending=False,
+                            _rate_limited_until=0)
+    arm_primary_cooldown(agent, FailoverReason.rate_limit)
+    assert agent._primary_outage_cooldown is True
