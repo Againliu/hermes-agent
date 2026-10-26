@@ -69,5 +69,6 @@ def test_the_pause_retries_once_the_late_turn_finishes(one_bare_gateway, monkeyp
     monkeypatch.setattr(when_idle, "_pause_deadline", time.monotonic() + 30, raising=False)
 
     assert pause.pause_at_commit_point() is None
-    assert asked[:2] == ["pause-if-idle", "pause-if-idle"], asked
+    # The accepted pause-if-idle already began the drain: no second (pause-for-update) request.
+    assert asked == ["pause-if-idle", "pause-if-idle"], asked
     assert one_bare_gateway.wait(timeout=5) is not None
