@@ -48,6 +48,51 @@ async def _stop_exec_tree(proc) -> None:
 class GatewayInboundHooksMixin:
     """Hook, quick-command and plugin-command dispatch for ``GatewayInboundMixin``."""
 
+    async def _hm_pre_turn_gates(
+        self, event: MessageEvent, source: SessionSource, session_key: str, is_internal: bool, generation: int,
+    ) -> tuple[bool, Optional[str]]:
+        """``(True, reply)`` when the turn must not start: a plugin consumed the message (once per
+        message, fail-open) or the memory hold refused/abandoned it; ``(False, None)`` to run."""
+        if not is_internal:
+            consumed, reply = await self._hm_post_admission_consume(event, source, session_key)
+            if consumed:
+                return True, reply
+        held = await self._hm_memory_admission(event, source, session_key, is_internal, generation)
+        return (False, None) if held is None else (True, held or None)
+
+    async def _hm_memory_admission(
+        self, event: MessageEvent, source: SessionSource, session_key: str, is_internal: bool, generation: int,
+    ) -> Optional[str]:
+        """Hold a new turn while the host is nearly out of memory (``gateway/admission_memory.py``).
+
+        None = start the turn; a string = reply instead (``""`` = say nothing: /stop or /new
+        superseded the wait). People get one "waiting" notice and, if memory never frees within
+        ``gateway.memory_guard.max_wait_seconds``, a resend notice; nothing runs half-started."""
+        from gateway.admission_memory import BACKGROUND, PERSON, get_gate, wait_async
+        from gateway.config import Platform
+
+        kind = PERSON if not is_internal or source.platform == Platform.API_SERVER else BACKGROUND
+        minutes = max(1, round(get_gate().settings.max_wait_seconds / 60))
+
+        async def tell_waiting() -> None:
+            logger.info("Holding %s turn for %s: host memory is low", kind, session_key)
+            adapter = self._delivery_adapter_for(event.source) if kind == PERSON else None
+            if adapter is None:
+                return
+            try:
+                await self._send_busy_reply(event, adapter, t("gateway.busy.memory_waiting", minutes=minutes))
+            except Exception:  # health: allow BLE001 -- a lost notice must not drop the held turn
+                logger.warning("memory guard: waiting notice failed for %s", session_key, exc_info=True)
+
+        verdict = await wait_async(
+            kind, on_hold=tell_waiting, still_wanted=lambda: self._is_session_run_current(session_key, generation))
+        if verdict == "admitted":
+            return None
+        if verdict == "abandoned":
+            return ""
+        logger.warning("Refusing %s turn for %s: host memory stayed low for %d min", kind, session_key, minutes)
+        return t("gateway.busy.memory_gave_up", minutes=minutes) if kind == PERSON else ""
+
     async def _hm_post_admission_consume(
         self, event: MessageEvent, source: SessionSource, session_key: str
     ) -> tuple[bool, Optional[str]]:

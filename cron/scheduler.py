@@ -2572,9 +2572,6 @@ def run_job(
     cancel_event: Optional[_CancelEventLike] = None, execution_id: Optional[str] = None,
 ) -> tuple[bool, str, str, Optional[str]]:
     """Execute a single cron job. Returns (success, full_output_doc, final_response, error).
-    ``defer_agent_teardown``: if a list, the live agent is appended instead of torn down; the caller
-    MUST call ``_teardown_cron_agent(agent)`` AFTER delivery (a torn-down async client can't
-    deliver). ``extra_prompt``: per-fire context, never persisted.
 
     ``defer_agent_teardown``: when a caller passes a list, ``run_job`` skips the agent's async-resource
     teardown (``agent.close()`` + ``cleanup_stale_async_clients()``) in its ``finally`` block and instead
@@ -2600,6 +2597,9 @@ def run_job(
     early, prompt = _prepare_job_prompt(job, job_id, job_name, extra_prompt, cancel_event)
     if early is not None:
         return early
+    from cron.scheduler_memory_hold import hold_for_memory
+    if (held := hold_for_memory(job, job_id, job_name, prompt, cancel_event)) is not None:
+        return held
     from run_agent import AIAgent
 
     _cron_session_id = (owner_execution[1] if owner_execution is not None else
