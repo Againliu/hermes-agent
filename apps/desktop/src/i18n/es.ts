@@ -4103,6 +4103,8 @@ export const esOverrides = {
     versionDetailsBody:
       'Esta instalación se administra fuera de la app. Actualízala de la misma forma en que la instalaste.',
     versionDetailsVersion: 'Versión',
+    versionDetailsClient: 'Este dispositivo',
+    versionDetailsBackend: 'Backend conectado',
     versionDetailsCommit: 'Commit',
     versionDetailsBuildOrigin: 'Origen de la compilación',
     versionDetailsDistribution: 'Distribución',
