@@ -110,9 +110,10 @@ Run each through `terminal`. Exit 2 with `{"error": ...}` means the step did not
 - **A plain hash is reversible** by hashing candidate emails or phone numbers. Use the keyed HMAC.
 - **Never put an original value in a `search_files` pattern or a command line** — that copies it
   into the session. `--originals` reads the source column itself and prints one count.
-- **Pattern counts over-match.** Long order numbers can count as phones; that is a reason to inspect
-  per-column counts, not to skip the class. Names and street addresses have no reliable shape:
-  only `--originals` and dropping the free-text column catch them.
+- **Pattern counts over-match.** Long order numbers can count as phones, and `--originals` matches
+  every source value as a whole word, so a short one (`Al`, `7`) also counts unrelated text; that is
+  a reason to inspect per-column counts, not to skip the class. Names and street addresses have no
+  reliable shape: only `--originals` and dropping the free-text column catch them.
 - **The key file is the mapping.** Losing it breaks joinability; leaking it reverses every pseudonym.
 - A secret found in the data is also a leak to contain — hand it to `security-event-response`.
 

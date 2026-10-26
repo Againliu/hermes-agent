@@ -141,6 +141,20 @@ def test_a_requested_check_that_cannot_run_is_refused_not_reported_clean(ds, cap
     assert code == 2 and "all_zero" not in report
 
 
+def test_short_original_name_in_kept_free_text_is_counted(ds, capsys, tmp_path):
+    src = _write_csv(tmp_path / "src.csv", [{"name": "Amy", "notes": "Called Amy back"},
+                                            {"name": "Bob", "notes": "no answer"}])
+    out_dir = tmp_path / "share"
+    out_dir.mkdir()
+    shipped = out_dir / "share.csv"
+    _run(ds, capsys, "pseudonymize", str(src), str(shipped), "--drop", "name",
+         "--key-file", str(tmp_path / "k.key"))
+    code, report, raw = _run(ds, capsys, "scan", str(shipped), "--originals", str(src), "--columns", "name")
+    assert code == 0
+    assert report["original_values"] == {"name": 1} and report["all_zero"] is False
+    assert "Amy" not in raw
+
+
 def test_parse_error_reports_only_its_type(ds, capsys, tmp_path):
     bad = tmp_path / "bad.jsonl"
     bad.write_text(f'{{"email": "{EMAIL}"}}\n{{"email": "{EMAIL}", oops}}\n', encoding="utf-8")

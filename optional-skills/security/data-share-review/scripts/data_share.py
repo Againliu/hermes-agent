@@ -237,7 +237,6 @@ def _originals_count(text_cells: list[str], src: Path, columns: list[str]) -> di
         if col not in cols:
             raise SystemExit(f"unknown --columns entry in originals: {col!r}")
         values = sorted({str(r.get(col, "")).strip() for r in rows} - {""}, key=len, reverse=True)
-        values = [v for v in values if len(v) >= 4]
         hits = 0
         for i in range(0, len(values), 500):
             chunk = "|".join(re.escape(v) for v in values[i:i + 500])
