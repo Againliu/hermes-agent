@@ -214,7 +214,6 @@ def test_a_backward_clock_step_does_not_disown_a_gateways_new_shell(world):
         world.prune()
         diag = {"gateway_create_time_before_step": born_before, "during_step": gateway.create_time(),
                 "shell_create_time": psutil.Process(gw["shell"]).create_time() if alive(gw["shell"]) else None}
-    print("DIAG clock-step", json.dumps(diag))
     assert alive(gw["shell"]), f"the gateway's shell was killed after a clock step: {diag}\n{world.log()}"
     assert lane.exists()
 
@@ -233,6 +232,13 @@ def test_detached_pass_spares_the_launchers_shell_after_a_clock_step(world):
     that session as the launcher's ancestor: it is never killed and its entry is kept."""
     lane, other = world.entry("lane"), world.entry("other")
     orphan = world.orphan(other)
+    # A large idle entry makes the pass's idle scan outlast the launcher, so the reap runs after
+    # the launcher exited and only the recorded lineage can still name the session.
+    bulk = world.scratch / "bulk"
+    for d in range(40):
+        (bulk / f"d{d}").mkdir(parents=True)
+        for f in range(500):
+            (bulk / f"d{d}" / f"f{f}").touch()
     go = world.tmp / "go"
     script = world.tmp / "session.cmd"
     script.write_text(DETACHED_SHELL, encoding="utf-8")
@@ -248,6 +254,8 @@ def test_detached_pass_spares_the_launchers_shell_after_a_clock_step(world):
         wait_until(lambda: not any("hermes_constants_scratch_detach" in " ".join(p.info["cmdline"] or [])
                                    for p in psutil.process_iter(["cmdline"])), timeout=120,
                    what="the detached pass finished")
-    assert alive(session.pid), "the launcher's own session was killed by its detached prune"
-    assert lane.exists(), "the entry the launcher's session works in was deleted"
+    log = world.log()
+    assert alive(session.pid), f"the launcher's own session was killed by its detached prune:\n{log}"
+    assert lane.exists(), f"the entry the launcher's session works in was deleted:\n{log}"
+    assert "('cmd.exe') works inside" in log, f"the lane was kept for another reason:\n{log}"
     assert not other.exists()

@@ -1613,7 +1613,8 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         parent's pipe FDs, which is exactly the retained-resource leak.
         """
         proc = session.process
-        release_child(session.pid)
+        if proc is not None or session._pty is not None:
+            release_child(session.pid)  # the scratch owner lock _track_started took for it
         if proc is not None:
             for stream in (proc.stdout, proc.stderr, proc.stdin):
                 if stream is not None:
