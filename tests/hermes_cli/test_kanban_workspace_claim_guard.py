@@ -156,3 +156,19 @@ def test_repeated_refusals_record_one_event(conn, tmp_path):
     kinds = [r["kind"] for r in conn.execute(
         "SELECT kind FROM task_events WHERE task_id = ?", (contender,))]
     assert kinds.count("claim_rejected") == 1
+
+
+def test_review_on_a_held_workspace_leaves_the_last_slot_to_ready_work(
+    conn, tmp_path, monkeypatch, all_assignees_spawnable,
+):
+    """The review claim would be refused, so the review card must not reserve
+    the only free slot and starve an unrelated ready card."""
+    import hermes_cli.config as cfgmod
+    monkeypatch.setattr(cfgmod, "load_config", lambda *a, **k: {"kanban": {"review_dispatch": True}})
+    ws = str(tmp_path / "ws")
+    _running_holder(conn, ws, worker="live")
+    review = _ready_contender(conn, ws)
+    conn.execute("UPDATE tasks SET status = 'review', assignee = 'reviewer' WHERE id = ?", (review,))
+    ready = kb.create_task(conn, title="unrelated", assignee="alice")
+    res = kbd.dispatch_once(conn, spawn_fn=lambda task, ws, board=None: 42, max_in_progress=2)
+    assert [task_id for task_id, *_ in res.spawned] == [ready]
