@@ -9,8 +9,8 @@ import json
 import logging
 import re
 from contextvars import ContextVar
-from datetime import date
 from pathlib import Path
+import hermes_time
 from hermes_constants import get_hermes_home
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -258,9 +258,9 @@ def _add_relative_date_hint(result: dict[str, Any], written: list[Any]) -> None:
     conversation ends; ask for an absolute date. A hint on the saved write, never a refusal."""
     match = next((m for text in written if isinstance(text, str) for m in [_RELATIVE_TIME_RE.search(text)] if m),
                  None)
-    if match is not None:
+    if match is not None:  # the profile's clock, not the server's: their "today" can differ by a day
         result["date_hint"] = (
-            f"'{match.group(0)}' is relative to today ({date.today().isoformat()}) and this memory outlives "
+            f"'{match.group(0)}' is relative to today ({hermes_time.now().date().isoformat()}) and this memory outlives "
             "the conversation: patch the entry to state the absolute date.")
 
 

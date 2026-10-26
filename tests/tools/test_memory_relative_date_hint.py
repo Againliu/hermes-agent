@@ -2,7 +2,8 @@
 the entry outlives the conversation that anchored "in 3 weeks"."""
 
 import json
-from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -21,6 +22,7 @@ def _dispatch(store, **args):
 ])
 def test_relative_time_on_a_saved_entry_asks_for_an_absolute_date(content, tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("HERMES_TIMEZONE", "UTC")
     store = MemoryStore()
 
     single = _dispatch(store, action="add", target="memory", content=content)
@@ -28,8 +30,18 @@ def test_relative_time_on_a_saved_entry_asks_for_an_absolute_date(content, tmp_p
 
     for result in (single, batch):
         assert result["success"] is True
-        assert date.today().isoformat() in result["date_hint"]
+        assert datetime.now(ZoneInfo("UTC")).date().isoformat() in result["date_hint"]
     assert content in store._entries_for("memory")  # a hint, never a refusal
+
+
+@pytest.mark.parametrize("zone", ["Pacific/Kiritimati", "Pacific/Pago_Pago"])  # 25 h apart: never the same date
+def test_date_hint_anchors_on_the_profile_timezone_not_the_server_clock(zone, tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("HERMES_TIMEZONE", zone)
+
+    result = _dispatch(MemoryStore(), action="add", target="memory", content="Call the bank tomorrow")
+
+    assert f"({datetime.now(ZoneInfo(zone)).date().isoformat()})" in result["date_hint"]
 
 
 def test_absolute_dates_and_rejected_writes_carry_no_hint(tmp_path, monkeypatch):
