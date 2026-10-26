@@ -80,6 +80,23 @@ def _park(desktop_dir, tag):
     return parked
 
 
+def test_a_second_waiter_leaves_the_parked_build_to_the_one_already_waiting(desktop_dir):
+    from gateway.status import _release_file_lock, _try_acquire_file_lock
+
+    parked = _park(desktop_dir, "NEW")
+    slot = main_desktop_pending._waiter_slot_path(desktop_dir)
+    slot.parent.mkdir(parents=True, exist_ok=True)
+    with open(slot, "a+", encoding="utf-8") as owner:
+        assert _try_acquire_file_lock(owner)
+        try:
+            assert main_desktop_pending.wait_then_promote(desktop_dir) is None
+            assert parked.exists() and _stamp(desktop_dir) == "OLD"
+        finally:
+            _release_file_lock(owner)
+    assert main_desktop_pending.wait_then_promote(desktop_dir) == desktop_dir / "release/linux-unpacked/hermes"
+    assert _stamp(desktop_dir) == "NEW"
+
+
 def test_a_deferred_install_refreshes_the_installed_app_copies(desktop_dir, monkeypatch):
     refreshed = []
     monkeypatch.setattr(main_desktop, "_refresh_installed_desktop_apps", refreshed.append)

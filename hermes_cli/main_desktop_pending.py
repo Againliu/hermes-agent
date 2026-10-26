@@ -166,21 +166,47 @@ def spawn_promotion_waiter(desktop_dir: Path) -> Optional[int]:
     return proc.pid
 
 
-def wait_then_promote(desktop_dir: Path) -> Optional[Path]:
-    """Block until no process runs from ``release/``, then promote the parked pack under the build lock."""
+def _waiter_slot_path(desktop_dir: Path) -> Path:
+    """One waiter per checkout: a lock beside the desktop build lock (outside the checkout)."""
     from hermes_cli.desktop_build_lock import DesktopBuildLock
 
-    while _ready_pending(desktop_dir) is not None:
-        if live_desktop_pids(desktop_dir):
-            time.sleep(_WAIT_POLL_S)
-            continue
-        lock = DesktopBuildLock(desktop_dir.parents[1])
-        lock.acquire(wait=True)
-        try:
-            return promote_pending_desktop_app(desktop_dir)
-        finally:
-            lock.release()
-    return None
+    build_lock = DesktopBuildLock(desktop_dir.parents[1]).path
+    return build_lock.with_name(build_lock.stem + "-promotion-waiter.lock")
+
+
+def wait_then_promote(desktop_dir: Path) -> Optional[Path]:
+    """Block until no process runs from ``release/``, then promote the parked pack under the build lock.
+
+    Exits at once when another waiter owns this checkout: every deferred update and every launch
+    that keeps a parked pack spawns one, and the owner already follows whichever pack is parked.
+    The owner leaves only after seeing no parked pack WHILE holding the build lock (every park
+    and promotion holds it), so a pack parked by a waiter that bowed out is never orphaned."""
+    from gateway.status import _release_file_lock, _try_acquire_file_lock
+    from hermes_cli.desktop_build_lock import DesktopBuildLock
+
+    slot_path = _waiter_slot_path(desktop_dir)
+    slot_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(slot_path, "a+", encoding="utf-8") as slot:
+        if not _try_acquire_file_lock(slot):
+            return None
+        while True:
+            if _ready_pending(desktop_dir) is not None and live_desktop_pids(desktop_dir):
+                time.sleep(_WAIT_POLL_S)
+                continue
+            lock = DesktopBuildLock(desktop_dir.parents[1])
+            lock.acquire(wait=True)
+            try:
+                if _ready_pending(desktop_dir) is None:
+                    _release_file_lock(slot)
+                    return None
+                promoted = promote_pending_desktop_app(desktop_dir)
+                # None with a Desktop running again: it relaunched before the lock; keep waiting.
+                # None with none running: the swap failed and the next launch or update retries.
+                if promoted is not None or not live_desktop_pids(desktop_dir):
+                    _release_file_lock(slot)
+                    return promoted
+            finally:
+                lock.release()
 
 
 if __name__ == "__main__":
