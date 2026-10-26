@@ -59,6 +59,27 @@ export function reviewedSoul(custom: string, draft: null | ProfileDraftResult, t
   return custom || (draft ? composeDraftSoul(title || slug, draft.sections) : '')
 }
 
+/** A manual field (Title / Description) and the value it held before a proposal was accepted. */
+export interface DecidedField {
+  held?: string
+  value: string
+}
+
+/** The field after a "Describe a change" decision. Only that field's own decision touches it:
+ *  accepting writes the proposal and remembers what the field held; un-accepting puts that back
+ *  unless the field was edited since. A decision on another part leaves typed text alone. */
+export function decideField(field: DecidedField, prev: string | undefined, next: string | undefined): DecidedField {
+  if (next === prev) {
+    return field
+  }
+
+  if (next !== undefined) {
+    return { held: prev === undefined ? field.value : field.held, value: next }
+  }
+
+  return { value: field.value === prev ? (field.held ?? field.value) : field.value }
+}
+
 const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** Apply accepted sections to a saved SOUL.md in place: a section that exists

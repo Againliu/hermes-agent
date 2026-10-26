@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyDraftCapabilities, composeDraftSoul, mergeSoulSections } from './profile-draft'
+import { applyDraftCapabilities, composeDraftSoul, decideField, mergeSoulSections } from './profile-draft'
 
 const saved = [
   '# Scout',
@@ -34,6 +34,20 @@ describe('mergeSoulSections', () => {
     const out = mergeSoulSections(closed, [{ key: 'role', title: 'Role', text: 'New role.' }])
 
     expect(out).toBe(closed.replace('Old role.', 'New role.'))
+  })
+})
+
+describe('decideField', () => {
+  it('keeps typed text through other decisions and restores it when its proposal is rejected', () => {
+    const typed = { value: 'Typed title' }
+
+    // Accepting only Voice: the title's decision did not change.
+    expect(decideField(typed, undefined, undefined)).toEqual(typed)
+
+    const accepted = decideField(typed, undefined, 'Proposed title')
+
+    expect(accepted.value).toBe('Proposed title')
+    expect(decideField(accepted, 'Proposed title', undefined).value).toBe('Typed title')
   })
 })
 

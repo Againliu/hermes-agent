@@ -30,6 +30,7 @@ import { editedLook, type EditProfileLook } from './edit-profile-look'
 import { botsText, useBots } from './i18n'
 import { displayName } from './labels'
 import { AdvancedProfileConfig, applyAdvancedConfig, emptyAdvancedState } from './profile-config'
+import { decideField } from './profile-draft'
 import { botRosterMeta, requestForBot } from './routing'
 import type { AvatarAppearance, RosterRow } from './types'
 
@@ -119,6 +120,8 @@ export function EditProfileDialog({ bot, open, onClose }: EditProfileDialogProps
   const [adv, setAdv] = useState(emptyAdvancedState())
   // Accepted parts of a "Describe a change" proposal; the SOUL part is written on Save.
   const [change, setChange] = useState<AcceptedChange>({})
+  // What Title / Description held before their proposal was accepted (restored on reject).
+  const [held, setHeld] = useState<{ description?: string; title?: string }>({})
 
   // Re-seed local state each time a different bot opens the dialog.
   const [seedKey, setSeedKey] = useState<null | string>(null)
@@ -138,6 +141,7 @@ export function EditProfileDialog({ bot, open, onClose }: EditProfileDialogProps
       setAdvanced(false)
       setAdv(emptyAdvancedState())
       setChange({})
+      setHeld({})
     }
   }
 
@@ -278,9 +282,18 @@ export function EditProfileDialog({ bot, open, onClose }: EditProfileDialogProps
           <DraftChangePanel
             name={bot.name}
             onChange={accepted => {
+              const nextTitle = decideField({ held: held.title, value: title }, change.title, accepted.title)
+
+              const nextDescription = decideField(
+                { held: held.description, value: description },
+                change.description,
+                accepted.description
+              )
+
               setChange(accepted)
-              setTitle(accepted.title ?? openingTitle)
-              setDescription(accepted.description ?? (bot.description || ''))
+              setTitle(nextTitle.value)
+              setDescription(nextDescription.value)
+              setHeld({ description: nextDescription.held, title: nextTitle.held })
             }}
             request={(method, params) => requestForBot(bot, method, params)}
           />
