@@ -1805,6 +1805,17 @@ def _is_genuine_nous_rate_limit(agent: Any, api_error: Exception, error_context:
     return _genuine
 
 
+def _pool_blocks_eager_fallback(agent: Any, reason: Any) -> bool:
+    """Credential rotation may still recover a rate limit, so the eager switch waits. Never for an
+    upstream-aggregator 429 (the pool can't help) or a failed outage probe: rotation neither
+    benches nor rotates on overload/server errors, so a healthy pool would otherwise send the
+    probe through the whole retry budget instead of straight back to the fallback."""
+    from agent.conversation_loop import _ra
+    if reason == FailoverReason.upstream_rate_limit or probe_failed_fast(agent, reason):
+        return False
+    return bool(_ra()._pool_may_recover_from_rate_limit(agent._credential_pool))
+
+
 def route_classified_error(
     agent: Any, api_error: Exception, classified: Any, _retry: TurnRetryState, *, error_msg: str,
     error_context: Any, recovered_with_pool: bool, base_url: Any, model: Any,
@@ -1938,10 +1949,7 @@ def route_classified_error(
         # upstream-aggregator 429 — the pool can't help, always fall back.
         # Fixes #11314.
         _is_upstream = classified.reason == FailoverReason.upstream_rate_limit
-        pool_may_recover = (
-            False if _is_upstream else _ra()._pool_may_recover_from_rate_limit(agent._credential_pool)
-        )
-        if not pool_may_recover:
+        if not _pool_blocks_eager_fallback(agent, classified.reason):
             agent._buffer_diagnostic_status(_eager_fallback_status(classified, _is_upstream, _is_transport_failure))
             reset_at = error_context.get("reset_at") if isinstance(error_context, dict) else None
             if agent._try_activate_fallback(reason=classified.reason, reset_at=reset_at):
