@@ -490,6 +490,7 @@ import {
   type ActiveWork,
   backendOwnedByApp,
   mergeActiveWork,
+  NO_ACTIVE_WORK,
   normalizeActiveWork,
   quitPromptFor,
   shouldGuardWindowClose
@@ -610,6 +611,15 @@ import {
 } from './update-marker'
 import { heldWaitMessage, holdTicker } from './update-marker-gate'
 import { updateConnectionsBeforeLocal } from './update-order'
+import { UpdateWhenIdle } from './update-readiness'
+import {
+  applyUpdatesWhenIdle,
+  type BusyApplyResult,
+  busyApplyResult,
+  createUpdateReadinessGate,
+  updateApplyMode,
+  type UpdateFreeze
+} from './update-readiness-gate'
 import {
   resolveUpdaterMechanism,
   type UpdaterApplyResultWire,
@@ -4397,10 +4407,32 @@ async function releaseBackendLock(updateRoot: string, tag: string): Promise<{ un
 //
 // Detection (checkUpdates / commit changelog / "N behind") stays in the UI;
 // only this apply action changed.
-async function applyUpdates(): Promise<UpdaterApplyResultWire> {
+async function applyUpdates(payload?: unknown): Promise<UpdaterApplyResultWire> {
+  const mode = updateApplyMode(payload)
+
+  if (mode !== 'when-idle') {
+    return applyUpdatesGated(mode === 'now')
+  }
+
+  return applyUpdatesWhenIdle<UpdaterApplyResultWire>({
+    scheduler: updateWhenIdle,
+    read: () => updateReadiness.read(),
+    applyGated: () => applyUpdatesGated(false),
+    emitWaiting: (reasons, deadlineAt) =>
+      emitUpdateProgress({ stage: 'waiting', message: '', waitingFor: reasons, deadlineAt }),
+    log: rememberLog
+  })
+}
+
+// Without consent (`interruptWork`), the hand-off only proceeds once every
+// local backend froze admission and proved idle and no renderer reports a turn;
+// otherwise nothing is touched and the busy reasons go back to the overlay.
+// Only past this gate may isQuittingForHandoff skip the quit guard.
+async function applyUpdatesGated(interruptWork: boolean): Promise<UpdaterApplyResultWire | BusyApplyResult> {
   return updateOperation.apply(async (): Promise<UpdaterApplyResultWire> => {
     updateInFlight = true
     let handedOff: boolean = false
+    let freeze: UpdateFreeze | null = null
 
     try {
       // The local handoff asks the window to exit and the update scripts only
@@ -4417,6 +4449,19 @@ async function applyUpdates(): Promise<UpdaterApplyResultWire> {
         return managedBusy
       }
 
+      if (interruptWork) {
+        rememberLog('[updates] user chose to update now; active work will be interrupted')
+      } else {
+        freeze = await updateReadiness.freeze()
+
+        if (!freeze.ok) {
+          const busy = busyApplyResult(freeze.reasons)
+          rememberLog(`[updates] hand-off held: ${busy.message}`)
+
+          return busy
+        }
+      }
+
       const packaged: UpdaterStrategy | null = await resolvePackagedUpdateStrategy()
       const strategy: UpdaterStrategy = packaged ?? resolveCheckoutUpdateStrategy()
       const result: UpdaterApplyResultWire = await desktopMetrics.trackUpdateApply(packaged, strategy)
@@ -4426,6 +4471,8 @@ async function applyUpdates(): Promise<UpdaterApplyResultWire> {
     } finally {
       if (!handedOff) {
         updateInFlight = false
+
+        await freeze?.release()
       }
     }
   })
@@ -16651,6 +16698,45 @@ function isAnyTurnInFlight() {
   return mergeActiveWork(activeWorkByWebContents.values()).count > 0
 }
 
+// Connected local backends, never starting one: a backend still dialling
+// after the bound has no turn to protect yet. Remote/cloud backends are not
+// restarted by a local update, so their work is not ours to wait for.
+async function localBackendsForUpdate() {
+  const pending = [backendConnectionState.getPromise(), ...[...backendPool.values()].map(entry => entry?.connectionPromise)]
+  const bound = new Promise(resolve => setTimeout(resolve, 5000, null))
+  const settled = await Promise.all(pending.filter(Boolean).map(promise => Promise.race([promise.catch(() => null), bound])))
+  const seen = new Set<string>()
+
+  return settled.filter((connection: any) => {
+    if (!connection?.baseUrl || connection.mode === 'remote' || seen.has(connection.baseUrl)) {
+      return false
+    }
+
+    seen.add(connection.baseUrl)
+
+    return true
+  }) as any[]
+}
+
+// A remote-served app's turns survive the update (it only replaces this
+// client), unless a backend the app manages goes down with it.
+function activeWorkInterruptedByUpdate(): ActiveWork {
+  if (globalRemoteActive() && !quitStopsBackendWork()) {
+    return NO_ACTIVE_WORK
+  }
+
+  return mergeActiveWork([...activeWorkByWebContents.values(), lastActiveWorkSeen])
+}
+
+const updateReadiness = createUpdateReadinessGate({
+  activeWork: activeWorkInterruptedByUpdate,
+  localBackends: localBackendsForUpdate,
+  request: (backend, path, opts) => fetchJsonForBackend(backend, path, opts),
+  log: rememberLog
+})
+
+const updateWhenIdle = new UpdateWhenIdle<UpdaterApplyResultWire>()
+
 function updateStreamThrottleFromActiveWork() {
   const working = isAnyTurnInFlight()
 
@@ -17220,12 +17306,14 @@ ipcMain.handle(
 )
 
 ipcMain.handle('hermes:updates:apply', async (_event, payload) =>
-  applyUpdates().catch(error => ({
+  applyUpdates(payload).catch(error => ({
     ok: false,
     error: 'apply-failed',
     message: error?.message || String(error)
   }))
 )
+
+ipcMain.handle('hermes:updates:cancel-when-idle', () => ({ cancelled: updateWhenIdle.cancel() }))
 
 // About ▸ Updates channel selector; source checkouts only (packages bake their channel).
 ipcMain.handle('hermes:updates:channel:set', async (_event, name: unknown): Promise<UpdaterStatusWire> => {

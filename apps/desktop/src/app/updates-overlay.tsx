@@ -46,6 +46,7 @@ import {
   $updateStatus,
   applyBackendUpdate,
   applyUpdates,
+  cancelUpdateWhenIdle,
   checkBackendUpdates,
   checkUpdates,
   dismissDiscontinuedNotice,
@@ -56,6 +57,7 @@ import {
 } from '@/store/updates'
 
 import { DiscontinuedNotice } from './retirement-view'
+import { UpdateBusyView, UpdateWaitingView } from './update-work-gate-views'
 
 function totalItems(groups: readonly CommitGroup[]) {
   return groups.reduce((sum, g) => sum + g.items.length, 0)
@@ -195,7 +197,7 @@ export function UpdatesOverlay() {
   const behind = status?.behind ?? 0
   const updateAvailable = status?.updateAvailable || behind > 0
 
-  const phase: 'idle' | 'applying' | 'manual' | 'guiSkew' | 'error' =
+  const phase: 'idle' | 'applying' | 'manual' | 'guiSkew' | 'error' | 'busy' | 'waiting' =
     apply.stage === 'manual'
       ? 'manual'
       : apply.stage === 'guiSkew'
@@ -204,7 +206,9 @@ export function UpdatesOverlay() {
           ? 'applying'
           : apply.stage === 'error'
             ? 'error'
-            : 'idle'
+            : !isBackend && (apply.stage === 'busy' || apply.stage === 'waiting')
+              ? apply.stage
+              : 'idle'
 
   const handleClose = (next: boolean) => {
     if (phase === 'applying') {
@@ -215,7 +219,11 @@ export function UpdatesOverlay() {
 
     if (
       !next &&
-      (apply.stage === 'error' || apply.stage === 'restart' || apply.stage === 'manual' || apply.stage === 'guiSkew')
+      (apply.stage === 'error' ||
+        apply.stage === 'restart' ||
+        apply.stage === 'manual' ||
+        apply.stage === 'guiSkew' ||
+        apply.stage === 'busy')
     ) {
       resetUpdateApplyState()
     }
@@ -249,6 +257,23 @@ export function UpdatesOverlay() {
         )}
 
         {phase === 'guiSkew' && <GuiSkewView message={apply.message} onDone={() => handleClose(false)} />}
+
+        {phase === 'busy' && (
+          <UpdateBusyView
+            onLater={() => handleClose(false)}
+            onUpdateNow={() => void applyUpdates({ mode: 'now' })}
+            onUpdateWhenIdle={() => void applyUpdates({ mode: 'when-idle' })}
+            reasons={apply.waitingFor ?? []}
+          />
+        )}
+
+        {phase === 'waiting' && (
+          <UpdateWaitingView
+            deadlineAt={apply.deadlineAt ?? null}
+            onCancel={() => void cancelUpdateWhenIdle()}
+            reasons={apply.waitingFor ?? []}
+          />
+        )}
 
         {phase === 'error' ? (
           <ErrorView message={apply.message} onDismiss={() => handleClose(false)} onRetry={handleInstall} />
