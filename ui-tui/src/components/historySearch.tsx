@@ -1,6 +1,8 @@
 import { Box, Text, useInput, useStdout } from '@hermes/ink'
+import { useStore } from '@nanostores/react'
 import { useMemo, useState } from 'react'
 
+import { $overlayState, hasPromptOpen } from '../app/overlayStore.js'
 import { useT } from '../i18n/useT.js'
 import * as inputHistory from '../lib/history.js'
 import { historyPreview, searchHistory } from '../lib/historySearch.js'
@@ -27,8 +29,14 @@ export function HistorySearch({ initialQuery = '', maxWidth, onAccept, onClose, 
   const { stdout } = useStdout()
   const width = clampOverlayWidth(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, (stdout?.columns ?? 80) - 6)), maxWidth)
   const matches = useMemo(() => searchHistory(inputHistory.load(), query), [query])
+  // An agent question or a confirm owns the keyboard while it is up: Enter must not also recall.
+  const promptOpen = hasPromptOpen(useStore($overlayState))
 
   useInput((input, key) => {
+    if (promptOpen) {
+      return
+    }
+
     if (key.escape || (key.ctrl && input === 'g')) {
       return onClose()
     }
@@ -58,6 +66,12 @@ export function HistorySearch({ initialQuery = '', maxWidth, onAccept, onClose, 
       setIdx(0)
     }
   })
+
+  // The prompt renders in the flow under this floating panel: draw nothing until it is answered,
+  // staying mounted so the query and selection survive.
+  if (promptOpen) {
+    return null
+  }
 
   const { items, offset } = windowItems(matches, idx, VISIBLE)
 
