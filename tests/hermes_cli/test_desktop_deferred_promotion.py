@@ -80,6 +80,15 @@ def _park(desktop_dir, tag):
     return parked
 
 
+def test_a_deferred_install_refreshes_the_installed_app_copies(desktop_dir, monkeypatch):
+    refreshed = []
+    monkeypatch.setattr(main_desktop, "_refresh_installed_desktop_apps", refreshed.append)
+    _park(desktop_dir, "NEW")
+
+    assert main_desktop_pending.wait_then_promote(desktop_dir) is not None
+    assert refreshed == [desktop_dir]
+
+
 @pytest.mark.parametrize("product", ["desktop", "webapp"])
 def test_parking_a_build_keeps_the_desktop_build_receipts_current(tmp_path, monkeypatch, product):
     from hermes_cli.source_build import source_product_current

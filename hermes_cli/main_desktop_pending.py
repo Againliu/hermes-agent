@@ -93,6 +93,11 @@ def promote_pending_desktop_app(desktop_dir: Path) -> Optional[Path]:
     exe = _swap_staged_desktop_app(desktop_dir, pending)
     if exe is not None:
         print(f"  ✓ Installed the Hermes Desktop update staged while it was running: {exe}")
+        # The update refreshed owned installed copies (/Applications/Hermes.app) from the OLD
+        # release/ while this pack was parked; Finder and the Dock launch those copies.
+        from hermes_cli.main_desktop import _refresh_installed_desktop_apps
+
+        _refresh_installed_desktop_apps(desktop_dir)
     return exe
 
 
