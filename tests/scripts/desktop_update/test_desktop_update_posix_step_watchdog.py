@@ -46,7 +46,7 @@ def _run_handoff(tmp_path: Path, body: str) -> dict:
     install_root = tmp_path / "hermes-agent"
     (install_root / "venv" / "bin").mkdir(parents=True)
     hermes = install_root / "venv" / "bin" / "hermes"
-    hermes.write_text(FAKE_HERMES)
+    hermes.write_text(FAKE_HERMES, encoding="utf-8")
     hermes.chmod(0o755)
     (tmp_path / "logs").mkdir()
     env = {**os.environ, "TMPDIR": str(tmp_path), "HERMES_HOME": str(tmp_path),
@@ -60,7 +60,7 @@ def _run_handoff(tmp_path: Path, body: str) -> dict:
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline and not result.exists():
         time.sleep(0.2)
-    assert result.exists(), (tmp_path / "logs" / "desktop-update-handoff.log").read_text()
+    assert result.exists(), (tmp_path / "logs" / "desktop-update-handoff.log").read_text(encoding="utf-8-sig")
     return json.loads(result.read_text(encoding="utf-8-sig"))
 
 
@@ -76,7 +76,7 @@ def test_a_stuck_update_is_stopped_with_its_whole_tree_and_reported(tmp_path):
     assert "made no progress" in result["message"]
     assert time.monotonic() - started < 45
     for name in ("child.pid", "grandchild.pid"):
-        pid = int((tmp_path / name).read_text())
+        pid = int((tmp_path / name).read_text(encoding="utf-8-sig"))
         assert not _process_alive(pid), f"{name} {pid} survived the stall"
 
 
