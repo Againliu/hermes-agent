@@ -632,10 +632,12 @@ The default removal can preserve configuration and user data. `--full` also
 removes data. `--data` removes user data without deleting package-owned code.
 These modes are destructive; make a backup first.
 
-Every mode checks `HERMES_HOME` before it removes anything and stops with
-`Nothing was removed` when the directory is a filesystem root, your home folder
-or a folder above it, inside the installation directory, or has none of
-`config.yaml`, `state.db` or `auth.json`. `--full` also refuses a `HERMES_HOME`
+Every mode checks `HERMES_HOME` before it removes anything, and exits non-zero
+with the reason (nothing removed) when the directory is a filesystem root, your
+home folder or a folder above it, inside the installation directory, or has none
+of `config.yaml`, `state.db` or `auth.json`. `--data` leaves a small
+`.hermes-data-removed` file behind so a later `--full` or default uninstall still
+recognises the home it cleaned. `--full` also refuses a `HERMES_HOME`
 that is itself a symlink; point `HERMES_HOME` at the real directory instead. A
 full uninstall from the default profile keeps `profiles/` unless you agree to
 remove the named profiles, and `--yes --full` never removes them. If the home
