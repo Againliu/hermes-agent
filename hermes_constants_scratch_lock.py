@@ -65,7 +65,8 @@ def owners_dir(home: str | Path | None = None) -> Path:
     """The owners dir of *home*'s machine root (all profiles of an install share it)."""
     from hermes_constants import get_default_hermes_root
 
-    return get_default_hermes_root(home=home).joinpath(*OWNERS_SUBDIR)
+    root = get_default_hermes_root() if home is None else get_default_hermes_root(home=home)
+    return root.joinpath(*OWNERS_SUBDIR)
 
 
 def owner_pid(name: str) -> int | None:
