@@ -64,7 +64,13 @@ registry = ProcessRegistry()
 python = sys.executable.replace("\\", "/")
 info = {"registry": os.getpid()}
 if role == "spawn":
-    info["worker"] = registry.spawn_local(f'"{python}" -c "import time; time.sleep(900)"', cwd=lane).pid
+    # A native child the registry tracks (adopt_local: the yield-to-background path). A Git Bash
+    # background session dies with a TerminateProcess'd gateway on Windows (seen live), so only a
+    # process that outlives its gateway can be re-adopted at all.
+    import subprocess
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(900)"], cwd=lane, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=0x08000000)
+    info["worker"] = registry.adopt_local(proc, command="bg-worker", cwd=lane).pid
 elif role == "hermes":
     # A background `hermes ...` the agent starts: it takes its own owner lock at start.
     report = (out + ".child").replace("\\", "/")  # forward slashes: the command goes through bash
@@ -273,7 +279,7 @@ def _gateway_whose_owners_dir_is_unusable(world, lane):
 
 
 def _recovered_worker(world, lane):
-    """A gateway's registry runs a background worker inside *lane*, the gateway is terminated
+    """A gateway's registry tracks a background worker inside *lane*, the gateway is terminated
     (TerminateProcess, so its vouch is gone), and the next gateway re-adopts the worker from the
     checkpoint. Returns the worker pid."""
     first = world.registry(lane, "spawn")
