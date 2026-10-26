@@ -211,7 +211,7 @@ def _probe_service(service: str):
         "calendar": lambda: build("calendar", "v3", credentials=creds).calendarList().list(maxResults=1),
         "drive": lambda: build("drive", "v3", credentials=creds).files().list(pageSize=1, fields="files(id)"),
         "contacts": lambda: build("people", "v1", credentials=creds).people().connections().list(
-            pageSize=1, personFields="names"
+            resourceName="people/me", pageSize=1, personFields="names"
         ),
     }
     probes[service]().execute()

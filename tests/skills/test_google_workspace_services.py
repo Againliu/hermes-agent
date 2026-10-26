@@ -61,3 +61,23 @@ def test_auth_url_json_requests_only_the_chosen_services(setup_module, monkeypat
     query = urllib.parse.parse_qs(urllib.parse.urlparse(payload["auth_url"]).query)
     assert set(query["scope"][0].split()) == GMAIL_CALENDAR
     assert (tmp_path / "google_oauth_last_url.txt").read_text(encoding="utf-8").strip() == payload["auth_url"]
+
+
+def test_contacts_only_live_probe_names_the_people_resource(setup_module, monkeypatch):
+    pytest.importorskip("googleapiclient")
+    from googleapiclient.http import HttpRequest
+
+    setup_module.TOKEN_PATH.write_text(json.dumps({
+        "type": "authorized_user",
+        "client_id": "fake-id.apps.googleusercontent.com",
+        "client_secret": "fake-secret",
+        "refresh_token": "fake-refresh",
+        "token": "fake-access",
+        "scopes": ["https://www.googleapis.com/auth/contacts.readonly"],
+    }), encoding="utf-8")
+    sent = []
+    monkeypatch.setattr(HttpRequest, "execute", lambda self, *a, **k: sent.append(self.uri) or {})
+
+    setup_module._probe_service("contacts")
+
+    assert len(sent) == 1 and "/people/me/connections" in sent[0]
