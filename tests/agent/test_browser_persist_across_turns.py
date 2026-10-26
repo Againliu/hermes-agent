@@ -135,3 +135,32 @@ def test_boundary_after_a_plain_evict_still_closes_the_kept_browser(sessions, mo
     assert set(active) == {"local-abc", "other-conversation"}
     runner._evict_cached_agent_at_boundary("route")
     assert set(active) == {"other-conversation"}
+
+
+def test_conversation_close_spares_a_named_session_another_conversation_took_over(sessions, monkeypatch):
+    """The close scans, then another conversation drives the named browser before it is claimed: the
+    claim re-checks the driver under the registry lock and leaves that browser running."""
+    from tools.browser_session_lifecycle import cleanup_conversation_browsers
+
+    active = sessions("bu-named-shared")
+    browser_session.record_session_driver("bu-named-shared", "sid-a")
+
+    class _TakeoverAfterScan:
+        def __init__(self):
+            self._lock, self._hook = threading.RLock(), self._take_over
+
+        def _take_over(self):
+            browser_session.record_session_driver("bu-named-shared", "sid-b")
+
+        def __enter__(self):
+            self._lock.acquire()
+
+        def __exit__(self, *exc):
+            self._lock.release()
+            hook, self._hook = self._hook, None
+            if hook:
+                hook()
+
+    monkeypatch.setattr(browser_session, "_cleanup_lock", _TakeoverAfterScan())
+    cleanup_conversation_browsers({"sid-a"})
+    assert set(active) == {"bu-named-shared"}
