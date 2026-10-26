@@ -287,8 +287,8 @@ def recover_abandoned_delegations() -> int:
     alive = _owner_liveness()
     if alive is None:
         return 0
-    from tools.async_delegation_recovery_hooks import fire_recovered_stops, recovered_stop_payloads
-    now, recovered, stops = time.time(), 0, []
+    from tools.async_delegation_recovery_hooks import claim_recovered_stops, deliver_recovered_stops
+    now, recovered = time.time(), 0
     with _DB_LOCK, _transaction() as conn:
         rows = conn.execute("""SELECT delegation_id, origin_session, origin_ui_session_id,
                       parent_session_id, dispatched_at, owner_pid,
@@ -327,14 +327,13 @@ def recover_abandoned_delegations() -> int:
                       **({"results": recovered_results} if recovered_results else {})}
             event, result = redact_completion_event(event), redact_child_result(result)
             # Conditional on the row still being in flight: a concurrent recoverer that already classified it
-            # wins, and only the process whose UPDATE landed replays the children's subagent_stop.
-            if conn.execute("""UPDATE async_delegations SET state='unknown', completed_at=?,
-                   updated_at=?, event_json=?, result_json=?, delivery_state='pending'
+            # wins, and the process whose UPDATE landed owns replaying the children's subagent_stop.
+            recovered += conn.execute("""UPDATE async_delegations SET state='unknown', completed_at=?,
+                   updated_at=?, event_json=?, result_json=?, delivery_state='pending', task_json=?
                    WHERE delegation_id=? AND state IN ('running','finalizing')""",
-                            (now, now, json.dumps(event), json.dumps(result), delegation_id)).rowcount:
-                stops.extend(recovered_stop_payloads(task, parent_id, recovered_results))
-                recovered += 1
-    fire_recovered_stops(stops)
+                (now, now, json.dumps(event), json.dumps(result), json.dumps(claim_recovered_stops(task)),
+                 delegation_id)).rowcount
+    deliver_recovered_stops(alive)
     return recovered
 
 

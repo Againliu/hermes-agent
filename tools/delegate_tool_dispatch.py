@@ -197,7 +197,9 @@ def _execute_and_aggregate(batch: _Batch, *, honor_parent_interrupt: bool = True
     else:
         _run_children_parallel(batch, results, honor_parent_interrupt=honor_parent_interrupt)
 
-    _finalize_child_results(results, batch.task_list, batch.children, batch.parent_agent)
+    # A detached unit's ledger row records each delivered subagent_stop (same gate as _record_finished_child).
+    _finalize_child_results(results, batch.task_list, batch.children, batch.parent_agent,
+                            None if honor_parent_interrupt else batch.unit_id)
     total_duration = round(time.monotonic() - batch.overall_start, 2)
     for entry in results:
         _idx = entry.get("task_index", -1)
