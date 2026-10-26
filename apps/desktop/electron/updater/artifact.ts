@@ -173,11 +173,12 @@ export async function downloadPinnedArtifact(
 
   const partial: Partial = { file: `${file}.partial`, validatorFile: `${file}.partial-validator` }
   let size: number = await partialSize(partial.file)
+  // Progress is a new high-water mark: a server that ignores ranges restarts
+  // from zero, and re-downloading bytes already reached once is not progress.
+  let furthest: number = size
   let idleAttempts = 0
 
   while (size !== artifact.size) {
-    const before = size
-
     try {
       size = await transfer(artifact, partial, size, policy)
 
@@ -186,7 +187,8 @@ export async function downloadPinnedArtifact(
       }
     } catch (error) {
       size = await partialSize(partial.file)
-      idleAttempts = size > before ? 0 : idleAttempts + 1
+      idleAttempts = size > furthest ? 0 : idleAttempts + 1
+      furthest = Math.max(furthest, size)
 
       if (error instanceof PinnedDownloadRefusedError || idleAttempts >= policy.attemptsWithoutProgress) {
         throw error

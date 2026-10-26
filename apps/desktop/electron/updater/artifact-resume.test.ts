@@ -185,3 +185,29 @@ test('a changed object restarts from zero instead of splicing, and the digest st
   expect(await readFile(file)).toEqual(BYTES)
   expect(requests).toHaveLength(2)
 })
+
+test('a server that ignores ranges cannot reset the retry budget by repeating bytes it already sent', async (): Promise<void> => {
+  const half = BYTES.length / 2
+
+  const { artifact, directory, requests } = await serve((_request, response, attempt): void => {
+    response.writeHead(200, { 'content-length': BYTES.length, etag: ETAG })
+
+    if (attempt > 6) {
+      response.end(BYTES)
+
+      return
+    }
+
+    // Always from zero; dropped alternately after half and after a quarter.
+    response.write(BYTES.subarray(0, attempt % 2 ? half : half / 2))
+    setTimeout((): void => {
+      response.socket?.destroy()
+    }, 150)
+  })
+
+  await expect(
+    downloadPinnedArtifact(directory, artifact, { stallMs: 2_000, attemptsWithoutProgress: 2 })
+  ).rejects.toThrow()
+  // Attempt 1 reached half; attempts 2 and 3 never passed it.
+  expect(requests).toHaveLength(3)
+})
