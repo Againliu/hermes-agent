@@ -253,6 +253,12 @@ class TestRetrieval:
         ])
         assert [h.name for h in search_catalog(catalog, "公众号", limit=3)] == ["wechat_publish"]
 
+    def test_mixed_language_query_still_finds_english_described_tool(self):
+        """CJK characters no tool carries must not veto the English words of the same query."""
+        from tools.tool_search import search_catalog
+        assert [h.name for h in search_catalog(self._fake_catalog(), "创建 github issue", limit=3)][:1] == [
+            "github_create_issue"]
+
 
     def test_search_respects_limit(self):
         from tools.tool_search import search_catalog
