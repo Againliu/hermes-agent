@@ -13,7 +13,7 @@ export type BusyUpdateStage = Exclude<DesktopUpdateStage, SettledUpdateStage>
 const MINUTE = 60_000
 
 /** How long each busy stage may go WITHOUT progress (a new stage, message,
- *  percent or log line) before the UI stops claiming it is running. A busy
+ *  percent or log entry) before the UI stops claiming it is running. A busy
  *  stage missing here is a type error, so no state can spin forever. Expiry
  *  kills nothing: the hand-off script or the backend owns the process, the UI
  *  only owns its spinner. */
@@ -69,22 +69,28 @@ export function watchUpdateStageDeadlines(
 ): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined
   let fingerprint = ''
+  // The log is capped (its length stops growing), so a new line is detected by
+  // the identity of the newest entry: every ingested report appends a new one.
+  let newest: unknown
 
   const unsubscribe = store.subscribe((state: StageProgress): void => {
     const busy = (state.applying || state.stage === 'restart') && isBusyUpdateStage(state.stage)
-    const next = busy ? [state.stage, state.message, state.percent, state.log.length].join('\0') : ''
+    const next = busy ? [state.stage, state.message, state.percent].join('\0') : ''
+    const entry = busy ? state.log.at(-1) : undefined
 
-    if (next === fingerprint) {
+    if (next === fingerprint && entry === newest) {
       return
     }
 
     fingerprint = next
+    newest = entry
     clearTimeout(timer)
 
     if (busy && isBusyUpdateStage(state.stage)) {
       const stage = state.stage
       timer = setTimeout((): void => {
         fingerprint = ''
+        newest = undefined
         onStall(stage)
       }, BUSY_STAGE_STALL_MS[stage])
     }

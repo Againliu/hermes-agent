@@ -31,7 +31,16 @@ describe('update stage deadlines', () => {
   })
 
   it('bounds every stage that can spin, and no settled one', () => {
-    const spinning: DesktopUpdateStage[] = ['prepare', 'fetch', 'pull', 'pydeps', 'update', 'rebuild', 'restart', 'done']
+    const spinning: DesktopUpdateStage[] = [
+      'prepare',
+      'fetch',
+      'pull',
+      'pydeps',
+      'update',
+      'rebuild',
+      'restart',
+      'done'
+    ]
     const settled: DesktopUpdateStage[] = ['idle', 'manual', 'guiSkew', 'error']
 
     expect(spinning.every(isBusyUpdateStage)).toBe(true)
@@ -58,6 +67,23 @@ describe('update stage deadlines', () => {
     for (let line = 0; line < 10; line += 1) {
       vi.advanceTimersByTime(BUSY_STAGE_STALL_MS.update - 1000)
       store.set({ ...store.get(), log: [...store.get().log, line] })
+    }
+
+    expect(onStall).not.toHaveBeenCalled()
+    stop()
+  })
+
+  it('keeps counting new log entries once the log is at its cap', () => {
+    const entry = (): { message: string } => ({ message: 'still building' })
+    const capped = Array.from({ length: 50 }, entry)
+    const store = atom<State>({ ...busy('rebuild'), log: capped })
+    const onStall = vi.fn()
+    const stop = watchUpdateStageDeadlines(store, onStall)
+
+    for (let report = 0; report < 10; report += 1) {
+      vi.advanceTimersByTime(BUSY_STAGE_STALL_MS.rebuild - 1000)
+      // ingestProgress's shape: same stage, message and percent; one new entry, oldest dropped.
+      store.set({ ...store.get(), log: [...store.get().log, entry()].slice(-50) })
     }
 
     expect(onStall).not.toHaveBeenCalled()
