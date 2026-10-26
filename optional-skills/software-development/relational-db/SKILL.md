@@ -39,7 +39,7 @@ it), or SQLite-only work (different locking model entirely).
 
 ## How to Run
 
-Run read-only probes (`EXPLAIN`, catalog queries, row counts) through `terminal` with the
+Run read-only probes (plain `EXPLAIN`, catalog queries, row counts) through `terminal` with the
 project's client (`psql`, `mysql`) or ORM shell. DDL, backfills and anything that writes to a
 shared or production database run only after the user approves the specific plan; read the
 migration files with `read_file` and `search_files` first.
@@ -54,6 +54,9 @@ migration files with `read_file` and `search_files` first.
 - MySQL: write `ALGORITHM=INPLACE, LOCK=NONE` (or `INSTANT`) explicitly so the server refuses
   instead of silently falling back to a blocking copy; bound waits with `lock_wait_timeout`.
 - Plan evidence: `EXPLAIN (ANALYZE, BUFFERS) <query>` (Postgres), `EXPLAIN ANALYZE <query>` (MySQL 8.0.18+).
+  `ANALYZE` executes the statement: on an `INSERT`/`UPDATE`/`DELETE` it performs the write. Use plain
+  `EXPLAIN` for write statements until the user approves, or wrap the analyzed run in
+  `BEGIN; ... ROLLBACK;` (Postgres) after that approval.
 - Who is blocking whom (Postgres): `SELECT pid, pg_blocking_pids(pid), query FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0;`
 
 ## Procedure
