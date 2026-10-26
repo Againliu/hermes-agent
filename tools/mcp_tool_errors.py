@@ -496,7 +496,9 @@ def _get_auth_error_types() -> tuple:
             ([sdk_mod.HTTPStatusError] if sdk_mod is not None else []) + _optional_types("httpx", "HTTPStatusError")))
         auth_types = (*_optional_types("mcp.client.auth", "OAuthFlowError", "OAuthTokenError"),
                       *_optional_types("mcp.client.auth", "UnauthorizedError"),  # older SDKs
-                      *_optional_types("tools.mcp_oauth", "OAuthNonInteractiveError"), *http_types)
+                      *_optional_types("tools.mcp_oauth", "OAuthNonInteractiveError"),
+                      # An unsafe advertised endpoint is a config fact, not a transient: retrying re-runs the browser flow.
+                      *_optional_types("tools.mcp_oauth_endpoints", "OAuthEndpointRefused"), *http_types)
         _AUTH_ERROR_TYPES = (auth_types, http_types)
     return _AUTH_ERROR_TYPES
 

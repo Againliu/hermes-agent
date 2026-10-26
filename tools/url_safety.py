@@ -390,6 +390,27 @@ def is_safe_url(url: str) -> bool:
         return False
 
 
+def host_address_class(hostname: str) -> str:
+    """``"loopback"`` / ``"internal"`` / ``"public"`` for *hostname*: internal means every answer is
+    in a private/link-local/CGNAT/reserved class, loopback that every answer is loopback. A name that
+    does not resolve is ``"public"``, the stricter verdict for callers deciding how much to trust it."""
+    host = _normalize_hostname(hostname)
+    if host == "localhost" or host.endswith(".localhost"):
+        return "loopback"
+    literal = _parse_ip(host)
+    if literal is not None:
+        ips = [literal]
+    else:
+        try:
+            ips = [ip for _raw, _s, ip in _iter_resolved_ips(_getaddrinfo(host)) if ip is not None]
+        except (socket.gaierror, UnicodeError):
+            return "public"
+    ips = [_embedded_ipv4(ip) for ip in ips]
+    if not ips or not all(_is_blocked_ip(ip) for ip in ips):
+        return "public"
+    return "loopback" if all(ip.is_loopback for ip in ips) else "internal"
+
+
 async def async_is_safe_url(url: str) -> bool:
     """:func:`is_safe_url` with the blocking DNS work off the event loop."""
     return await asyncio.to_thread(is_safe_url, url)
