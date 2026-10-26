@@ -253,6 +253,24 @@ function requestOnTarget<T>(target: string, method: string, params: Record<strin
     : host.request(method, params)
 }
 
+/** Rewrite a created profile's SOUL.md; throws `failed` when the gateway reports the write failed
+ *  (`profiles.configure` resolves with `applied.soul: false` rather than rejecting). */
+async function writeSoul(
+  request: <T>(method: string, params?: Record<string, unknown>) => Promise<T>,
+  name: string,
+  soul: string,
+  failed: string
+) {
+  const saved = await request<null | { applied?: Record<string, boolean>; ok?: boolean }>('profiles.configure', {
+    name,
+    soul
+  })
+
+  if (saved?.ok === false || saved?.applied?.soul === false) {
+    throw new Error(failed)
+  }
+}
+
 /** Delete a draft profile the New Agent dialog minted, on the `target` it was
  *  created on: a remote connection (`cli.exec`) or '' for local. Fire-and-forget
  *  with a toast. A cancel while profiles.create is still in flight is caught by
@@ -346,6 +364,9 @@ function useDraftProfile(
 ) {
   const draftGenRef = useRef(0)
   const draftTargetRef = useRef('')
+  // The SOUL.md the draft was created with: Create rewrites it when the
+  // identity was edited or regenerated after an early (Capabilities) create.
+  const createdSoulRef = useRef('')
 
   const discardDraft = () => {
     const draft = createdRef.current
@@ -364,7 +385,7 @@ function useDraftProfile(
     []
   )
 
-  return { discardDraft, draftGenRef, draftTargetRef }
+  return { createdSoulRef, discardDraft, draftGenRef, draftTargetRef }
 }
 
 export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: CreateAgentDialogProps) {
@@ -380,7 +401,7 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
   // button + MCP setup buttons). Distinct from createdRef on purpose:
   // createdRef must stay a slug string for its sibling consumers.
   const flightRef = useRef<Promise<null | string> | null>(null)
-  const { discardDraft, draftGenRef, draftTargetRef } = useDraftProfile(createdRef, flightRef)
+  const { createdSoulRef, discardDraft, draftGenRef, draftTargetRef } = useDraftProfile(createdRef, flightRef)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   // Default shapes mode: deterministic blob face drawn from the agent's name
@@ -549,6 +570,15 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
     )
   }
 
+  const soulForCreate = () =>
+    composeSoul({
+      name: slug,
+      title: botTitle,
+      description,
+      roster,
+      customSoul: reviewedSoul(soul, draft, botTitle, slug)
+    })
+
   // Materialize the profile exactly once. createdRef stores the finished slug
   // (its consumers — the taken check, draft discard on cancel, the MCP setup
   // button's profile param — all read a string); flightRef shares the
@@ -575,6 +605,7 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
 
     const generation = draftGenRef.current
     const target = createTarget
+    const soulText = soulForCreate()
 
     const flight = singleFlight(flightRef, async () => {
       await requestForTarget('profiles.create', {
@@ -590,13 +621,7 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
         // profile, so refreshes can't invalidate each other. Older gateways
         // ignore the param and copy — still functional, just forked.
         share_auth: shareAuth,
-        soul: composeSoul({
-          name: slug,
-          title: botTitle,
-          description,
-          roster,
-          customSoul: reviewedSoul(soul, draft, botTitle, slug)
-        }),
+        soul: soulText,
         ...(model.trim() && provider.trim()
           ? {
               model: model.trim(),
@@ -613,6 +638,7 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
       }
 
       createdRef.current = slug
+      createdSoulRef.current = soulText
       draftTargetRef.current = target
 
       // Apply capability picks from the Advanced tabs (best-effort; the
@@ -720,6 +746,15 @@ export function CreateAgentDialog({ open, onClose, onConfigureModel, roster }: C
         setError(b.bot.createFailed)
 
         return
+      }
+
+      // Created earlier for the Capabilities tab / MCP setup: save the
+      // identity reviewed since then, or the bot keeps the older SOUL.md.
+      const latestSoul = soulForCreate()
+
+      if (latestSoul !== createdSoulRef.current) {
+        await writeSoul(requestForTarget, slugCreated, latestSoul, b.editor.sectionsFailed('soul'))
+        createdSoulRef.current = latestSoul
       }
 
       // The intro turn is a real model call. Probe the new profile's route
