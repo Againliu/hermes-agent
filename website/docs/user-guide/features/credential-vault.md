@@ -84,8 +84,8 @@ refused, so a prompt injection that reaches a checkout page can ask, but it
 cannot spend. Address fills need no confirmation.
 
 While a filled card is on the page, screenshots of it are refused (a
-`browser_exec` capture is deleted instead of attached, `browser_cdp` screenshot
-methods and `vision_analyze` on a newer image refuse) until the form is
+`browser_exec` capture raises an error and nothing is written, `browser_cdp`
+screenshot methods and `vision_analyze` on a newer image refuse) until the form is
 submitted or that tab navigates or closes, even after the agent moves to another tab. Text reads show the card number as
 `«redacted-card ••••4242»` in whatever grouping the page formats it, and the CVC
 is masked as a whole number only while that page is open.

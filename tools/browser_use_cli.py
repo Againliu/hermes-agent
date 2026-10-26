@@ -86,6 +86,23 @@ _hermes_ensure_own_tab()
 del _hermes_ensure_own_tab
 """
 
+# Prepended while a payment card is filled into the task's page (tools/browser_vault_card_guard.py): the
+# harness's cdp() (which capture_screenshot and the recorder call through the helpers module) refuses the
+# capture methods, so no image of the card is ever written and no workspace file needs deleting.
+_CARD_FILLED_PREAMBLE = """\
+# hermes: a payment card is filled into the page; screenshots are refused for this call
+def _hermes_refuse_captures(inner, methods, message):
+    def cdp(method, *args, **kwargs):
+        if method in methods:
+            raise RuntimeError(message)
+        return inner(method, *args, **kwargs)
+    return cdp
+from browser_harness import helpers as _hermes_helpers
+_hermes_helpers.cdp = _hermes_refuse_captures(_hermes_helpers.cdp, {methods!r}, {message!r})
+cdp = _hermes_refuse_captures(cdp, {methods!r}, {message!r})
+del _hermes_refuse_captures, _hermes_helpers
+"""
+
 _DEFAULT_TIMEOUT_S = 300
 _MIN_TIMEOUT_S = 5
 _MAX_TIMEOUT_S = 1800
@@ -720,6 +737,11 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     if session and not private_browser:
         code = _OWN_TAB_PREAMBLE + code
 
+    from tools.browser_vault_card_guard import CDP_CAPTURE_METHODS, capture_refusal
+    card_capture_refusal = capture_refusal(task_id)
+    if card_capture_refusal:
+        code = _CARD_FILLED_PREAMBLE.format(methods=sorted(CDP_CAPTURE_METHODS), message=card_capture_refusal) + code
+
     workspace = _workspace_dir(task_id)
     if workspace:
         env["BH_AGENT_WORKSPACE"] = workspace
@@ -731,8 +753,6 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
 
     timeout = _clamp_timeout(timeout_s)
     started = time.time()
-    from tools.browser_vault_card_guard import capture_refusal
-    card_capture_refusal = capture_refusal(task_id)  # judged at the start: a capture then submit still saw the card
 
     def dispatch() -> dict[str, Any]:
         _attach_vault_supervisor(env, task_id)
@@ -741,10 +761,8 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
             _driven_daemons[daemon] = hermes_home_key()
         try:
             return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
-        except subprocess.TimeoutExpired as exc:
-            partial = exc.stdout or ""  # communicate() hands back raw bytes on timeout
-            partial = partial.decode("utf-8", "replace") if isinstance(partial, bytes) else partial
-            return {"stdout": partial, "error_result": tool_error(
+        except subprocess.TimeoutExpired:
+            return {"error_result": tool_error(
                 f"browser-use exec timed out after {timeout}s. The daemon may still be working; retry "
                 f"with a larger timeout_s (max {_MAX_TIMEOUT_S}), or split the work into several calls that "
                 "append to workspace files — anything already written to the workspace is preserved."
@@ -759,10 +777,6 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         dispatched = dispatch()
     _reload_if_republished(env, generation)
     if "proc" not in dispatched:
-        partial_stdout = dispatched.pop("stdout", "")
-        if card_capture_refusal:  # a capture taken before the call timed out or failed still shows the card
-            from tools.browser_vault_card_guard import discard_captures
-            discard_captures(_IMAGE_PATH_RE.findall(partial_stdout), workspace, started)
         if "error_result" in dispatched:
             return dispatched["error_result"]
         return tool_result(dispatched)
@@ -785,18 +799,15 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         stderr = stderr[:_STDERR_CAP_CHARS] + "\n… (stderr truncated)"
     if stderr:
         result["stderr"] = stderr
-    return _result_with_screenshot(result, proc.stdout, started, workspace, card_capture_refusal)
+    return _result_with_screenshot(result, proc.stdout, started, card_capture_refusal)
 
 
-def _result_with_screenshot(result: dict[str, Any], stdout: str, started: float, workspace: Optional[str],
+def _result_with_screenshot(result: dict[str, Any], stdout: str, started: float,
                             card_capture_refusal: Optional[str]):
-    """The exec result with its screenshot attached; while a payment card is filled, every image the call
-    captured is deleted instead (``tools.browser_vault_card_guard``)."""
+    """The exec result with its screenshot attached; nothing is attached while a payment card is filled
+    (the call's captures were refused, ``_CARD_FILLED_PREAMBLE``)."""
     from tools.registry import tool_result
     if card_capture_refusal:
-        from tools.browser_vault_card_guard import discard_captures
-        if discard_captures(_IMAGE_PATH_RE.findall(stdout or ""), workspace, started):
-            result["screenshot_blocked"] = card_capture_refusal
         return tool_result(result)
     screenshot = _find_screenshot(stdout, started)
     if screenshot:

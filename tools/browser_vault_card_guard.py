@@ -7,7 +7,7 @@ carries the full card number into the model's context, the provider's logs and t
 From the moment a card is written until the filled document is gone (submit or any navigation loads a
 new document, the tab closes, the browser session ends), every capture path for that task refuses:
 
-- ``browser_exec``: images captured during the call are deleted and not attached;
+- ``browser_exec``: the harness's ``cdp()`` refuses the capture methods for the call, nothing is attached;
 - ``browser_cdp``: ``Page.captureScreenshot`` and the other pixel-producing methods refuse;
 - ``vision_analyze``: local images written after the fill refuse.
 
@@ -174,25 +174,6 @@ def capture_refusal(task_id: Optional[str]) -> Optional[str]:
     return (f"Screenshots are blocked while a payment card is filled into {fill.origin}: the image would "
             "carry the card number. Submit the form or navigate away first; check the fields with text "
             "reads instead (card values come back masked).")
-
-
-def discard_captures(printed_paths: list[str], workspace: Optional[str], since: float) -> list[str]:
-    """Delete the images a ``browser_exec`` call wrote while a card was filled (the paths it printed and
-    any image in its workspace newer than the call), so neither the result nor a later ``vision_analyze``
-    can carry them. Returns the deleted paths."""
-    candidates = set(printed_paths)
-    if workspace and os.path.isdir(workspace):
-        candidates.update(entry.path for entry in os.scandir(workspace)
-                          if entry.is_file() and entry.name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")))
-    deleted = []
-    for path in sorted(candidates):
-        try:
-            if os.path.getmtime(path) >= since - 1:
-                os.remove(path)
-                deleted.append(path)
-        except OSError:
-            continue
-    return deleted
 
 
 def image_refusal(task_id: Optional[str], image_path: str) -> Optional[str]:

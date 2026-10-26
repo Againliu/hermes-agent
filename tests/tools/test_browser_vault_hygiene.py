@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -137,18 +138,6 @@ def test_screenshot_and_vision_refused_while_card_is_filled(filled_card, tmp_pat
     assert json.loads(browser_cdp("Page.captureScreenshot", task_id="t")).get("error_type") != "card_filled"
 
 
-def test_browser_exec_captures_during_a_fill_are_deleted(filled_card, tmp_path):
-    from tools.browser_vault_card_guard import discard_captures
-    import time
-
-    started = time.time()
-    shot, other = tmp_path / "s.png", tmp_path / "notes.txt"
-    shot.write_bytes(b"x")
-    other.write_text("keep", encoding="utf-8")
-    assert discard_captures([], str(tmp_path), started) == [str(shot)]
-    assert not shot.exists() and other.exists()
-
-
 def test_card_protection_follows_the_filled_tab_not_the_supervisors_focus(filled_card):
     """A later fill or focus moves the supervisor to another tab; the checkout tab still holds the card
     and can be captured by its target id, so its protection lasts until that tab navigates or closes."""
@@ -188,10 +177,28 @@ def test_list_withholds_other_sites_when_the_open_page_cannot_be_read(store):
     assert "github.com" not in json.dumps(out) and "example.org" not in json.dumps(out)
 
 
-@pytest.mark.platforms("posix")  # POSIX shell fake CLI
-def test_browser_exec_timeout_still_deletes_captures_of_a_filled_card(tmp_path, monkeypatch):
-    """A call that screenshots the filled checkout and then times out must not leave the image behind
-    for a later vision_analyze once the page has navigated."""
+# Stands in for the harness's run.py: helpers imported into the exec globals, capture_screenshot calling
+# cdp through its own module, the model's code exec'd after Hermes's preambles.
+_FAKE_HARNESS = """\
+import sys, types
+helpers = types.ModuleType("browser_harness.helpers")
+package = types.ModuleType("browser_harness")
+package.helpers = helpers
+sys.modules.update({"browser_harness": package, "browser_harness.helpers": helpers})
+def cdp(method, **params):
+    return {"data": ""}
+def capture_screenshot(path):
+    helpers.cdp("Page.captureScreenshot", format="png")
+    open(path, "wb").write(b"card pixels")
+    return path
+helpers.cdp, helpers.capture_screenshot = cdp, capture_screenshot
+exec(sys.stdin.read(), {"cdp": cdp, "capture_screenshot": capture_screenshot})
+"""
+
+
+def test_browser_exec_refuses_captures_of_a_filled_card_and_keeps_other_images(tmp_path, monkeypatch):
+    """While a card is filled the call's screenshot is refused before an image exists, so images the call
+    or an earlier one wrote (product downloads, saved files) stay in the workspace."""
     from tools import browser_session, browser_supervisor, browser_use_cli
 
     class _Registry:
@@ -206,14 +213,21 @@ def test_browser_exec_timeout_still_deletes_captures_of_a_filled_card(tmp_path, 
                         lambda key: {"cdp_url": "ws://127.0.0.1:47000/devtools/browser/x", "features": {"local": True}})
     monkeypatch.setattr("hermes_cli.config_effective.load_user_config_effective", dict)
     monkeypatch.setattr("tools.browser_vault_card_guard.capture_refusal", lambda task_id: "card filled")
-    cli = tmp_path / "browser-use"
-    cli.write_text('#!/bin/sh\ncat > /dev/null\nprintf x > "$BH_AGENT_WORKSPACE/shot.png"\n'
-                   'echo "$BH_AGENT_WORKSPACE/shot.png"\nsleep 60\n', encoding="utf-8")
-    cli.chmod(0o755)
-    monkeypatch.setattr(browser_use_cli, "_find_cli", lambda: [str(cli)])
-    monkeypatch.setattr(browser_use_cli, "_MIN_TIMEOUT_S", 1)
-
-    result = json.loads(browser_use_cli.browser_exec("print(capture_screenshot())", timeout_s=1, task_id="t"))
-    assert "timed out" in result["error"]
+    harness = tmp_path / "harness.py"
+    harness.write_text(_FAKE_HARNESS, encoding="utf-8")
+    monkeypatch.setattr(browser_use_cli, "_find_cli", lambda: [sys.executable, str(harness)])
     workspace = browser_use_cli._workspace_dir("t")
+    earlier = os.path.join(workspace, "earlier.png")
+    with open(earlier, "wb") as f:
+        f.write(b"product")
+
+    code = ("import os\nws = os.environ['BH_AGENT_WORKSPACE']\n"
+            "open(os.path.join(ws, 'product.png'), 'wb').write(b'product')\n"
+            "print(os.path.join(ws, 'product.png'))\n"
+            "print(capture_screenshot(os.path.join(ws, 'shot.png')))\n")
+    result = json.loads(browser_use_cli.browser_exec(code, task_id="t"))
+
+    assert os.path.exists(earlier) and os.path.exists(os.path.join(workspace, "product.png"))
+    assert "card filled" in result.get("stderr", ""), result
     assert not os.path.exists(os.path.join(workspace, "shot.png"))
+    assert "screenshot_path" not in result
