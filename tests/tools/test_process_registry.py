@@ -13,12 +13,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from tools.environments.local_env_policy import _HERMES_PROVIDER_ENV_FORCE_PREFIX
-from tools.process_registry import (
-    ProcessRegistry,
-    ProcessSession,
-    FINISHED_TTL_SECONDS,
-    MAX_PROCESSES,
-)
+from tools.process_registry import ProcessRegistry, ProcessSession, FINISHED_TTL_SECONDS, MAX_PROCESSES
 from hermes_platform.resolver import system_tool
 
 
