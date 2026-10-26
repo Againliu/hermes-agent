@@ -46,8 +46,11 @@ for everyone who has it, not a local cleanup.
 4. Record the first bad commit and the command's output at it and at its parent.
 5. `git bisect reset` to return.
 
-A flaky command bisects to noise. Measure its failure rate first; if it is not 0% on good and
-100% on bad, loop it inside the bisect command until it is.
+A flaky command bisects to noise. Measure its failure rate on the known-good and known-bad
+commits first. If it ever fails on the good commit, make the bisect command run it a fixed number
+of times (N, chosen from that rate) and decide by rule: all N pass → exit 0, all N fail → exit 1,
+mixed → exit 125 (skip). Stop and report instead of bisecting when good and bad cannot be told
+apart within N runs.
 
 ## 5. History rewrite
 
