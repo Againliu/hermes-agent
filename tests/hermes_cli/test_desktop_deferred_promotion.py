@@ -123,3 +123,43 @@ def test_parking_a_build_keeps_the_desktop_build_receipts_current(tmp_path, monk
 
     _park(root / "apps/desktop", "NEW")
     assert source_product_current(root, product, out)
+
+
+def test_a_desktop_reopened_before_the_swap_keeps_the_waiter_waiting(desktop_dir, monkeypatch):
+    """The Desktop quits, the waiter heads for the swap, and the user reopens Hermes before the waiter
+    holds the build lock: the swap must not land under the reopened app; it lands once that one quits."""
+    import threading
+
+    from hermes_cli import desktop_build_lock
+
+    _park(desktop_dir, "NEW")
+    monkeypatch.setattr(main_desktop_pending, "_WAIT_POLL_S", 0.05)
+    exe = desktop_dir / "release/linux-unpacked/hermes"
+    reopened = []
+
+    class ReopenWhileTakingTheLock(desktop_build_lock.DesktopBuildLock):
+        def acquire(self, *, wait=False):
+            if not reopened:  # the gap between "nothing runs" and holding the lock
+                reopened.append(subprocess.Popen([str(exe), "-c", "sleep 60; :"]))
+                wait_until(lambda: main_desktop_pending.live_desktop_pids(desktop_dir) == [reopened[0].pid], timeout=10)
+            return super().acquire(wait=wait)
+
+    monkeypatch.setattr(desktop_build_lock, "DesktopBuildLock", ReopenWhileTakingTheLock)
+    result = []
+    waiter = threading.Thread(target=lambda: result.append(main_desktop_pending.wait_then_promote(desktop_dir)), daemon=True)
+    waiter.start()
+    try:
+        wait_until(lambda: bool(reopened), timeout=10)
+        waiter.join(timeout=1.0)
+        assert waiter.is_alive(), "the waiter gave up while the reopened Desktop still runs"
+        assert reopened[0].poll() is None and _stamp(desktop_dir) == "OLD"
+        assert main_desktop_pending.pending_dir(desktop_dir).exists()
+    finally:
+        for proc in reopened:
+            proc.terminate()
+            proc.wait()
+
+    waiter.join(timeout=30)
+    assert not waiter.is_alive()
+    assert result == [exe]
+    assert _stamp(desktop_dir) == "NEW"
