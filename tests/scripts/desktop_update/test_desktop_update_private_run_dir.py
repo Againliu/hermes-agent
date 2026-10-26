@@ -12,10 +12,11 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
+
+from tests.waiting import wait_until
 
 SHIM = Path(__file__).resolve().parents[3] / "scripts" / "desktop-update" / "posix.sh"
 
@@ -56,9 +57,8 @@ def test_run_files_live_in_a_private_dir_removed_at_the_end(tmp_path):
     subprocess.run(["/bin/bash", str(SHIM), "--install-root", str(install_root), "--no-ui"],
                    env=env, timeout=60, check=True, stdin=subprocess.DEVNULL)
     result = tmp_path / ".hermes-update-result.json"
-    deadline = time.monotonic() + 45
-    while time.monotonic() < deadline and not (result.exists() and not any(shared_tmp.iterdir())):
-        time.sleep(0.1)
+    wait_until(lambda: result.exists() and not any(shared_tmp.iterdir()), timeout=45,
+               what="the detached update to finish and remove its run dir")
 
     seen = json.loads(capture.read_text(encoding="utf-8-sig"))
     run_dir = Path(seen["status"]).parent
