@@ -137,6 +137,18 @@ def test_boundary_after_a_plain_evict_still_closes_the_kept_browser(sessions, mo
     assert set(active) == {"other-conversation"}
 
 
+def test_in_place_compression_keeps_the_browser_until_the_conversation_ends(sessions, monkeypatch):
+    """An in-place /compress keeps the session id the next turn runs under: its browser stays, and the
+    conversation's real end still closes it."""
+    active = sessions("local-abc", "other-conversation")
+    runner = _gateway_runner(monkeypatch)
+    runner._agent_cache["route"] = (_cached_agent({"local-abc"}), "sig")
+    runner._evict_cached_agent_at_boundary("route", keep_browsers=True)
+    assert set(active) == {"local-abc", "other-conversation"}
+    runner._evict_cached_agent_at_boundary("route")
+    assert set(active) == {"other-conversation"}
+
+
 def test_ended_conversations_slow_close_spares_the_next_conversations_browser(sessions, monkeypatch):
     """A reset frees the route while the old conversation's memory commit still runs; the next conversation
     browses and is plain-evicted (a /model) under the same key. The old close must take only its own ids."""
