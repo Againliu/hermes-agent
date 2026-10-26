@@ -1119,9 +1119,9 @@ def _run_prompt_submit(
     images, agent = admitted
     # A new turn supersedes any pending quota resume: the user is driving again, and the
     # resume note ("finish the interrupted request") would talk over what they just asked.
-    # The resume's own dispatch clears this first, so it never cancels itself.
+    # A non-resume turn also starts a new request, resetting the resume budget.
     with contextlib.suppress(Exception):
-        _clear_quota_resume(session)
+        _quota_resume_take_turn(session, rid)
     from gateway.warning_notifications import diagnostic_turn_muted
     from agent.notification_presentation import notification_config_snapshot
     with _session_profile_runtime_scope(session):

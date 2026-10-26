@@ -37,6 +37,8 @@ _QUOTA_RESUME_POLL_SECONDS = 15.0
 
 
 _QUOTA_RESUME_NOTE_PREFIX = "[Resumed after a provider usage limit"
+# Request id of a resume dispatch: the one turn that continues a request instead of starting one.
+_QUOTA_RESUME_RID_PREFIX = "__quota_resume__"
 
 
 def _quota_resume_config() -> tuple[bool, int]:
@@ -75,6 +77,23 @@ def _clear_quota_resume(session: dict) -> None:
         session.pop(key, None)
 
 
+def _quota_resume_take_turn(session: dict, rid: Any) -> None:
+    """Every dispatched turn supersedes a pending resume. A turn that is not itself the resume
+    serves a NEW request, so the retry budget and the remembered original prompt belong to the
+    old one and reset with it."""
+    _clear_quota_resume(session)
+    if not str(rid or "").startswith(_QUOTA_RESUME_RID_PREFIX):
+        session.pop("_quota_resume_attempt", None)
+        session.pop("_quota_resume_origin", None)
+
+
+def _quota_resume_route(session: dict) -> str:
+    """Provider/model the session's live agent would run a resume on ("" when unknown)."""
+    agent = session.get("agent")
+    provider, model = getattr(agent, "provider", "") or "", getattr(agent, "model", "") or ""
+    return f"{provider}|{model}" if (provider or model) else ""
+
+
 def _arm_quota_resume(sid: str, session: dict, plan: dict, prompt: str) -> bool:
     """Record a due-time for a failed turn whose provider named a reset.
 
@@ -100,11 +119,13 @@ def _arm_quota_resume(sid: str, session: dict, plan: dict, prompt: str) -> bool:
         logger.info("quota-resume: attempts exhausted for %s; leaving manual retry", sid)
         return False
     session["_quota_resume_at"] = float(resume_at)
-    session["_quota_resume_prompt"] = prompt
+    # A resume turn that hit the wall again re-arms the ORIGINAL request, not its own note.
+    session["_quota_resume_prompt"] = session.get("_quota_resume_origin") or prompt
     session["_quota_resume_meta"] = {
         "source": plan.get("source", ""),
         "provider": plan.get("provider", ""),
         "resume_at": float(resume_at),
+        "route": _quota_resume_route(session),
     }
     logger.info(
         "quota-resume armed for %s in %.0fs (source=%s provider=%s)",
@@ -155,21 +176,30 @@ def _maybe_fire_quota_resume(sid: str, session: dict) -> None:
     if session.get("running") or session.get("_finalized") or session.get("_turn_cancel_requested"):
         _clear_quota_resume(session)
         return
-    prompt = str(session.get("_quota_resume_prompt") or "")
-    meta = session.get("_quota_resume_meta") or {}
-    if not prompt.strip():
-        _clear_quota_resume(session)
-        return
     if not _notif_claim_turn(session):
         return  # busy — stays due, next poll retries
+    # Read and consume the pending resume only while holding the turn: a user turn that ran
+    # between the due check and the claim cleared (or re-armed) it, and that must win.
+    prompt = str(session.get("_quota_resume_prompt") or "")
+    meta = session.get("_quota_resume_meta") or {}
+    if session.get("_quota_resume_at") != resume_at or not prompt.strip():
+        if session.get("_quota_resume_at") == resume_at:
+            _clear_quota_resume(session)
+        _notif_release_turn(session)
+        return
     # Past this point the resume either dispatches or is abandoned; never left pending.
     _clear_quota_resume(session)
+    if (armed_route := meta.get("route")) and armed_route != _quota_resume_route(session):
+        logger.info("quota-resume for %s dropped: the session switched model since it was armed", sid)
+        _notif_release_turn(session)
+        return
     if _ensure_active_session_slot(sid, session) is not None:
         logger.info("quota-resume for %s refused: session has another live owner", sid)
         _notif_release_turn(session)
         return
     session["_quota_resume_attempt"] = int(session.get("_quota_resume_attempt", 0) or 0) + 1
-    rid = f"__quota_resume__{int(time.time() * 1000)}"
+    session["_quota_resume_origin"] = prompt
+    rid = f"{_QUOTA_RESUME_RID_PREFIX}{int(time.time() * 1000)}"
     try:
         _emit("status.update", sid, {
             "kind": "process",

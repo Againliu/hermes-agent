@@ -305,7 +305,11 @@ def _session_owns_live_wakeup_schedule(session: dict) -> bool:
     ``session`` — the reapers must then keep the detached session (and with it the poller) alive, or the schedule
     freezes until a client reattaches. Gateway-routed schedules are fired by the gateway, so they never pin the
     session here. Bounded: a loop pauses at its tick budget and a stopped/paused schedule releases the session.
-    Fail-open to False: an unreadable store must not make a session unreapable."""
+    Fail-open to False: an unreadable store must not make a session unreapable.
+    A pending quota resume counts too: only this poller fires it, and it is bounded by the
+    resume cap (``agent.quota_resume.DEFAULT_MAX_WAIT_SECONDS``) and cleared when it fires."""
+    if isinstance(session.get("_quota_resume_at"), (int, float)):
+        return True
     if not (sid_key := session.get("session_key") or ""):
         return False
     try:
