@@ -19,7 +19,7 @@ Hermes has no crash reporter. On Linux the Desktop app keeps Chromium crash mini
 | Data path | Default | Goes to | Turn it off |
 |---|---|---|---|
 | [Main model calls](#model-providers) | On (it is how the agent works) | The provider in `model.provider` / `model.base_url` | Use a local endpoint (`model.provider: custom`, `model.base_url: http://localhost:...`) |
-| [Auxiliary model calls](#auxiliary-models) | On | `auxiliary.<task>.provider`; `auto` = your main model first | Pin each `auxiliary.<task>` to a local endpoint |
+| [Auxiliary model calls](#auxiliary-models) | On | `auxiliary.<task>.provider`; `auto` = your main model first | Pin each `auxiliary.<task>` to a local endpoint and keep the main model local (a failing pin falls back to it) |
 | [Shared metrics](#shared-metrics) | **Off** (opt-in) | `telemetry.shared_metrics.endpoint` (Nous telemetry service) | `telemetry.shared_metrics.enabled: false` and `send: false`, or `hermes setup telemetry` |
 | [Passive update checks](#update-checks) | On | GitHub (`api.github.com`), or `git ls-remote` on a non-GitHub `origin` | `updates.check: false` (CLI, TUI, dashboard); not the Desktop app |
 | [Desktop update checks](#update-checks) | On | GitHub (source installs) or the Desktop release feed (packaged apps) | No setting |
@@ -45,7 +45,9 @@ On OpenRouter, the Vercel AI Gateway, Fireworks, OpenCode Zen, Kimi Coding and t
 
 Side tasks call a model too: context compression sends the older part of the conversation to a summarizer, title generation sends the first exchange, `vision` sends the image, and the `approval` classifier sends a flagged command. Each task reads `auxiliary.<task>.provider` and `auxiliary.<task>.model` (see [Auxiliary Models](./configuration.md#auxiliary-models)).
 
-`provider: auto` (the default) tries your main provider and model first. If that cannot serve the call, the auto chain tries other providers you have credentials for, in order: OpenRouter, Nous Portal, a custom endpoint, native Anthropic, then direct API-key providers. To keep side tasks on one endpoint, set `provider` and `model` (or `base_url`) on each `auxiliary.<task>` block. `auxiliary.free_only: true` skips paid OpenRouter models in the auto chain. `auxiliary.title_generation.model_upgrade_enabled: false` keeps the instant local title and never calls a model for it.
+`provider: auto` (the default) uses your main provider and model. If that call fails, Hermes tries the task's `auxiliary.<task>.fallback_chain`, then your `fallback_providers`. Only when no main provider is selected (`model.provider` empty or `auto`) does it go on to other providers you have credentials for, in order: OpenRouter, Nous Portal, a custom endpoint, native Anthropic, then direct API-key providers.
+
+Setting `provider` and `model` (or `base_url`) on an `auxiliary.<task>` block sends that task to the endpoint you name, but a pin is not a guarantee. When the pinned endpoint cannot serve the call (connection failure, timeout, or quota or rate limit after retries), Hermes tries the task's `fallback_chain` and then your main model. To keep side tasks on the machine, pin them to a local endpoint and keep the main model and any `fallback_chain` entries local too. `auxiliary.free_only: true` skips paid OpenRouter models in the auto chain. `auxiliary.title_generation.model_upgrade_enabled: false` keeps the instant local title and never calls a model for it.
 
 ## Shared metrics
 
