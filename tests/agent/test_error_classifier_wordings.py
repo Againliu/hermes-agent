@@ -45,6 +45,9 @@ class TestInputLengthOverflowWordings:
         (422, 'Input validation error: `inputs` tokens + `max_new_tokens` must be <= 16000. Given: 220616 `inputs` tokens'),
         # DashScope / Model Studio (openclaw#171712).
         (400, '<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 129024]'),
+        # SiliconFlow code 20015 (openclaw#181519).
+        (400, 'Error code: 400 - {"code":20015,"message":"length of prompt_tokens (51353) must be less than '
+              'max_seq_len (32768).","data":null}'),
     ])
     def test_input_length_rejection_compresses(self, status, message):
         result = classify_api_error(MockAPIError(message, status_code=status), provider="custom")

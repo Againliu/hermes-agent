@@ -274,6 +274,9 @@ _CONTEXT_OVERFLOW_PATTERNS = (
     # DashScope / Model Studio: "Range of input length should be [1, 129024]" — `max_tokens` range errors
     # share the "Range of … should be" frame, so the pattern names `input length` (openclaw#171712).
     "range of input length should be",
+    # SiliconFlow code 20015: "length of prompt_tokens (51353) must be less than max_seq_len (32768)"
+    # (openclaw#181519).
+    "must be less than max_seq_len",
 )
 
 # Invalid-key rejections some providers return as HTTP 400 instead of 401: xAI's generic
