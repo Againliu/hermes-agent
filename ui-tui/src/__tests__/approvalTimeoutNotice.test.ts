@@ -45,3 +45,43 @@ it('explains a timed-out approval without announcing other cancellations', () =>
   expect(sys).toHaveBeenCalledTimes(1)
   expect(sys.mock.calls[0]![0]).toMatch(/did not run/)
 })
+
+it('explains a timed-out approval on the canonical gateway route, and only a timed-out one', () => {
+  const sys = vi.fn()
+
+  const onEvent = createGatewayEventHandler({
+    composer: {},
+    gateway: {},
+    session: {},
+    submission: {},
+    system: { sys },
+    transcript: {},
+    voice: {}
+  } as any)
+
+  for (const reason of ['timeout', undefined]) {
+    const prompt_id = `approval-${reason ?? 'answered'}`
+
+    onEvent({
+      payload: {
+        choices: ['once', 'deny'],
+        command: 'gh run list',
+        execution_generation: 1,
+        kind: 'approval',
+        prompt_id
+      },
+      session_id: 's1',
+      type: 'approval.request'
+    } as any)
+    expect(getOverlayState().approval).not.toBeNull()
+    onEvent({
+      payload: { execution_generation: 1, prompt_id, reason },
+      session_id: 's1',
+      type: 'approval.settled'
+    } as any)
+    expect(getOverlayState().approval).toBeNull()
+  }
+
+  expect(sys).toHaveBeenCalledTimes(1)
+  expect(sys.mock.calls[0]![0]).toMatch(/did not run/)
+})

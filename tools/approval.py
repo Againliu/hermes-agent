@@ -201,11 +201,13 @@ def list_gateway_approvals(session_key: str) -> list[dict]:
 
 def register_gateway_settle(session_key: str, request_id: str, settle) -> bool:
     """Attach ``settle(reason)`` to one pending approval; it runs once when that wait ends by any path.
+    Hooks stack: a chat's timeout notice and the shared viewers' card teardown both hear the outcome.
     False when the request is no longer pending (the surface should withdraw its prompt itself)."""
     with _lock:
         for entry in _gateway_queues.get(session_key, []):
             if entry.data.get("request_id") == request_id:
-                entry.settle = settle
+                earlier = entry.settle
+                entry.settle = settle if earlier is None else (lambda reason: (earlier(reason), settle(reason)))
                 return True
     return False
 

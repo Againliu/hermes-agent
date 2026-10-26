@@ -1174,7 +1174,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
   // Shared-control settles and the skills.changed catalog refetch need no per-event state.
   const handledBeforeSwitch = (ev: AnyGatewayEvent) =>
-    settleSharedPrompt(ev) || refreshSlashCatalogOnSkillsChange(ev, rpc, setCatalog)
+    settleSharedPrompt(ev, sys) || refreshSlashCatalogOnSkillsChange(ev, rpc, setCatalog)
 
   return (ev: AnyGatewayEvent) => {
     const sid = getUiState().sid
