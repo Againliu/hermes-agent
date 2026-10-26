@@ -8,7 +8,7 @@ live holder, and clocks, reboots and pid reuse cannot fake one.
 POSIX uses ``flock``: the lock belongs to the open file description, so the holder closing some
 other descriptor of the same file (a profile clone or backup reading ``locks/`` in-process) does
 not drop it, as it would a ``lockf``/``fcntl`` record lock. Hermes opens it non-inheritable, so an
-exec'd child never shares it. Windows uses ``msvcrt.locking`` on a non-inheritable handle. Either
+exec'd child never shares it, and a fork child closes its inherited copies at once. Windows uses ``msvcrt.locking`` on a non-inheritable handle. Either
 way a held file names a live process Hermes owns: the holder itself, or an unreaped child the
 holder spawned and vouches for (an unreaped child's pid cannot be reused).
 
@@ -49,16 +49,28 @@ _ACQUIRE_PAUSE = 0.01
 _BUSY = {errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES, getattr(errno, "EDEADLK", -1),
          getattr(errno, "EDEADLOCK", -1)}
 
-# lock file path -> (fd, pid of the process that took the lock): its own lock (one per root; tests
-# use many roots) and the locks it holds for children (:func:`vouch_for_child`). A fork child
-# inherits this dict (and, POSIX, the open descriptions) but must never release or unlink them,
-# so every use checks the pid.
-_held: dict[str, tuple[int, int]] = {}
+# lock file path -> fd: this process's own lock (one per root; tests use many roots) and the locks
+# it holds for children (:func:`vouch_for_child`).
+_held: dict[str, int] = {}
 _vouch_seq = itertools.count(1)
 
 
 def _ours(path: str) -> bool:
-    return _held.get(path, (None, None))[1] == os.getpid()
+    return path in _held
+
+
+def _forget_inherited() -> None:
+    """In a fork child: close the inherited lock descriptors, neither unlocking nor unlinking. The
+    parent's flock lives on through its own descriptor, while a fork child that outlived its parent
+    would otherwise keep a dead holder's lock held (a false owner once that pid is reused)."""
+    for fd in _held.values():
+        with contextlib.suppress(OSError):
+            os.close(fd)
+    _held.clear()
+
+
+if not _IS_WINDOWS:
+    os.register_at_fork(after_in_child=_forget_inherited)
 
 
 def owners_dir(home: str | Path | None = None) -> Path:
@@ -123,7 +135,7 @@ def _acquire(path: str) -> str | None:
             os.close(fd)
             raise
         if locked:
-            _held[path] = (fd, os.getpid())
+            _held[path] = fd
             return path
         os.close(fd)
         time.sleep(_ACQUIRE_PAUSE)
@@ -132,10 +144,10 @@ def _acquire(path: str) -> str | None:
 
 def _release(path: str) -> None:
     """Drop a lock this process holds, and its file. A fork child (atexit included) holds none of
-    the parent's locks and must not touch the parent's files."""
+    the parent's locks (:func:`_forget_inherited`) and must not touch the parent's files."""
     if not _ours(path):
         return
-    fd, _ = _held.pop(path)
+    fd = _held.pop(path)
     if not _IS_WINDOWS:
         with contextlib.suppress(OSError):
             os.unlink(path)  # while still holding: no probe can see it free first
@@ -229,6 +241,16 @@ def live_owner_pids(home: str | Path | None = None) -> dict[int, str]:
 def _held_elsewhere(path: str) -> bool:
     """Probe *path*: True when another process holds it (or it cannot be probed: an unknown is
     never read as free). A free file is stale and removed."""
+    for _ in range(_ACQUIRE_TRIES):
+        verdict = _probe(path)
+        if verdict is not None:
+            return verdict
+    return True
+
+
+def _probe(path: str) -> bool | None:
+    """One probe of :func:`_held_elsewhere`; None when the inode we locked is no longer the one
+    *path* names (a concurrent prune removed it and a new holder may have recreated the name)."""
     try:
         fd = os.open(path, os.O_RDWR)
     except FileNotFoundError:
@@ -240,6 +262,8 @@ def _held_elsewhere(path: str) -> bool:
             return True
         if _IS_WINDOWS:
             _unlock(fd)
+        elif not _still_named(fd, path):
+            return None  # unlinking by name now would remove the new holder's live file
         else:
             with contextlib.suppress(OSError):
                 os.unlink(path)  # under our lock: a new holder re-checks the inode and retries

@@ -211,3 +211,40 @@ def test_a_recorded_background_process_keeps_its_entry_only_while_it_is_still_th
     finally:
         worker.kill()
         worker.wait(timeout=30)
+
+
+@pytest.mark.platforms("posix")
+def test_a_fork_child_that_outlives_its_owner_does_not_keep_the_owners_lock(tmp_path):
+    """A registered process forks a worker (a multiprocessing fork, a daemonizing helper) and is then
+    SIGKILLed. The surviving fork child must not keep the dead owner's lock held: once that pid is
+    reused, the held lock would make an unrelated process an owner the prune never reaps."""
+    from hermes_constants_scratch_lock import live_owner_pids
+
+    home = tmp_path / ".hermes"
+    ready, done = tmp_path / "forked.json", tmp_path / "done"
+    # The orphaned fork child is outside the test's process tree, so it exits on its own cue.
+    owner = subprocess.Popen(
+        [sys.executable, "-c",
+         f"import json, os, sys, time; sys.path.insert(0, {REPO!r}); "
+         "from hermes_cli.process_identity import register_self; register_self('gateway'); "
+         "child = os.fork(); "
+         f"child or [time.sleep(0.05) for _ in iter(lambda: os.path.exists({str(done)!r}), True)]; "
+         "child or os._exit(0); "
+         f"open({str(ready)!r}, 'w', encoding='utf-8').write(json.dumps(child)); time.sleep(120)"],
+        stdin=subprocess.DEVNULL, env={**os.environ, "HOME": str(tmp_path), "HERMES_HOME": str(home)})
+    child = None
+    try:
+        child = wait_until(lambda: ready.exists() and json.loads(ready.read_text(encoding="utf-8-sig") or "null"),
+                           timeout=60, what="the registered owner forked its worker")
+        assert owner.pid in live_owner_pids(home)
+        owner.kill()
+        owner.wait(timeout=30)
+        assert _alive(child), "the fork child died with its owner"
+
+        assert owner.pid not in live_owner_pids(home), "a fork child keeps its dead owner's lock held"
+    finally:
+        done.touch()
+        owner.kill()
+        owner.wait(timeout=30)
+        if child:
+            wait_until(lambda: not _alive(child), timeout=30, what="the fork child exited")

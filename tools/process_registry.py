@@ -1147,12 +1147,16 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         session._reader_thread = reader
         if session.process is not None or session._pty is not None:
             session._owner_vouch = vouch_for_child(session.pid)  # its own child: Hermes-owned for the scratch prune
-        with self._lock:
-            self._prune_if_needed()
-            # Completion takes this lock too. Starting here also leaves no
-            # ghost entry if the interpreter cannot start another thread.
-            reader.start()
-            self._running[session.id] = session
+        try:
+            with self._lock:
+                self._prune_if_needed()
+                # Completion takes this lock too. Starting here also leaves no
+                # ghost entry if the interpreter cannot start another thread.
+                reader.start()
+                self._running[session.id] = session
+        except Exception:
+            self._release_vouch(session)  # never tracked: no completion will release it
+            raise
         self._write_checkpoint()
 
     def _spawn_local_pty(self, session: ProcessSession, safe_command: str, env_vars: dict) -> ProcessSession:

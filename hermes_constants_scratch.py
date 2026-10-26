@@ -298,16 +298,15 @@ def reap_processes_rooted_in(scratch_root: Path, doomed: list[Path], audit: logg
     # The owning home comes from the scratch path as configured, not its resolved target:
     # a cache/scratch symlinked onto another disk still belongs to <home>.
     home = Path(scratch_root).absolute().parent.parent
-    if victims:
-        victims = _keep_owned(doomed, victims, _owners(home), audit)
-    # Re-filter against the shrunk *doomed*: an orphan in a kept entry is spared with it (the
-    # reap only exists to clear the way for rmtree); one whose cwd is already gone still goes.
-    victims = [(proc, cwd_path) for proc, cwd_path in victims
-               if not os.path.exists(cwd_path) or any(_under(cwd_path, os.path.realpath(str(e))) for e in doomed)]
-    if victims:
-        # Second read right before signalling: a process that took its lock since the first
-        # read (a Hermes command starting inside the entry) is kept, not killed.
-        victims = _keep_owned(doomed, victims, _owners(home), audit)
+    # Two reads, the second right before signalling: a process that took its lock since the first
+    # (a Hermes command starting inside the entry) is kept, not killed. After each, re-filter
+    # against the shrunk *doomed*: an orphan in a kept entry is spared with it (the reap only
+    # exists to clear the way for rmtree); one whose cwd is already gone still goes.
+    for _read in range(2):
+        if victims:
+            victims = _keep_owned(doomed, victims, _owners(home), audit)
+        victims = [(proc, cwd_path) for proc, cwd_path in victims
+                   if not os.path.exists(cwd_path) or any(_under(cwd_path, os.path.realpath(str(e))) for e in doomed)]
     if not victims:
         return 0
     for proc, cwd_path in victims:
