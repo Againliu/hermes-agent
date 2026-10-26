@@ -113,7 +113,17 @@ def _gateway_runner_turns() -> list[str]:
 
     runner_ref = getattr(sys.modules.get("gateway.run"), "_gateway_runner_ref", None)
     runner = runner_ref() if callable(runner_ref) else None
-    return [str(key) for key in list(getattr(runner, "_running_agents", None) or ())]
+    if runner is None:
+        return []
+    from gateway.session_authorities import all_authorities
+    from gateway.session_runtime_workers import executing_sessions
+
+    running = getattr(runner, "_running_agents", None) or {}
+    # A claimed admission (messaging, API, Desktop) is executing from its claim stamp on, before
+    # (or without) an entry in the agent map: session_claim_fence releases the update fence there.
+    claimed = [sid for authority in all_authorities(runner)
+               for sid, live, _ in executing_sessions(authority) if live.route not in running]
+    return [str(key) for key in [*list(running), *claimed]]
 
 
 def busy_ledger() -> Optional[str]:
