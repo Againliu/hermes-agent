@@ -49,9 +49,9 @@ repository actually runs, not just the generic list below.
 | --- | --- | --- | --- |
 | format | `cargo fmt --check` | formatting | behaviour |
 | lint | `cargo clippy --all-targets -- -D warnings` | lint-clean at the crate's level | runtime behaviour |
-| test | `cargo test` | the existing tests pass | paths without tests |
+| test | `cargo test` | the existing tests and doc tests pass | paths without tests |
 | release | `cargo test --release` | behaviour under optimisation | debug assertions (they stop running) |
-| docs | `cargo doc --no-deps` | doc links resolve, doc tests compile | API quality |
+| docs | `RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --no-deps` | intra-doc links resolve | doc tests (`cargo test` runs them), API quality |
 | Miri (escalated) | `cargo +nightly miri test` | no Miri-detectable UB on executed paths | paths no test reaches |
 | ASan (escalated) | `RUSTFLAGS=-Zsanitizer=address cargo +nightly test --target <host-triple>` | no detected memory fault in that run | other inputs/interleavings |
 | loom (escalated) | `RUSTFLAGS="--cfg loom" cargo test --release <loom tests>` | modelled interleavings are sound | interleavings outside the model |
