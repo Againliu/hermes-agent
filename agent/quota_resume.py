@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Optional
 
@@ -87,6 +87,9 @@ class QuotaResumePlan:
     source: str = ""
     provider: str = ""
     reason: str = ""
+    # ``model``: the deadline came from a window capping only the failing model's family, so it
+    # must not hold the provider's other models (``agent.usage_hold.record_from_plan``).
+    scope: str = ""
 
     @property
     def seconds_until_resume(self) -> Optional[float]:
@@ -103,6 +106,8 @@ class QuotaResumePlan:
             out["provider"] = self.provider
         if self.reason:
             out["reason"] = self.reason
+        if self.scope:
+            out["scope"] = self.scope
         return out
 
 
@@ -165,45 +170,65 @@ def _reset_from_error_context(error_context: Any, *, now: float) -> Optional[flo
 
 
 def _reset_from_credential_pool(pool: Any, *, now: float) -> Optional[float]:
-    """When the pool says some credential re-enters rotation.
+    """Earliest provider-REPORTED reset among the pool's exhausted credentials.
 
-    ``next_available_at`` returns None while any credential can serve right now,
-    so this never parks a session that could have rotated its way out.
+    ``next_available_at`` is the pool's retry schedule, which falls back to a locally chosen
+    cooldown (e.g. one hour) when a credential carried no reset; that is a guess, not a
+    deadline. Only ``last_error_reset_at`` stamps count, and only when every exhausted entry has
+    one: an unstamped entry could re-enter earlier at a time nobody reported. None while any
+    credential can serve right now, so this never parks a session that could rotate out.
     """
-    if pool is None:
-        return None
-    getter = getattr(pool, "next_available_at", None)
-    if not callable(getter):
+    if pool is None or not callable(getattr(pool, "entries", None)):
         return None
     try:
-        return coerce_reset_timestamp(getter(), now=now)
+        if pool.has_available():
+            return None
+        exhausted = [e for e in pool.entries() if getattr(e, "last_status", "") == "exhausted"]
     except Exception:
         logger.debug("quota-resume: credential pool reset lookup failed", exc_info=True)
         return None
+    stamps = [coerce_reset_timestamp(getattr(e, "last_error_reset_at", None), now=now) for e in exhausted]
+    if not stamps or any(s is None for s in stamps):
+        return None
+    return min(s for s in stamps if s is not None)
 
 
-def _reset_from_usage_api(provider: str, *, now: float) -> Optional[float]:
-    """Earliest reset among the provider's *exhausted* windows.
+def _window_blocks_model(window: Any, model: str) -> bool:
+    """An account-scope window blocks every request; a model-scope one (``seven_day_opus``) only
+    requests for that family, matched by the family word in its label."""
+    if getattr(window, "scope", "account") != "model":
+        return True
+    family = (str(getattr(window, "label", "") or "").lower().split() or [""])[0]
+    return bool(family) and family in model.lower()
 
-    Authoritative where it exists: it reads the account's real utilization
-    instead of trusting how the error happened to be labelled. Only windows at
-    or above the exhaustion threshold count — a fresh window's reset time is a
-    rollover, not a wall.
+
+def _reset_from_usage_api(
+    provider: str, *, now: float, model: str = "", base_url: Any = None, api_key: Any = None,
+) -> tuple[Optional[float], str]:
+    """``(reset, scope)``: when the windows blocking this request reopen.
+
+    Authoritative where it exists: it reads the account's real utilization instead of trusting
+    how the error happened to be labelled. Queried with the failing route's own credential and
+    endpoint, never the ambient login, so another account's reset can't set this deadline.
+    Only exhausted windows that block *this model* count, and the request stays blocked until
+    the LAST of them reopens (a session window resetting under a spent weekly window is still a
+    wall). ``scope`` is ``model`` when only model-family windows block.
     """
     try:
         from agent.account_usage import fetch_account_usage
 
-        snapshot = fetch_account_usage(provider)
+        snapshot = fetch_account_usage(
+            provider, base_url=base_url or None, api_key=api_key or None, read_only=True)
     except Exception:
         logger.debug("quota-resume: usage API lookup failed for %s", provider, exc_info=True)
-        return None
+        return None, ""
     if snapshot is None or not getattr(snapshot, "available", False):
-        return None
-    candidates: list[float] = []
+        return None, ""
+    candidates: list[tuple[float, str]] = []
     for window in getattr(snapshot, "windows", ()) or ():
         used = getattr(window, "used_percent", None)
         reset_at = getattr(window, "reset_at", None)
-        if used is None or reset_at is None:
+        if used is None or reset_at is None or not _window_blocks_model(window, model):
             continue
         try:
             if float(used) < _USAGE_API_EXHAUSTED_PERCENT:
@@ -214,8 +239,11 @@ def _reset_from_usage_api(provider: str, *, now: float) -> Optional[float]:
             reset_at.timestamp() if isinstance(reset_at, datetime) else reset_at, now=now
         )
         if stamp is not None and stamp > now:
-            candidates.append(stamp)
-    return min(candidates) if candidates else None
+            candidates.append((stamp, getattr(window, "scope", "account")))
+    if not candidates:
+        return None, ""
+    scope = "model" if all(s == "model" for _, s in candidates) else ""
+    return max(stamp for stamp, _ in candidates), scope
 
 
 def plan_quota_resume(
@@ -228,6 +256,9 @@ def plan_quota_resume(
     grace_seconds: float = DEFAULT_GRACE_SECONDS,
     max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS,
     allow_usage_api: bool = True,
+    model: str = "",
+    base_url: Any = None,
+    api_key: Any = None,
 ) -> QuotaResumePlan:
     """Decide whether a failed turn can be resumed when its quota window reopens.
 
@@ -245,7 +276,7 @@ def plan_quota_resume(
 
     now = time.time() if now is None else now
     resume_at: Optional[float] = None
-    source = ""
+    source = scope = ""
     for candidate_source, resolver in (
         (SOURCE_PROVIDER_ERROR, lambda: _reset_from_error_context(error_context, now=now)),
         (SOURCE_CREDENTIAL_POOL, lambda: _reset_from_credential_pool(credential_pool, now=now)),
@@ -259,7 +290,8 @@ def plan_quota_resume(
             source = candidate_source
             break
     if resume_at is None and allow_usage_api and provider_name in USAGE_API_PROVIDERS:
-        resume_at = _reset_from_usage_api(provider_name, now=now)
+        resume_at, scope = _reset_from_usage_api(
+            provider_name, now=now, model=str(model or ""), base_url=base_url, api_key=api_key)
         if resume_at is not None:
             source = SOURCE_USAGE_API
 
@@ -270,16 +302,16 @@ def plan_quota_resume(
     # check (a stale pool entry, or a race with the reset). Report it, but don't
     # claim an "auto-resume" the caller would fire instantly — the user's own
     # Retry is the honest affordance there.
+    known = QuotaResumePlan(
+        resume_at=resume_at, source=source, provider=provider_name, reason=reason, scope=scope)
     if resume_at <= now:
-        return QuotaResumePlan(resume_at=resume_at, source=source, provider=provider_name, reason=reason)
+        return known
 
     scheduled_at = resume_at + max(0.0, grace_seconds)
     if scheduled_at - now > max(0.0, max_wait_seconds):
         # Too far out to sit on, but still worth telling the user about.
-        return QuotaResumePlan(resume_at=resume_at, source=source, provider=provider_name, reason=reason)
-    return QuotaResumePlan(
-        eligible=True, resume_at=scheduled_at, source=source, provider=provider_name, reason=reason
-    )
+        return known
+    return replace(known, eligible=True, resume_at=scheduled_at)
 
 
 __all__ = [
@@ -312,6 +344,9 @@ def plan_for_failed_turn(
             error_context=error_context,
             provider=provider,
             credential_pool=getattr(agent, "_credential_pool", None),
+            model=str(getattr(agent, "model", "") or ""),
+            base_url=base_url,
+            api_key=getattr(agent, "api_key", None),
         )
     except Exception:
         logger.debug("quota-resume planning failed", exc_info=True)

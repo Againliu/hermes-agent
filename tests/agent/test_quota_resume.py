@@ -28,14 +28,28 @@ NOW = 1_800_000_000.0
 HOUR = 3600.0
 
 
-class _Pool:
-    def __init__(self, value=None, raises: bool = False):
-        self._value, self._raises = value, raises
+@dataclass(frozen=True)
+class _Entry:
+    last_status: str
+    last_error_reset_at: Optional[object] = None
 
-    def next_available_at(self):
+
+class _Pool:
+    """CredentialPool's public read surface: ``value`` is the one exhausted entry's REPORTED
+    reset; None models a pool with a credential that can serve now."""
+
+    def __init__(self, value=None, raises: bool = False, entries: Optional[list] = None):
+        self._value, self._raises = value, raises
+        self._entries = entries if entries is not None else (
+            [] if value is None else [_Entry("exhausted", value)])
+
+    def has_available(self):
         if self._raises:
             raise RuntimeError("pool exploded")
-        return self._value
+        return not self._entries
+
+    def entries(self):
+        return list(self._entries)
 
 
 @dataclass(frozen=True)
@@ -43,6 +57,7 @@ class _Window:
     label: str
     used_percent: Optional[float]
     reset_at: Optional[object]
+    scope: str = "account"
 
 
 @dataclass(frozen=True)
@@ -259,16 +274,17 @@ def test_usage_api_ignores_windows_with_headroom(monkeypatch):
     assert (plan.eligible, plan.resume_at) == (True, NOW + 6 * HOUR)
 
 
-def test_usage_api_picks_earliest_exhausted_window(monkeypatch):
+def test_usage_api_waits_for_the_last_blocking_window(monkeypatch):
+    """Both account windows spent: the request stays blocked until BOTH reopen."""
     _install_usage_api(monkeypatch, _Snapshot(windows=(
-        _Window("Opus week", 100.0, NOW + 10 * HOUR),
+        _Window("Current week", 100.0, NOW + 10 * HOUR),
         _Window("Current session", 99.5, NOW + 2 * HOUR),
     )))
     plan = plan_quota_resume(
         failure_reason="rate_limit", error_context={}, provider="anthropic",
         now=NOW, grace_seconds=0.0,
     )
-    assert plan.resume_at == NOW + 2 * HOUR
+    assert plan.resume_at == NOW + 10 * HOUR
 
 
 def test_usage_api_accepts_datetime_reset(monkeypatch):
