@@ -328,6 +328,7 @@ import { applyLaunchProfileOverride } from './launch-profile'
 import { fetchLinkTitle, resolveFaviconCached } from './link-metadata'
 import { CHROMIUM_LOG_FILENAME, enableLinuxCrashDiagnostics, linuxCrashDiagnostics } from './linux-crash-diagnostics'
 import {
+  createLinuxGpuBootWindow,
   decideLinuxGpuLaunch,
   disableGpuSwitchNeededForReason,
   LINUX_GPU_SILENT_RETRY_GRACE_S,
@@ -907,7 +908,11 @@ const NVIDIA_PROC_VERSION = (() => {
 const NVIDIA_DRIVER_MAJOR = parseNvidiaDriverMajor(NVIDIA_PROC_VERSION)
 const NVIDIA_DRIVER_VERSION = parseNvidiaDriverVersion(NVIDIA_PROC_VERSION)
 
+// Every Linux launch's boot clock, NVIDIA or not; set at the first window reveal.
+const linuxGpuBootWindow = createLinuxGpuBootWindow()
+
 const nvidiaEglRecovery = createNvidiaEglRecovery({
+  bootWindow: linuxGpuBootWindow,
   driverMajor: NVIDIA_DRIVER_MAJOR,
   driverVersion: NVIDIA_DRIVER_VERSION,
   userData: app.getPath('userData'),
@@ -1135,7 +1140,7 @@ if (IS_WINDOWS || process.platform === 'linux') {
       alreadySoftware,
       sandboxRelaunchAttempted: windowsNoSandboxRelaunchAttempted,
       softwareRelaunchAttempted: linuxGpuRelaunchAttempted,
-      runtimeDeath: nvidiaEglRecovery.afterBootWindow()
+      runtimeDeath: linuxGpuBootWindow.afterBootWindow()
     })
 
     // One event must not schedule both ANGLE and disable-gpu relaunches.
@@ -13690,6 +13695,7 @@ function createWindow() {
       // window is on screen (a STARTING gnome-shell app must not see its entry change).
       notifyLauncherWindowRevealed()
 
+      linuxGpuBootWindow.revealed()
       nvidiaEglRecovery.healthy()
 
       // #38216/#121954: clear the mid-boot marker only after a window is
