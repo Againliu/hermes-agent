@@ -24,6 +24,7 @@ import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connec
 import { reconnectGateway } from '@/store/gateway-reconnect'
 import { dismissNotification, notify } from '@/store/notifications'
 import { $connection } from '@/store/session'
+import { BUSY_STAGE_STALL_MS, stalledUpdateMessage, watchUpdateStageDeadlines } from '@/store/update-stage-deadlines'
 import type { BackendUpdateCheckResponse, UpdateReceiptSummary } from '@/types/hermes'
 
 /** Keyed per retired-channel revision: a new retirement (or a revision bump on
@@ -822,12 +823,50 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
 }
 
 const BACKEND_ACTION_POLL_MS = 1500
-const BACKEND_ACTION_STALL_MS = 6 * 60 * 1000
 // A healthy source update can legitimately exceed six minutes while draining
-// supervised gateways and completing its dependency/build/restart tail.
-// Keep the hard ceiling bounded, but only apply the short deadline to inactivity.
+// supervised gateways and completing its dependency/build/restart tail. The
+// per-stage table bounds inactivity (#137848); only the ceiling is wall time.
+const BACKEND_ACTION_STALL_MS = BUSY_STAGE_STALL_MS.pull
 const BACKEND_ACTION_MAX_MS = 45 * 60 * 1000
-const BACKEND_RETURN_MAX_MS = 4 * 60 * 1000
+const BACKEND_RETURN_MAX_MS = BUSY_STAGE_STALL_MS.restart
+
+/** Changes whenever the remote update shows life: a new log line, or its
+ *  durable receipt refreshed at a stage boundary (or finished). */
+function backendActionProgress(status: Awaited<ReturnType<typeof getActionStatus>>): string {
+  const receipt = status.receipt
+
+  return [
+    status.lines.length,
+    status.lines.at(-1) ?? '',
+    receipt?.outcome ?? '',
+    receipt?.stage ?? '',
+    receipt?.stage_at ?? '',
+    receipt?.finished_at ?? ''
+  ].join('\0')
+}
+
+/** The clock never decides alone: when a deadline expires, the receipt and
+ *  then the backend's version give the verdict before anything says failed. */
+async function backendVerdictAtDeadline(
+  last: Awaited<ReturnType<typeof getActionStatus>> | null,
+  applyStartedAtMs: number,
+  actionId: string | undefined,
+  target: { sha: string | undefined; previousVersion: string | undefined }
+): Promise<DesktopUpdateApplyResult | null> {
+  if (last && receiptProvesOutcome(last, applyStartedAtMs, actionId)) {
+    return finishBackendApply(last.receipt!.outcome === 'success', last.receipt, actionId)
+  }
+
+  try {
+    if (legacyBackendReachedTarget(await checkHermesUpdate(true), target.sha, target.previousVersion)) {
+      return finishBackendApply(true, last?.receipt, actionId)
+    }
+  } catch {
+    // Unreachable at the deadline: nothing proves the update landed.
+  }
+
+  return null
+}
 
 // C3: a committed update succeeds even when post-commit steps are still owed,
 // and a partial one (committed, but the user must act) still owes them. Name
@@ -1037,12 +1076,7 @@ async function runBackendUpdate(): Promise<DesktopUpdateApplyResult> {
         last = await getActionStatus(started.name, 2000)
         ingestBackendActionStatus(last)
 
-        const progress = [
-          last.lines.length,
-          last.lines.at(-1) ?? '',
-          last.receipt?.outcome ?? '',
-          last.receipt?.finished_at ?? ''
-        ].join('\0')
+        const progress = backendActionProgress(last)
 
         if (reconnecting || progress !== lastProgress) {
           lastProgress = progress
@@ -1106,10 +1140,26 @@ async function runBackendUpdate(): Promise<DesktopUpdateApplyResult> {
       }
     }
 
-    return failBackendApply(
-      { shown: translateNow('updates.applyStatus.failed'), result: 'Backend update failed.' },
-      last,
-      started.action_id
+    if (last?.exit_code !== null && last?.exit_code !== undefined) {
+      return failBackendApply(
+        { shown: translateNow('updates.applyStatus.failed'), result: 'Backend update failed.' },
+        last,
+        started.action_id
+      )
+    }
+
+    const verdict = await backendVerdictAtDeadline(last, applyStartedAtMs, started.action_id, {
+      sha: requestedTargetSha,
+      previousVersion
+    })
+
+    return (
+      verdict ??
+      failBackendApply(
+        { shown: stalledUpdateMessage(), result: 'Backend update stopped reporting progress.' },
+        last,
+        started.action_id
+      )
     )
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -1370,6 +1420,17 @@ export function startUpdatePoller(): void {
   runPassiveChecks()
   void refreshDesktopVersion()
   bridge.onProgress(ingestProgress)
+  // No client update stage spins forever: one without progress past its
+  // table deadline lands on a closeable error. The hand-off keeps running.
+  watchUpdateStageDeadlines($updateApply, (): void => {
+    $updateApply.set({
+      ...$updateApply.get(),
+      applying: false,
+      stage: 'error',
+      error: 'stalled',
+      message: stalledUpdateMessage()
+    })
+  })
 
   // The poller starts at mount, before the gateway connects — so the first
   // backend check above sees mode≠remote and no-ops. Re-check once the
