@@ -123,13 +123,30 @@ export function isNeutralFailure(toolName: string | undefined, result: unknown):
   return !String(error).includes('ROLLBACK FAILED')
 }
 
+/** A call an approval gate or command guard refused, so it never ran: a
+ *  denied, timed-out or undeliverable approval, a hardline/deny-rule block.
+ *  terminal marks these `status: "blocked"`, execute_code an error opening
+ *  with `BLOCKED`; a human decision also carries `user_summary`
+ *  (tools/approval.py::_denied). */
+export function toolCallBlocked(part: { result?: unknown }): boolean {
+  const result = parseMaybeObject(part.result)
+
+  return (
+    result.status === 'blocked' ||
+    (typeof result.user_summary === 'string' && Boolean(result.user_summary.trim())) ||
+    (typeof result.error === 'string' && /^BLOCKED\b/.test(result.error.trim()))
+  )
+}
+
 /** A call that reported failure, from the part's flag or its result body.
- *  Explicit success beats stale envelope errors, as in individual rows. */
+ *  Explicit success beats stale envelope errors, as in individual rows. A
+ *  blocked call did not fail: it never ran (`toolCallBlocked`). */
 export function toolCallFailed(part: { isError?: boolean; result?: unknown; toolName?: string }): boolean {
   const result = parseMaybeObject(part.result)
 
   return (
     !isNeutralFailure(part.toolName, part.result) &&
+    !toolCallBlocked(part) &&
     result.success !== true &&
     result.ok !== true &&
     Boolean(part.isError || result.success === false || result.ok === false || extractToolErrorMessage(part.result))
