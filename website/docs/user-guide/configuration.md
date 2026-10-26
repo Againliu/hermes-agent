@@ -2464,22 +2464,25 @@ Signal is listed as a valid platform key because the setting can be saved per pl
 
 ## Pricing Overrides
 
-Hermes derives per-turn dollar costs (the `display.show_cost` status bar, `hermes insights`, the model cost guard) from token counts × per-model pricing. Pricing is auto-discovered from provider APIs and a bundled snapshot, but some providers (e.g. Fireworks AI) don't publish pricing through their API, and the bundled snapshot can lag a vendor price change. The root-level `pricing_overrides:` list lets you declare rates yourself — user entries win over every auto-discovery source:
+Hermes derives per-turn dollar costs (the `display.show_cost` status bar, `/usage`, `hermes insights`) from token counts × per-model pricing. Pricing comes from a bundled snapshot of vendor price pages and from provider model APIs. A custom gateway, relay or self-hosted endpoint usually publishes neither, so its turns report the cost as unknown. The root-level `pricing_overrides:` list declares rates yourself; a matching entry wins over every other source, so it also corrects a bundled rate that went stale:
 
 ```yaml
 pricing_overrides:
-  - provider: custom:fireworks   # provider string Hermes resolves to; `custom:<name>` and the bare name both match
-    model: kimi-k2p6             # full model id or its basename — either form matches
+  - provider: custom:fireworks   # optional; omit it to match the model on every provider
+    model: kimi-k2p6             # full model id or its last path segment
     input_per_million: 0.95      # required, USD per 1M input tokens
     output_per_million: 4.00     # required, USD per 1M output tokens
     cache_read_per_million: 0.16 # optional
-    cache_write_per_million: 0   # optional
-    request_cost: 0              # optional — flat USD per request
+    cache_write_per_million: 0   # optional, 5-minute (default) cache writes
+    cache_write_1h_per_million: 0  # optional, 1-hour cache writes; defaults to cache_write_per_million
+    request_cost: 0              # optional, flat USD per request
     source_url: https://docs.fireworks.ai/serverless/pricing  # optional, free-form
     pricing_version: fireworks-2026-05                        # optional, free-form
 ```
 
-Entries missing either required rate are skipped (a malformed item never masks a later valid one or breaks cost computation). Costs resolved this way are labeled `user_override` in cost surfaces.
+`provider` is the provider Hermes runs the model on: `custom` for a bare `model.base_url` endpoint, `custom:<name>` for a named custom provider (the bare `<name>` matches too). Entries missing either required rate are skipped, so a malformed item never masks a later valid one. Costs resolved this way carry the source `user_override`. Subscription routes (for example the Codex subscription) stay `included` and ignore overrides.
+
+Anthropic reports how many cache-write tokens used the 1-hour TTL (`prompt_caching.cache_ttl`). Hermes bills those at the 1-hour rate (2x base input) and the rest at the 5-minute rate (1.25x), for the bundled Claude rates and for overrides that set `cache_write_1h_per_million`.
 
 ## Privacy
 

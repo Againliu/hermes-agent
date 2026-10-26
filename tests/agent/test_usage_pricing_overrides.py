@@ -1,4 +1,4 @@
-"""Behaviour contracts: user ``pricing_overrides``."""
+"""Behaviour contracts: user ``pricing_overrides`` and Anthropic 1-hour cache-write pricing."""
 
 from decimal import Decimal
 
@@ -28,13 +28,33 @@ def _write_config(data: dict) -> None:
 def test_pricing_overrides_in_config_price_the_route(entry, model, provider, base_url):
     _write_config({"pricing_overrides": [
         {**entry, "output_per_million": 9},  # missing a required rate: skipped, never masks the next
-        {**entry, "input_per_million": 1, "output_per_million": 3, "cache_write_per_million": 4},
+        {**entry, "input_per_million": 1, "output_per_million": 3, "cache_write_1h_per_million": 4},
     ]})
     usage = normalize_usage({
         "input_tokens": 1_000_000, "output_tokens": 1_000_000, "cache_creation_input_tokens": 1_000_000,
+        "cache_creation": {"ephemeral_1h_input_tokens": 1_000_000},
     }, provider="anthropic", api_mode="anthropic_messages")
 
     result = estimate_usage_cost(model, usage, provider=provider, base_url=base_url)
 
     assert (result.source, result.status, result.amount_usd) == ("user_override", "estimated", Decimal(8))
 
+
+@pytest.mark.parametrize("model, five_min_rate, one_hour_rate", [
+    ("claude-opus-5", "6.25", "10"),
+    ("claude-opus-4.8", "6.25", "10"),
+    ("claude-sonnet-5", "2.50", "4"),
+    ("claude-sonnet-5-5", "2.50", "4"),
+    ("claude-fable-5.1", "12.50", "20"),
+    ("claude-mythos-5", "12.50", "20"),
+])
+def test_anthropic_1h_cache_writes_bill_at_the_1h_rate(model, five_min_rate, one_hour_rate):
+    # https://platform.claude.com/docs/en/about-claude/pricing: 5m writes 1.25x input, 1h writes 2x.
+    usage = normalize_usage({
+        "input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 3_000_000,
+        "cache_creation": {"ephemeral_5m_input_tokens": 1_000_000, "ephemeral_1h_input_tokens": 2_000_000},
+    }, provider="anthropic")
+
+    result = estimate_usage_cost(model, usage, provider="anthropic")
+
+    assert result.amount_usd == Decimal(five_min_rate) + 2 * Decimal(one_hour_rate)

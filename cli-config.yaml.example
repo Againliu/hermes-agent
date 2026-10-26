@@ -335,9 +335,9 @@ model:
 # win over auto-discovery so you can also use this to fix stale defaults.
 #
 # Match keys:
-#   provider:  the provider string Hermes resolves to. For models served
-#              by a custom_providers entry named "fireworks", it's
-#              "custom:fireworks". Run `hermes config show` to confirm.
+#   provider:  optional. "custom" for a bare model.base_url endpoint,
+#              "custom:<name>" for a named custom provider. Omit it to
+#              match the model on every provider.
 #   model:     match against either the full model id
 #              ("accounts/fireworks/models/kimi-k2p6") OR its basename
 #              ("kimi-k2p6"). Either form works.
@@ -346,7 +346,8 @@ model:
 #   input_per_million        required
 #   output_per_million       required
 #   cache_read_per_million   optional
-#   cache_write_per_million  optional
+#   cache_write_per_million  optional (5-minute cache writes)
+#   cache_write_1h_per_million  optional (1-hour cache writes)
 #   request_cost             optional — flat USD per request
 #   source_url               optional — free-form, helps audits
 #   pricing_version          optional — free-form label
