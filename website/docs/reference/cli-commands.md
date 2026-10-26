@@ -1084,7 +1084,7 @@ Upload a debug report (system info + recent logs) to a paste service and get a s
 | Option | Description |
 |--------|-------------|
 | `--lines <N>` | Number of log lines to include per log file (default: 200). |
-| `--expire <days>` | Retention in days for dpaste.com fallback pastes (default: 1). paste.rs pastes are deleted after 6 hours. |
+| `--expire <days>` | Retention in days for dpaste.com fallback pastes (default: 1); those cannot be deleted. paste.rs pastes are queued for deletion after 6 hours, best effort: a running gateway's hourly sweep or the next `hermes debug` command carries it out. |
 | `--nous` | Upload to Nous-internal diagnostics storage instead of a public paste service. Use this when Nous support asks for a private diagnostic bundle. |
 | `--local` | Print the report locally instead of uploading. |
 | `--no-redact` | Disable upload-time secret redaction. By default, uploads are redacted. |
