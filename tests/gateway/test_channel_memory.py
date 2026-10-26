@@ -11,6 +11,9 @@ class _Runner:
     def __init__(self):
         self.checked = []
 
+    def _under_authorization_profile(self, source, check):
+        return check()
+
     def _principal_authorized(self, source, *, allow_adapter_delegation):
         self.checked.append((source.chat_type, source.chat_id))
         return source.chat_type == "dm" and source.user_id == "owner"

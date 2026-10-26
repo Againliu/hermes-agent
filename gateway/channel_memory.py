@@ -9,10 +9,10 @@ land in the owner's files and then load in the owner's private DMs.
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 from typing import Any, Optional
 
+from gateway.session_identity import replace_source
 from tools.memory_tool_channel import (
     CHANNEL_MEMORY, ChannelMemoryBinding, channel_char_limit, channel_memory_config, safe_scope)
 from utils import is_truthy_value
@@ -35,14 +35,16 @@ def _scope_key(source: Any, mode: str) -> Optional[str]:
 
 
 def _sender_can_dm(runner: Any, source: Any) -> bool:
-    """Would the gateway admit this sender in a DM? Fails closed: an authorization error must
-    not reopen the owner's files to a group member."""
+    """Would the gateway admit this sender in a DM? Asked of the bot that received the group
+    message (a shared bot may route the group into a profile with no allowlist of its own).
+    Fails closed: an authorization error must not reopen the owner's files to a group member."""
     if not source.user_id:
         return False
-    dm_source = dataclasses.replace(source, chat_type="dm", chat_id=str(source.user_id), thread_id=None,
-                                    parent_chat_id=None, chat_name=None)
+    dm_source = replace_source(source, chat_type="dm", chat_id=str(source.user_id), thread_id=None,
+                               parent_chat_id=None, chat_name=None)
     try:
-        return bool(runner._principal_authorized(dm_source, allow_adapter_delegation=True))
+        return bool(runner._under_authorization_profile(
+            dm_source, lambda: runner._principal_authorized(dm_source, allow_adapter_delegation=True)))
     except Exception:
         logger.warning("channel memory: DM authorization check failed; treating sender as a group member",
                        exc_info=True)
