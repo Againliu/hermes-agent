@@ -52,6 +52,7 @@ HERMES_HOME = get_hermes_home()
 TOKEN_PATH = HERMES_HOME / "google_token.json"
 CLIENT_SECRET_PATH = HERMES_HOME / "google_client_secret.json"
 PENDING_AUTH_PATH = HERMES_HOME / "google_oauth_pending.json"
+LAST_AUTH_URL_PATH = HERMES_HOME / "google_oauth_last_url.txt"
 
 # Scope groups per service. Requesting only what the user needs keeps the
 # consent screen honest and makes --check/--check-live meaningful: a token
@@ -428,14 +429,8 @@ def _extract_code_and_state(code_or_url: str) -> tuple[str, str | None]:
     return params["code"][0], state
 
 
-def get_auth_url(services: str | None = None):
-    """Print the OAuth authorization URL. User visits this in a browser."""
-    if not CLIENT_SECRET_PATH.exists():
-        print("ERROR: No client secret stored. Run --client-secret first.")
-        sys.exit(1)
-
-    resolved = _resolve_services(services)
-    _ensure_deps()
+def _start_auth_session(resolved: list[str]) -> str:
+    """Open a PKCE session for these services; return its authorization URL."""
     from google_auth_oauthlib.flow import Flow
 
     flow = Flow.from_client_secrets_file(
@@ -449,11 +444,28 @@ def get_auth_url(services: str | None = None):
         prompt="consent",
     )
     _save_pending_auth(state=state, code_verifier=flow.code_verifier, services=resolved)
-    # Print just the URL so the agent can extract it cleanly
-    print(auth_url)
+    # A copy on disk survives a chat surface that mangles long URLs.
+    LAST_AUTH_URL_PATH.write_text(auth_url + "\n", encoding="utf-8")
+    return auth_url
 
 
-def exchange_auth_code(code: str):
+def get_auth_url(services: str | None = None, output_format: str = "text"):
+    """Print the OAuth authorization URL. User visits this in a browser."""
+    if not CLIENT_SECRET_PATH.exists():
+        print("ERROR: No client secret stored. Run --client-secret first.")
+        sys.exit(1)
+
+    resolved = _resolve_services(services)
+    _ensure_deps()
+    auth_url = _start_auth_session(resolved)
+    if output_format == "json":
+        print(json.dumps({"auth_url": auth_url, "services": resolved}))
+    else:
+        # Print just the URL so the agent can extract it cleanly
+        print(auth_url)
+
+
+def exchange_auth_code(code: str, output_format: str = "text"):
     """Exchange the authorization code for a token and save it."""
     if not CLIENT_SECRET_PATH.exists():
         print("ERROR: No client secret stored. Run --client-secret first.")
@@ -493,8 +505,23 @@ def exchange_auth_code(code: str):
         os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
         flow.fetch_token(code=code)
     except Exception as e:
-        print(f"ERROR: Token exchange failed: {e}")
-        print("The code may have expired. Run --auth-url to get a fresh URL.")
+        # An expired or reused code is the common case: hand back a fresh URL
+        # for the same services so the agent can retry in one step.
+        fresh_url = _start_auth_session(
+            [s for s in (pending_auth.get("services") or ALL_SERVICES) if s in SCOPE_GROUPS]
+            or list(ALL_SERVICES)
+        )
+        if output_format == "json":
+            print(json.dumps({
+                "status": "error",
+                "error": "token_exchange_failed",
+                "message": str(e),
+                "fresh_auth_url": fresh_url,
+            }))
+        else:
+            print(f"ERROR: Token exchange failed: {e}")
+            print("The code may have expired or been used already. Send the user this fresh URL:")
+            print(fresh_url)
         sys.exit(1)
 
     creds = flow.credentials
@@ -519,6 +546,13 @@ def exchange_auth_code(code: str):
 
     TOKEN_PATH.write_text(json.dumps(token_payload, indent=2), encoding="utf-8")
     PENDING_AUTH_PATH.unlink(missing_ok=True)
+    if output_format == "json":
+        print(json.dumps({
+            "status": "ok",
+            "token_path": str(TOKEN_PATH),
+            "services": _granted_services(token_payload),
+        }))
+        return
     print(f"OK: Authenticated. Token saved to {TOKEN_PATH}")
     print(f"Profile-scoped token location: {display_hermes_home()}/google_token.json")
 
@@ -581,7 +615,7 @@ def main():
         "--format",
         choices=["text", "json"],
         default="text",
-        help="Output format for --check, --check-live and --auth-url (default: text)",
+        help="Output format for --check, --check-live, --auth-url and --auth-code (default: text)",
     )
     args = parser.parse_args()
 
@@ -614,9 +648,9 @@ def main():
     elif args.client_secret:
         store_client_secret(args.client_secret)
     elif args.auth_url:
-        get_auth_url(args.services)
+        get_auth_url(args.services, args.format)
     elif args.auth_code:
-        exchange_auth_code(args.auth_code)
+        exchange_auth_code(args.auth_code, args.format)
     elif args.revoke:
         revoke()
     elif args.install_deps:
