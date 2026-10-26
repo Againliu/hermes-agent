@@ -265,20 +265,18 @@ def save_detected_server(server: DetectedServer) -> dict | None:
     """Write ``providers.<key>`` for a picked server (no key: local servers take none) and return
     the entry. An entry already under that key is left as the user wrote it: returned when it points
     at this server, ``None`` when it points elsewhere (that key is not this server's to claim)."""
-    from hermes_cli.config import load_config, save_config
+    from hermes_cli.config import _CONFIG_LOCK, read_user_config_raw, save_config
 
-    cfg = load_config()
-    providers = cfg.get("providers")
-    if not isinstance(providers, dict):
-        providers = {}
-    existing = providers.get(server.provider_key)
-    if existing is not None:
-        ours = _norm_url(server.base_url) in configured_base_urls({"providers": {server.provider_key: existing}})
-        return existing if ours else None
     entry = {"name": server.display_name, "base_url": server.base_url}
-    providers[server.provider_key] = entry
-    cfg["providers"] = providers
-    save_config(cfg)
+    # Check and write under one lock, merging only this entry into the file's latest content: two
+    # chats picking at once (or a settings edit) never lose each other's write to an older copy.
+    with _CONFIG_LOCK:
+        providers = read_user_config_raw().get("providers")
+        existing = providers.get(server.provider_key) if isinstance(providers, dict) else None
+        if existing is not None:
+            ours = _norm_url(server.base_url) in configured_base_urls({"providers": {server.provider_key: existing}})
+            return existing if ours else None
+        save_config({"providers": {server.provider_key: entry}}, merge_existing=True)
     return entry
 
 
