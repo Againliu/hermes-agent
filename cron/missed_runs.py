@@ -50,10 +50,14 @@ def count_missed_slots(schedule: dict[str, Any], first: str, now: datetime) -> i
     return count
 
 
-def _book_missed(job: dict[str, Any], count: int, first: Optional[str], detail: str) -> None:
+def _book_missed(
+    job: dict[str, Any], count: int, first: Optional[str], detail: str, *, capped: bool,
+) -> None:
+    """``capped``: counting hit ``_MAX_COUNTED_SLOTS``, so ``count`` is a floor, not exact. Passed
+    separately because the collapse branch books one fewer than it counted."""
     from cron.executions import record_missed_occurrences
 
-    if count >= _MAX_COUNTED_SLOTS:
+    if capped:
         detail = f"{detail}; counting stopped at {_MAX_COUNTED_SLOTS}"
     try:
         record_missed_occurrences(str(job.get("id")), count=count, first_instant=first, detail=detail)
@@ -78,6 +82,7 @@ def fast_forward_missed_recurring(d: Any, grace: int) -> bool:
         return False
     d.scan.persist(d.job["id"], next_run_at=new_next)
     missed = count_missed_slots(d.schedule, d.next_run, d.scan.now)
+    capped = missed >= _MAX_COUNTED_SLOTS
     if (_instant_after(_ensure_aware(datetime.fromisoformat(new_next)), d.scan.now)
             and not job_catches_up(d.job)):
         logger.info(
@@ -86,7 +91,7 @@ def fast_forward_missed_recurring(d: Any, grace: int) -> bool:
             d.label, d.next_run, grace, missed, new_next)
         d.scan.on_saved.append(lambda job=d.job: record_cron_missed(job))
         d.scan.on_saved.append(lambda job=d.job, first=d.next_run: _book_missed(
-            job, missed, first, f"skipped, catch-up off; next run {new_next}"))
+            job, missed, first, f"skipped, catch-up off; next run {new_next}", capped=capped))
         return True
     logger.info(
         "Job '%s' missed its scheduled time (%s, grace=%ds). "
@@ -96,7 +101,7 @@ def fast_forward_missed_recurring(d: Any, grace: int) -> bool:
     d.scan.on_saved.append(record_catch_up_occurrence)
     if missed > 1:
         d.scan.on_saved.append(lambda job=d.job, first=d.next_run: _book_missed(
-            job, missed - 1, first, "collapsed into one catch-up run"))
+            job, missed - 1, first, "collapsed into one catch-up run", capped=capped))
     return False
 
 
@@ -132,5 +137,5 @@ def retire_expired_oneshot(d: Any) -> bool:
         d.scan.retire(d.job["id"])
         d.scan.on_saved.append(lambda job=d.job: record_cron_missed(job))
         d.scan.on_saved.append(lambda job=d.job, first=d.next_run: _book_missed(
-            job, 1, first, "one-shot past its grace window; catch-up off"))
+            job, 1, first, "one-shot past its grace window; catch-up off", capped=False))
     return True
