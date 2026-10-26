@@ -2120,54 +2120,13 @@ def unsatisfied_parents(conn: sqlite3.Connection, task_id: str) -> list[tuple[st
     return [(row["id"], row["status"]) for row in rows]
 
 
-def _normalize_workspace_path(path: Optional[str]) -> Optional[str]:
-    """Comparable form of a task ``workspace_path``: expanded and collapsed so
-    ``~/ws``, ``ws/`` and ``ws`` compare equal. None for empty input — a task
-    with no workspace can never collide."""
-    if not path:
-        return None
-    return os.path.normcase(os.path.normpath(os.path.expanduser(str(path))))
-
-
-def _live_workspace_holder(
-    conn: sqlite3.Connection, task_id: str, workspace_path: Optional[str],
-) -> Optional[str]:
-    """Id of another *live* running task holding the same normalized
-    ``workspace_path`` (None when free). Liveness is the same fence as
-    ``complete_task`` (:func:`_claim_is_live`): a stale claim whose worker is
-    gone protects no run and must not block a new claim."""
-    needle = _normalize_workspace_path(workspace_path)
-    if needle is None:
-        return None
-    rows = conn.execute(
-        "SELECT id, status, claim_lock, worker_pid, worker_started_at, workspace_path "
-        "FROM tasks WHERE id != ? AND status = 'running' AND workspace_path IS NOT NULL",
-        (task_id,),
-    ).fetchall()
-    for row in rows:
-        if _normalize_workspace_path(row["workspace_path"]) != needle:
-            continue
-        if _claim_is_live(row):
-            return row["id"]
-    return None
-
-
 def _claim_and_open_run(
     conn: sqlite3.Connection, task_id: str, source_status: str, lock: str, expires: int, now: int,
     *, event_extra: Optional[dict] = None,
 ) -> Optional[int]:
-    """CAS ``source_status -> running``, open a run row, emit ``claimed``; None
-    when the CAS lost or another live running task holds the same normalized
-    ``workspace_path`` (#128259). Caller holds the txn."""
-    own = conn.execute(
-        "SELECT workspace_path FROM tasks WHERE id = ?", (task_id,),
-    ).fetchone()
-    holder = _live_workspace_holder(conn, task_id, own["workspace_path"] if own else None)
-    if holder is not None:
-        _append_event(
-            conn, task_id, "claim_rejected",
-            {"reason": "workspace_busy", "holder": holder},
-        )
+    """CAS ``source_status -> running``, open a run row, emit ``claimed``; None when the
+    CAS lost or another live task writes in this workspace (#128259). Caller holds the txn."""
+    if refuse_busy_workspace_claim(conn, task_id, now):
         return None
     cur = conn.execute(
         f"""
@@ -4264,10 +4223,8 @@ from hermes_cli.kanban_db_connect import (
     write_txn,
 )
 from hermes_cli.kanban_db_workspace import (
-    _cleanup_workspace,
-    _is_managed_scratch_path,
-    _managed_scratch_path_info,
-    _scratch_workspace,
+    _cleanup_workspace, _is_managed_scratch_path, _managed_scratch_path_info, _scratch_workspace,
+    refuse_busy_workspace_claim,
 )
 from hermes_cli.kanban_db_dispatch import (
     DEFAULT_FAILURE_LIMIT,

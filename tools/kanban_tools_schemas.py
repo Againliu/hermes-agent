@@ -53,7 +53,8 @@ KANBAN_SHOW_SCHEMA = _schema(
         "pre-formatted ``worker_context`` string suitable for inclusion "
         "verbatim in your reasoning; it carries the newest comments' text, "
         "so ``comments`` lists only their id, author and time, and "
-        "``comments_omitted`` counts older ones. Outside a dispatcher-spawned worker "
+        "``comments_omitted`` counts older ones; ``runs`` holds the newest attempts "
+        "with long fields capped and ``runs_omitted`` counts older ones. Outside a dispatcher-spawned worker "
         "there is no default task: a bare call returns a pointer to "
         "``kanban_list`` instead of task state."
     ),

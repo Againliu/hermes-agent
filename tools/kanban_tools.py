@@ -663,7 +663,7 @@ def inject_new_comments_from_env(agent: Any) -> bool:
 
 @_kanban_handler("kanban_show")
 def _handle_show(args: dict, **kw) -> str:
-    """Full task state: row, parents, children, comments, runs, last 50 events.
+    """Full task state: row, parents, children, comments, newest runs, last 50 events.
     Comments: worker_context's bounded set, listed without bodies (worker_context
     renders them); every comment with its full body only on request."""
     include_all_comments = _parse_bool_arg(args, "include_all_comments")
@@ -681,10 +681,11 @@ def _handle_show(args: dict, **kw) -> str:
         })
     with _board(args.get("board")) as (kb, conn):
         task = _existing_task(kb, conn, tid)
+        from hermes_cli.kanban_db_context import recent_comments, recent_runs
+        runs, runs_omitted = recent_runs(conn, tid)
         if include_all_comments:
             comments, omitted, comment_fields = kb.list_comments(conn, tid), 0, _COMMENT_FIELDS
         else:
-            from hermes_cli.kanban_db_context import recent_comments
             comments, omitted = recent_comments(conn, tid)
             comment_fields = _COMMENT_REF_FIELDS
         return json.dumps({
@@ -699,7 +700,9 @@ def _handle_show(args: dict, **kw) -> str:
             "comments_omitted": omitted,
             # Capped; full log via CLI.
             "events": [_fields(e, _EVENT_FIELDS) for e in kb.list_events(conn, tid)[-50:]],
-            "runs": [_fields(r, _RUN_FIELDS) for r in kb.list_runs(conn, tid)],
+            # Newest runs, long fields capped; full history via `hermes kanban runs`.
+            "runs": [_fields(r, _RUN_FIELDS) for r in runs],
+            "runs_omitted": runs_omitted,
             # Same string build_worker_context hands the dispatcher at spawn time.
             "worker_context": kb.build_worker_context(conn, tid)})
 
