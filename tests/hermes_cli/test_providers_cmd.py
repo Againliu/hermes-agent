@@ -99,6 +99,19 @@ def test_offline_inventory_marks_a_saved_custom_key_current_on_its_own_row(monke
     assert [(row["slug"], row["is_current"], row["models"]) for row in rows] == [("local", True, ["picked", "a", "b"])]
 
 
+@pytest.mark.parametrize("config", [
+    {"model": {"provider": "openrouter"}, "model_catalog": {"excluded_providers": ["openrouter"]},
+     "providers": {"openrouter": {"base_url": "https://proxy.example.test/v1"}}},
+    {"model": {"provider": "custom:local"},
+     "providers": {"local": {"base_url": "http://localhost:9000/v1", "enabled": False}}},
+    {"model": {"provider": "openrouter"}, "providers": {"openrouter": {"enabled": False}}},
+], ids=["excluded", "disabled-endpoint", "disabled-canonical"])
+def test_offline_inventory_never_lists_a_provider_the_user_hid(monkeypatch, config):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "set")
+    slugs = {row["slug"] for row in build_offline_models_payload(_config_ctx(monkeypatch, config))["providers"]}
+    assert not slugs & {"openrouter", "local", "custom:local"}
+
+
 def _run(monkeypatch, capsys, argv):
     monkeypatch.setattr("hermes_cli.config.load_config", lambda: {
         "model": {"provider": "local", "default": "m1"},

@@ -49,11 +49,23 @@ def _row(slug: str, name: str, models: list[str], *, is_current: bool, user_defi
             "authenticated": authenticated, "auth_type": auth_type, "key_env": key_env}
 
 
-def _canonical_rows(ctx: ConfigContext, current: str, include_unconfigured: bool) -> list[dict]:
+def _hidden_identities(ctx: ConfigContext) -> set[str]:
+    """What the picker hides: ``model_catalog.excluded_providers`` and every ``providers.<key>`` entry
+    with ``enabled: false`` (:func:`hermes_cli.config.is_provider_enabled`), under each key alias."""
+    from hermes_cli.config import is_provider_enabled
+    from hermes_cli.providers import custom_provider_aliases
+
+    hidden = {str(slug).strip().lower() for slug in ctx.excluded_providers or [] if str(slug).strip()}
+    for key, value in ctx.user_providers.items():
+        if isinstance(value, dict) and not is_provider_enabled(value):
+            hidden |= custom_provider_aliases(str(key))
+    return hidden
+
+
+def _canonical_rows(ctx: ConfigContext, current: str, include_unconfigured: bool, hidden: set[str]) -> list[dict]:
     from hermes_cli.models import _PROVIDER_MODELS, OPENROUTER_MODELS
     from hermes_cli.models_catalog_static import listed_canonical_providers
 
-    excluded = {str(slug).strip().lower() for slug in ctx.excluded_providers or []}
     configured = {str(slug).strip().lower() for slug, value in ctx.user_providers.items()
                   if isinstance(value, dict) and str(slug).strip()} | ({current} if current else set())
     rows = []
@@ -61,7 +73,7 @@ def _canonical_rows(ctx: ConfigContext, current: str, include_unconfigured: bool
         slug = entry.slug.lower()
         env_vars = _env_var_names(slug)
         is_configured = slug in configured or any(os.environ.get(name, "").strip() for name in env_vars)
-        if slug in excluded or not (include_unconfigured or is_configured):
+        if slug in hidden or not (include_unconfigured or is_configured):
             continue
         user_row = ctx.user_providers.get(entry.slug)
         models = _config_model_ids(*(user_row.get(k) for k in ("default_model", "model", "models"))) \
@@ -79,7 +91,7 @@ def _norm_url(value: object) -> str:
     return str(value or "").strip().rstrip("/").lower()
 
 
-def _endpoint_rows(ctx: ConfigContext, current: str, seen: set[str]) -> list[dict]:
+def _endpoint_rows(ctx: ConfigContext, current: str, seen: set[str], hidden: set[str]) -> list[dict]:
     """Configured endpoints, declared models only, never probed.
 
     Reads ``ctx.custom_providers``: the normalized, enabled, deduplicated view
@@ -101,7 +113,7 @@ def _endpoint_rows(ctx: ConfigContext, current: str, seen: set[str]) -> list[dic
         slug, aliases = key or custom_provider_slug(name), custom_provider_aliases(name, key)
         row = rows.get(slug.lower())
         if row is None:
-            if slug.lower() in seen:  # a canonical row already represents this provider
+            if slug.lower() in seen or aliases & hidden:  # a canonical row has it, or the user hid it
                 continue
             row = rows[slug.lower()] = _row(slug, name, [], is_current=False, user_defined=True,
                                             source="user-config", key_env=str(entry.get("key_env") or ""))
@@ -120,11 +132,13 @@ def _endpoint_rows(ctx: ConfigContext, current: str, seen: set[str]) -> list[dic
 def build_offline_models_payload(ctx: ConfigContext, *, include_unconfigured: bool = False) -> dict:
     """``{providers, model, provider}`` from config + bundled catalogs; no network, no credential pool."""
     current = str(ctx.current_provider or "").strip().lower()
-    rows = _canonical_rows(ctx, current, include_unconfigured)
+    hidden = _hidden_identities(ctx)
+    rows = _canonical_rows(ctx, current, include_unconfigured, hidden)
     seen = {row["slug"].lower() for row in rows}
-    rows += _endpoint_rows(ctx, current, seen)
-    # A saved provider no row represents (removed from config, or bare ``custom`` + base_url).
-    if current and current not in seen and not any(row["is_current"] for row in rows):
+    rows += _endpoint_rows(ctx, current, seen, hidden)
+    # A saved provider no row represents (removed from config, or bare ``custom`` + base_url) —
+    # unless the user hid it.
+    if current and current not in seen | hidden and not any(row["is_current"] for row in rows):
         models = [ctx.current_model] if ctx.current_model else []
         rows.append(_row(ctx.current_provider, ctx.current_provider, models, is_current=True, user_defined=True,
                          source="model-config"))
