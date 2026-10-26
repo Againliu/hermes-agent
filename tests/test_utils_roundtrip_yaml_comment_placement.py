@@ -59,6 +59,19 @@ def test_added_entry_lands_above_the_next_sections_banner(tmp_path, write):
     assert yaml.safe_load(plugins_block)["plugins"] == yaml.safe_load(text)["plugins"]
 
 
+@pytest.mark.parametrize("parent", ["null", "casual"])
+def test_new_branch_under_a_null_or_scalar_section_keeps_its_place(tmp_path, parent):
+    """Setting ``display.personality`` over ``display: null`` turns that entry into a mapping where
+    it stands; it must not move ``display`` below ``model``."""
+    path = tmp_path / "config.yaml"
+    tail = "\n# ==== Model Configuration ====\nmodel:\n  default: m\n"
+    path.write_text(f"display: {parent}\n" + tail, encoding="utf-8")
+
+    _update(path, "display.personality", "kawaii")
+
+    assert path.read_text(encoding="utf-8-sig") == "display:\n  personality: kawaii\n" + tail
+
+
 def test_plugin_selection_publication_keeps_the_next_sections_banner(tmp_path, monkeypatch):
     """``hermes plugins enable`` commits through the PM publication writer, not save_config."""
     from pm.publication import PluginSelection

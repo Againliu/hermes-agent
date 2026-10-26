@@ -593,7 +593,7 @@ def atomic_roundtrip_yaml_update(path: str | Path, key_path: str, value: Any) ->
 
     mkdir_under_hermes_home(path.parent)
     yaml_rt, config = _roundtrip_load(path)
-    current, parent, inserted = config, None, None
+    current, parent = config, None
     keys = _split_key_path(key_path)
     i = 0
     while True:
@@ -603,25 +603,22 @@ def atomic_roundtrip_yaml_update(path: str | Path, key_path: str, value: Any) ->
             if value is None:
                 if seg in current:
                     _delete_rt_entry(current, seg, parent)
-            elif inserted is None:
-                _set_rt_entry(current, seg, _rt_value(value))
             else:
-                current[seg] = _rt_value(value)
+                _set_rt_entry(current, seg, _rt_value(value))
             break
         next_value = current.get(seg)
         if not isinstance(next_value, CommentedMap):
             if value is None:
                 return  # nothing to remove under a missing/scalar parent
-            next_value = CommentedMap()
-            if inserted is None:
-                inserted = (current, seg)
-            current[seg] = next_value
+            # Build the missing branch whole, then set it in one step: a null/scalar parent keeps
+            # its place in the mapping and the next section's banner stays below the new leaf.
+            subtree = value
+            for key in reversed(keys[i + consumed:]):
+                subtree = {key: subtree}
+            _set_rt_entry(current, seg, _rt_value(subtree))
+            break
         current, parent = next_value, (current, seg)
         i += consumed
-    if inserted is not None:
-        # Re-home the next section's banner only once the new branch holds its leaf.
-        container, seg = inserted
-        _set_rt_entry(container, seg, container.pop(seg))
     _roundtrip_dump(path, yaml_rt, config)
 
 
