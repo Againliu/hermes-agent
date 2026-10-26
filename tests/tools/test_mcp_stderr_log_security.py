@@ -91,6 +91,7 @@ _CHILD = r"""
 import sys
 v = sys.argv[1]
 sys.stderr.write('{\n  "api_key":\n    "' + 'jsonSplitOpaque4471qq' + '",\n  "n": 1\n}\n')
+sys.stderr.write('{\n"api_key":\n"' + 'jsonUnindented8823zz' + '"\n}\n')
 sys.stderr.write('banner ' + v[:6] + '\x1b[0m' + v[6:] + '\n')
 sys.stderr.flush()
 """
@@ -123,6 +124,7 @@ def test_records_are_redacted_whole_with_the_spawning_profiles_values(tmp_path, 
         clear_known_secret_values()
     log = (served / "logs" / "mcp-stderr.log").read_text(encoding="utf-8-sig")
     assert "jsonSplitOpaque4471qq" not in log
+    assert "jsonUnindented8823zz" not in log
     assert secret not in log
     assert '"n": 1' in log and "banner " + MARKER in log
 

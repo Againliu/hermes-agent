@@ -3,7 +3,8 @@
 Redacting one line at a time misses a secret whose key and value sit on different lines: a
 pretty-printed JSON config dump, a Python ``pprint`` that wraps a long token, a stack trace
 quoting a request. :class:`StderrRecords` regroups the decoded lines into records (an open
-bracket keeps the record open across lines; an indented line continues the one before it), and
+bracket keeps the record open across lines while each line leaves the structure mid-way or is
+indented; an indented line also continues the one before it), and
 :func:`redact_record` strips terminal colour codes (which can split a token from its key) before
 the shared redactor sees the whole record.
 """
@@ -53,7 +54,12 @@ class StderrRecords:
         stripped = line.lstrip()
         if stripped != line:  # indented: a JSON member, a wrapped repr, a traceback frame
             return True
-        return self._depth > 0 and stripped[:1] in _CLOSERS
+        if self._depth == 0:
+            return False
+        # Inside an open bracket an unindented line still continues a structure the previous line
+        # left mid-way (unindented JSON: ``{`` / ``"api_key":`` / ``"value"``). A line ending in a
+        # complete statement does not hold the next one: a stray ``(`` must not stall the log.
+        return stripped[:1] in _CLOSERS or self._lines[-1].rstrip()[-1:] in _OPENERS + ",:"
 
     def _take(self) -> list[list[str]]:
         record, self._lines, self._depth, self._chars = self._lines, [], 0, 0
