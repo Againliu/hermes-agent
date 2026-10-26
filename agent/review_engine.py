@@ -44,6 +44,8 @@ _OUTPUT_RULES = (
 # Round 2+: converge on the earlier findings and the new diff instead of re-reviewing from scratch.
 _REREVIEW_RULES = (
     "This is a re-review: earlier rounds' results are quoted below, newest last. Re-review rules:\n"
+    "- They apply only when the earlier rounds reviewed the same target (PR, branch or repository) as the work now "
+    "presented. If the target changed, ignore the earlier results, review from scratch, and report it as round 1.\n"
     "- First re-check every earlier finding against the current state and mark it fixed, still open, or withdrawn "
     "(withdraw one you now judge wrong, and say why). A still-open blocker stays blocking.\n"
     "- Look for new findings only in what changed since the last reviewed version (the new diff since that "
