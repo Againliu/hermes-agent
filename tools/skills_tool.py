@@ -23,7 +23,7 @@ from tools.skills_tool_setup import (
     _get_required_environment_variables, _is_env_var_persisted, _is_remote_env_backend)
 from tools.skills_tool_plugin import (
     MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, _INJECTION_PATTERNS, _fail, _json,
-    find_plugin_skills, _mark_background_review_read, _preprocess_skill, _read_skill_text, _safe_frontmatter,
+    find_plugin_skills, plugin_skills_by_bare_name, _mark_background_review_read, _preprocess_skill, _read_skill_text, _safe_frontmatter,
     _serve_plugin_skill, _serve_skill_file, _truncate_description)
 from tools.skills_tool_dedup import dedup_skill_view, reset_skill_view_dedup
 from tools.skill_provenance import is_background_review
@@ -373,32 +373,16 @@ def _resolve_plugin_skill(name, file_path, task_id, preprocess):
 
 
 def _resolve_bare_plugin_skill(name, file_path, task_id, preprocess):
-    """Serve a uniquely named registered plugin skill addressed without its namespace."""
-    from hermes_cli.plugins import discover_plugins, get_plugin_manager
-
-    discover_plugins()  # idempotent; populate the registry before matching bare names
-    pm = get_plugin_manager()
-    matches = sorted(
-        skill["name"] for skill in pm.list_plugin_skill_metadata()
-        if skill["name"].partition(":")[2] == name
-    )
+    """Answer a bare name no local skill holds: the one enabled plugin skill registered under it,
+    or a refusal naming every ``plugin:skill`` when several plugins register it. ``None`` = no
+    plugin skill by that name either. Local skills always win, so this runs only after a miss."""
+    matches = plugin_skills_by_bare_name().get(name, [])
     if len(matches) > 1:
         return _fail(
-            f"Ambiguous plugin skill name '{name}'. Use a qualified plugin:skill name.",
-            available_skills=matches,
-            hint="Use skills_list to find the qualified name for the plugin skill you need.")
-    if matches:
-        served, _ = _resolve_plugin_skill(matches[0], file_path, task_id, preprocess)
-        return served
-    return None
-
-
-def _plugin_skill_names() -> list[str]:
-    """Return registered plugin skill names for errors that offer available skills."""
-    from hermes_cli.plugins import discover_plugins, get_plugin_manager
-
-    discover_plugins()
-    return [skill["name"] for skill in get_plugin_manager().list_plugin_skill_metadata()]
+            f"Ambiguous plugin skill name '{name}': {len(matches)} plugins provide it. "
+            "Use a qualified plugin:skill name.", available_skills=matches,
+            hint="Pass one of the qualified names above.")
+    return _resolve_plugin_skill(matches[0], file_path, task_id, preprocess)[0] if matches else None
 
 
 def _under_any(path: Path, dirs) -> bool:
@@ -550,11 +534,12 @@ def _owning_search_dir(skill_md: Path, all_dirs) -> Optional[Path]:
     return max(owners, key=lambda d: len(d.parts), default=None)
 
 
-def locate_skill(name: str, local_category_name: Optional[str], roots):
+def locate_skill(name: str, local_category_name: Optional[str], roots, on_missing=None):
     """Unique on-disk skill for *name* over ``(tier, dir)`` *roots*: cross-tier precedence
     (project > local > create_dir > external, shadowed copies logged), same-tier collision refusal,
     same-root identical-copy ranking, quarantine gate, not-found listing. ``(error_json, skill_dir,
-    skill_md)``; skill_md set iff no error."""
+    skill_md)``; skill_md set iff no error. ``on_missing()`` may answer a miss (a JSON reply, or
+    ``None`` for the not-found listing): skill_view uses it so on-disk skills win name collisions."""
     from agent.skill_utils import AMBIGUOUS_SKILL_PREFIX, TIER_PROJECT, pick_skill_candidate, skill_candidate_rank
     all_dirs = [d for _t, d in roots]
     if not all_dirs:
@@ -599,9 +584,10 @@ def locate_skill(name: str, local_category_name: Optional[str], roots):
                 hint="Inspect the skill in the repo checkout, or untrust the repo with "
                 "`hermes skills untrust`."), None, None
     if not skill_md or not skill_md.exists():
+        if on_missing is not None and (answer := on_missing()) is not None:
+            return answer, None, None
         available = [s["name"] for s in sort_skills(find_all_skills())[:20]]
-        with suppress(Exception):
-            available.extend(_plugin_skill_names())
+        available.extend(s["name"] for s in find_plugin_skills())
         return _fail(f"Skill '{name}' not found.", available_skills=available,
                      hint="Use skills_list to see all available skills"), None, None
     return None, skill_dir, skill_md
@@ -635,7 +621,8 @@ def skill_view(
     name: str, file_path: str | None = None, task_id: str | None = None, preprocess: bool = True) -> str:
     """View a skill (SKILL.md) or a file within its directory, as JSON. ``name`` is a skill name
     or path ("axolotl", "03-fine-tuning/axolotl"); "<plugin>:<skill>" resolves plugin-provided
-    skills. ``preprocess`` applies the configured SKILL.md template / inline shell rendering;
+    skills, and a bare name no on-disk skill holds falls back to the plugin skill registered under
+    it. ``preprocess`` applies the configured SKILL.md template / inline shell rendering;
     slash/preload callers render the message themselves."""
     try:
         # Validate before the ':' dispatch so a Windows drive path (C:\skills\foo) can't be
@@ -647,15 +634,15 @@ def skill_view(
             served, local_category_name = _resolve_plugin_skill(name, file_path, task_id, preprocess)
             if served is not None:
                 return served
-        elif served := _resolve_bare_plugin_skill(name, file_path, task_id, preprocess):
-            return served
         # The fall-through form (namespace/bare) joins onto each search dir too; re-validate it
         # since `bare` is not namespace-checked.
         if local_category_name and (lookup_error := skill_lookup_path_error(local_category_name)):
             return _fail(lookup_error, hint=_LOOKUP_HINT)
         roots, active_skills_dir = skill_search_dirs()
         all_dirs = [d for _t, d in roots]
-        error, skill_dir, skill_md = locate_skill(name, local_category_name, roots)
+        bare_plugin = (None if ":" in name
+                       else lambda: _resolve_bare_plugin_skill(name, file_path, task_id, preprocess))
+        error, skill_dir, skill_md = locate_skill(name, local_category_name, roots, on_missing=bare_plugin)
         if error is not None:
             return error
         try:  # read once — reused for platform check and main content

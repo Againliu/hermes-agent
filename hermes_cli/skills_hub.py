@@ -960,6 +960,7 @@ def do_list(source_filter: str = "all", enabled_only: bool = False,
     from tools.skills_hub import HubLockFile, ensure_hub_dirs
     from tools.skills_sync import _read_manifest
     from tools.skills_tool import _skill_catalog, find_plugin_skills
+    from tools.skills_tool_plugin import plugin_bare_name_notes
     from agent.skill_utils import TIER_CREATE_DIR, TIER_EXTERNAL, TIER_PROJECT, get_disabled_skill_names
     from agent.skill_commands import skill_command_collision_note
     c = console or _console
@@ -970,6 +971,9 @@ def do_list(source_filter: str = "all", enabled_only: bool = False,
     all_skills = [{**s, "name": s["load_name"]} for s in _skill_catalog(skip_disabled=True) if s["load_name"]]
     plugin_skills = find_plugin_skills(skip_disabled=True)  # not on disk: skill_view loads them as plugin:skill
     plugin_names = {s["name"] for s in plugin_skills}
+    # Bare-name precedence (on-disk > plugin, plugins tied → qualify): matches skill_view's lookup.
+    bare_notes = plugin_bare_name_notes(plugin_skills, {
+        n for s in _skill_catalog(skip_disabled=True, include_hidden=True) for n in (s["name"], s["path"].parent.name)})
     all_skills += plugin_skills
     root_labels = {TIER_PROJECT: "project", TIER_CREATE_DIR: "create_dir", TIER_EXTERNAL: "external"}
     disabled_names = get_disabled_skill_names()
@@ -998,7 +1002,7 @@ def do_list(source_filter: str = "all", enabled_only: bool = False,
         disabled_count += not is_enabled
         status = "[bold green]enabled[/]" if is_enabled else "[dim red]disabled[/]"
         # Name taken by a built-in: the skill loads but has no /<name> (see agent.skill_commands).
-        if note := skill_command_collision_note(name):
+        if note := skill_command_collision_note(name) or bare_notes.get(name):
             status += f"\n[yellow]{note}[/]"
         table.add_row(name, skill.get("category", ""), source_display,
                       _trust_cell(trust, source_display), status)
