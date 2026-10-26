@@ -506,27 +506,37 @@ def _load_user_pricing_overrides() -> list:
     return raw if isinstance(raw, list) else []
 
 
+_OVERRIDE_RATE_FIELDS = (
+    "input_per_million", "output_per_million", "cache_read_per_million", "cache_write_per_million",
+    "cache_write_1h_per_million", "request_cost",
+)
+
+
 def _entry_from_user_override(entry: dict[str, Any]) -> Optional[PricingEntry]:
     """Build a ``PricingEntry`` from one ``pricing_overrides`` list item.
 
     Requires ``input_per_million`` and ``output_per_million``. Other rate
-    fields are optional. Bad / missing required fields produce ``None``.
+    fields are optional. A missing required rate, or any supplied rate that is
+    not a finite non-negative number (``"NaN"``, ``-1``), produces ``None``.
     """
     if not isinstance(entry, dict):
         return None
-    ipm = _to_decimal(entry.get("input_per_million"))
-    opm = _to_decimal(entry.get("output_per_million"))
-    if ipm is None or opm is None:
+    rates = {key: _to_decimal(entry.get(key)) for key in _OVERRIDE_RATE_FIELDS}
+    if rates["input_per_million"] is None or rates["output_per_million"] is None:
+        return None
+    # is_finite() first: an ordered comparison on a Decimal NaN raises.
+    if any(entry.get(key) is not None and (rate is None or not rate.is_finite() or rate < 0)
+           for key, rate in rates.items()):
         return None
     source_url = entry.get("source_url")
     pricing_version = entry.get("pricing_version")
     return PricingEntry(
-        input_cost_per_million=ipm,
-        output_cost_per_million=opm,
-        cache_read_cost_per_million=_to_decimal(entry.get("cache_read_per_million")),
-        cache_write_cost_per_million=_to_decimal(entry.get("cache_write_per_million")),
-        cache_write_1h_cost_per_million=_to_decimal(entry.get("cache_write_1h_per_million")),
-        request_cost=_to_decimal(entry.get("request_cost")),
+        input_cost_per_million=rates["input_per_million"],
+        output_cost_per_million=rates["output_per_million"],
+        cache_read_cost_per_million=rates["cache_read_per_million"],
+        cache_write_cost_per_million=rates["cache_write_per_million"],
+        cache_write_1h_cost_per_million=rates["cache_write_1h_per_million"],
+        request_cost=rates["request_cost"],
         source="user_override",
         source_url=str(source_url) if isinstance(source_url, str) else None,
         pricing_version=str(pricing_version) if isinstance(pricing_version, str) else None,

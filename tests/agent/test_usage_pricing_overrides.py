@@ -56,6 +56,23 @@ def test_pricing_override_stays_final_at_a_served_speed(model, provider, served)
     assert (result.source, result.amount_usd) == ("user_override", Decimal(4))
 
 
+@pytest.mark.parametrize("bad", [
+    {"input_per_million": "NaN"},
+    {"output_per_million": "Infinity"},
+    {"input_per_million": -1},
+    {"cache_read_per_million": "sNaN"},
+    {"request_cost": -0.5},
+])
+def test_malformed_override_rate_is_skipped_for_the_next_valid_entry(bad):
+    entry = {"provider": "custom", "model": "relay-model-1", "input_per_million": 1, "output_per_million": 3}
+    _write_config({"pricing_overrides": [{**entry, **bad}, entry]})
+    usage = normalize_usage({"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000})
+
+    result = estimate_usage_cost("relay-model-1", usage, provider="custom", base_url="http://127.0.0.1:9/v1")
+
+    assert (result.source, result.amount_usd, result.label) == ("user_override", Decimal(4), "~$4.00")
+
+
 @pytest.mark.parametrize("model, five_min_rate, one_hour_rate", [
     ("claude-opus-5", "6.25", "10"),
     ("claude-opus-4.8", "6.25", "10"),
