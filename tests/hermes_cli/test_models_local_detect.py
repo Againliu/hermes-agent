@@ -330,3 +330,19 @@ def test_a_server_dripping_bytes_cannot_hold_a_probe(servers, monkeypatch):
     assert detect.probe_port(port, expected=detect._Kind("vllm", "vLLM", port), timeout=0.4) is None
     assert time.monotonic() - started < 2
 
+
+def test_a_key_saved_for_another_address_is_never_claimed(servers):
+    """``providers.local-ollama`` already names a remote box; the local Ollama must not be offered
+    under that key, since picking it would select (and report saving) the remote entry."""
+    from hermes_cli.config import load_config, save_config
+
+    servers("ollama", {"/v1/models": _models(["llama3.2:3b"], "library")})
+    cfg = load_config()
+    remote = {"name": "GPU box", "base_url": "http://10.0.0.5:11434/v1"}
+    cfg["providers"] = {"local-ollama": dict(remote)}
+    save_config(cfg)
+
+    assert detect.unsaved_servers(load_config()) == []
+    (server,) = detect.detect_local_servers()
+    assert detect.save_detected_server(server) is None
+    assert load_config()["providers"]["local-ollama"] == remote

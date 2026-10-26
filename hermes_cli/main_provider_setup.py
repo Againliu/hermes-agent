@@ -915,7 +915,9 @@ def _adopt_detected_pick(selected_key: str) -> str | None:
     if server is None:
         print("  That local server stopped answering; start it again or pick another provider.")
         return None
-    save_detected_server(server)
+    if save_detected_server(server) is None:
+        print(f'  Provider "{server.provider_key}" already points elsewhere; add this server as a custom endpoint.')
+        return None
     print(f'  💾 Saved {server.label} at {server.base_url} as provider "{server.provider_key}"')
     from hermes_cli.providers import custom_provider_slug
     return custom_provider_slug(server.display_name, server.provider_key)

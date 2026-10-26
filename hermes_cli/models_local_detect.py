@@ -224,10 +224,19 @@ def configured_base_urls(config: dict) -> set[str]:
     return urls
 
 
+def _taken_keys(config: dict) -> set[str]:
+    providers = config.get("providers")
+    return {str(k).strip().lower() for k in providers} if isinstance(providers, dict) else set()
+
+
 def unsaved_servers(config: dict, *, cached_only: bool = False) -> list[DetectedServer]:
-    """Detected servers the user has not saved yet (a saved one already has its own row)."""
+    """Detected servers the user has not saved yet (a saved one already has its own row). A server
+    whose ``providers:`` key the user already gave to another address is not offered: picking it
+    would select that other entry."""
     saved = configured_base_urls(config)
-    return [s for s in detect_local_servers(cached_only=cached_only) if _norm_url(s.base_url) not in saved]
+    taken = _taken_keys(config)
+    return [s for s in detect_local_servers(cached_only=cached_only)
+            if _norm_url(s.base_url) not in saved and s.provider_key not in taken]
 
 
 def picker_row(server: DetectedServer, *, max_models: int | None = None) -> dict:
@@ -252,9 +261,10 @@ def find_detected(slug_or_key: str) -> DetectedServer | None:
     return None
 
 
-def save_detected_server(server: DetectedServer) -> dict:
+def save_detected_server(server: DetectedServer) -> dict | None:
     """Write ``providers.<key>`` for a picked server (no key: local servers take none) and return
-    the entry. An entry already under that key is left as the user wrote it."""
+    the entry. An entry already under that key is left as the user wrote it: returned when it points
+    at this server, ``None`` when it points elsewhere (that key is not this server's to claim)."""
     from hermes_cli.config import load_config, save_config
 
     cfg = load_config()
@@ -262,8 +272,9 @@ def save_detected_server(server: DetectedServer) -> dict:
     if not isinstance(providers, dict):
         providers = {}
     existing = providers.get(server.provider_key)
-    if isinstance(existing, dict):
-        return existing
+    if existing is not None:
+        ours = _norm_url(server.base_url) in configured_base_urls({"providers": {server.provider_key: existing}})
+        return existing if ours else None
     entry = {"name": server.display_name, "base_url": server.base_url}
     providers[server.provider_key] = entry
     cfg["providers"] = providers
@@ -284,6 +295,8 @@ def adopt_detected_provider(explicit_provider: str, user_providers: dict | None)
     if server is None:
         return user_providers
     entry = save_detected_server(server)
+    if entry is None:
+        return user_providers
     merged = dict(user_providers) if isinstance(user_providers, dict) else {}
     merged[server.provider_key] = dict(entry)
     return merged
