@@ -69,3 +69,20 @@ def test_small_run_metadata_stays_structured(card):
     run = json.loads(kt._handle_show({"task_id": card}))["runs"][0]
     assert run["metadata"] == {"changed_files": ["a.py"]}
     assert run["summary"] == "ok"
+
+
+def test_blank_run_summary_and_error_stay_capped(card):
+    """A whitespace-only field caps to "" and must not fall back to the raw value."""
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+    blank = " " * 50_000
+    with kbc.connect() as conn:
+        conn.execute(
+            "INSERT INTO task_runs (task_id, profile, status, outcome, summary, error, "
+            "started_at, ended_at) VALUES (?, 'coder', 'done', 'crashed', ?, ?, 1, 2)",
+            (card, blank, blank))
+        conn.commit()
+    raw = kt._handle_show({"task_id": card})
+    run = json.loads(raw)["runs"][0]
+    assert (run["summary"], run["error"]) == ("", "")
+    assert len(raw) < 20_000

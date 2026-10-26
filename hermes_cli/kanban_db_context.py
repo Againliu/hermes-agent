@@ -246,7 +246,8 @@ def recent_runs(conn: sqlite3.Connection, task_id: str) -> tuple[list[Run], int]
         meta = run.metadata
         meta_json = json.dumps(meta, ensure_ascii=False, sort_keys=True) if meta else ""
         capped.append(replace(
-            run, summary=_ctx_cap(run.summary) or run.summary, error=_ctx_cap(run.error) or run.error,
+            run, summary=None if run.summary is None else _ctx_cap(run.summary),
+            error=None if run.error is None else _ctx_cap(run.error),
             metadata=meta if len(meta_json) <= _CTX_MAX_FIELD_BYTES else _ctx_cap(meta_json)))
     return capped, len(runs) - len(shown)
 
