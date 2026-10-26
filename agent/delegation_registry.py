@@ -104,20 +104,6 @@ def _usable(name: str) -> Optional[DelegationProvider]:
     return None
 
 
-def _enabled_but_unloaded_plugins() -> list[str]:
-    """``plugins.enabled`` entries of the active profile that its plugin manager has not loaded cleanly. `hermes
-    plugins list` shows them enabled, so "install or enable it" is the wrong fix for a backend one of them would
-    provide: the process needs to load it (it was enabled after discovery, or its load failed or was skipped)."""
-    from hermes_cli.plugins import get_plugin_manager
-    from hermes_cli.plugins_discovery import _get_enabled_plugins
-    enabled = _get_enabled_plugins() or set()
-    if not enabled:
-        return []
-    loaded = {ident for info in get_plugin_manager().list_plugins() if info["enabled"] and not info["error"]
-              for ident in (info["name"], info["key"])}
-    return sorted(str(name) for name in enabled if name not in loaded)
-
-
 def backend_status(name: str) -> tuple[Optional[DelegationProvider], str]:
     """``(provider, "")`` when backend ``name`` can run here, else ``(provider or None, reason)``; the reason is
     the user-facing fix (it becomes the ``delegate_task`` tool error)."""
@@ -129,7 +115,9 @@ def backend_status(name: str) -> tuple[Optional[DelegationProvider], str]:
         return None, ("No default delegation strategy is available: the bundled plugin delegation/default is "
                       "disabled. Remove it from plugins.disabled in config.yaml.")
     if registered is None:
-        unloaded = _enabled_but_unloaded_plugins()
+        # `hermes plugins list` shows these enabled, so "install or enable it" alone misleads when one provides it.
+        from hermes_cli.plugins_discovery import enabled_plugins_not_loaded
+        unloaded = enabled_plugins_not_loaded()
         if unloaded:
             listed = ", ".join(unloaded)
             return None, (

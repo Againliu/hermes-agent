@@ -114,3 +114,17 @@ def test_a_backend_plugin_that_failed_to_load_is_named(tmp_path, monkeypatch):
     assert provider is None
     assert "This profile enables brokenplug, which this process has not loaded" in reason
     assert "`hermes logs` says why" in reason
+
+
+def test_an_alias_entry_and_a_disabled_entry_are_not_named_unloaded(tmp_path, monkeypatch):
+    _root, profile_b = _two_profiles(tmp_path, monkeypatch)
+    _write_plugin(profile_b, "langfuse")
+    _write_plugin(profile_b, "bothplug")
+    (profile_b / "config.yaml").write_text(yaml.safe_dump({"plugins": {
+        "enabled": ["bplug", "observability/langfuse", "bothplug"], "disabled": ["bothplug"]}}), encoding="utf-8")
+    with _profile(profile_b):
+        plugins_mod.discover_plugins()
+        assert _status("langfuse") == ("langfuse", "")  # the legacy key selected it, and it loaded
+        _provider, reason = _status("ghost")
+
+    assert "langfuse" not in reason and "bothplug" not in reason
