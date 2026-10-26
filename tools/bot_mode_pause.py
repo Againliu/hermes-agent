@@ -27,6 +27,7 @@ import logging
 import os
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from tools.bot_failure_reasons import RECIPIENT_PAUSED
@@ -77,15 +78,29 @@ def record_pause_change(home: str | os.PathLike, paused: bool) -> None:
     atomic_json_write(home / _WINDOWS_FILE, windows[-_MAX_WINDOWS:])
 
 
-def _fell_due_while_paused(job: dict, windows: list[dict]) -> bool:
-    from cron.jobs import _parse_aware
+def _pause_end_covering(due: float, windows: list[dict]) -> float | None:
+    # An open window is skipped: with the window written before the flag, "unpaused, open window"
+    # only means a pause that has not taken effect (or whose flag write failed).
+    return next((w["end"] for w in windows if isinstance(w.get("end"), (int, float))
+                 and w.get("start", due + 1) <= due <= w["end"]), None)
 
-    slot = _parse_aware(job.get("next_run_at"))
-    if slot is None:
-        return False
-    due = slot.timestamp()
-    return any(isinstance(w.get("end"), (int, float)) and w.get("start", due + 1) <= due <= w["end"]
-               for w in windows)
+
+def _held_by_pause(job: dict, windows: list[dict], now: float) -> bool:
+    """True when every slot of the recurring ``job`` due by ``now`` fell inside a recorded pause.
+    A slot due after the resume leaves the job on the ordinary due path, which fires it once as
+    it fires any missed slot; only the pause's own slots are consumed."""
+    from cron.jobs import _parse_aware, compute_next_run, parse_schedule
+
+    raw = job.get("schedule")
+    schedule = parse_schedule(raw) if isinstance(raw, str) else raw if isinstance(raw, dict) else {}
+    slot, held = _parse_aware(job.get("next_run_at")), False
+    while slot is not None and slot.timestamp() <= now:
+        end = _pause_end_covering(slot.timestamp(), windows)
+        if end is None:
+            return False
+        held = True  # each step lands strictly past a window's end, so this ends within len(windows)
+        slot = _parse_aware(compute_next_run(schedule, datetime.fromtimestamp(end, UTC).isoformat()))
+    return held
 
 
 def _note_paused(home: Path, paused: bool, logger: logging.Logger) -> None:
@@ -118,9 +133,11 @@ def hold_paused_profile_jobs(due_jobs: list, logger: logging.Logger) -> list:
     if paused:
         held, why = due_jobs, "Skipped: this bot is paused"
     else:
-        # Resumed: a recurring slot that fell due inside a recorded pause is consumed all the same.
+        # Resumed: a recurring job whose due slots all fell inside recorded pauses is consumed; one
+        # with a slot due since the resume runs, as any missed slot does.
         windows = _read_windows(Path(home))
-        held = [job for job in due_jobs if is_recurring(job) and _fell_due_while_paused(job, windows)]
+        now = time.time()
+        held = [job for job in due_jobs if is_recurring(job) and _held_by_pause(job, windows, now)]
         why = "Skipped: it fell due while this bot was paused"
         if not held:
             return due_jobs

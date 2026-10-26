@@ -147,3 +147,29 @@ def test_a_tick_between_the_resume_writes_never_runs_a_slot_from_the_pause(fleet
     configure(False)
 
     assert fired == []
+
+
+def test_a_slot_due_after_the_resume_still_runs_when_an_earlier_one_fell_in_the_pause(fleet, monkeypatch):
+    """Ticker down across a short pause: the slot inside it is consumed, but the one that fell due
+    after the resume fires, as any missed slot does on the first tick back."""
+    from types import SimpleNamespace
+
+    from cron.jobs import _hermes_now, create_job, load_jobs, save_jobs
+    from cron.scheduler_provider import _profile_cron_scope
+    from tools import bot_mode_pause
+
+    paused, _active, fired = fleet
+    now = _hermes_now()
+    for flag, ago in ((True, 110), (False, 80)):  # paused 110s ago, resumed 80s ago
+        with monkeypatch.context() as m:
+            m.setattr(bot_mode_pause, "time", SimpleNamespace(time=lambda ago=ago: now.timestamp() - ago))
+            bot_mode_pause.record_pause_change(paused, flag)
+    with _profile_cron_scope(paused):
+        job = create_job(prompt="report", schedule="every 1m")
+        jobs = load_jobs()
+        jobs[0]["next_run_at"] = (now - timedelta(seconds=100)).isoformat()  # inside the pause
+        save_jobs(jobs)
+
+    _tick(paused)
+
+    assert fired == [job["id"]]  # its next slot (resume + 1m, 20s ago) was never paused
