@@ -4,6 +4,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from tests.waiting import wait_until
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -123,3 +125,16 @@ def test_records_are_redacted_whole_with_the_spawning_profiles_values(tmp_path, 
     assert "jsonSplitOpaque4471qq" not in log
     assert secret not in log
     assert '"n": 1' in log and "banner " + MARKER in log
+
+
+@pytest.mark.platforms("windows")
+def test_log_bytes_on_disk_match_the_size_check(tmp_path):
+    """Multiline writes land byte-for-byte (no ``\\r\\n`` growth), so rotation's size check bounds the file."""
+    from tools import mcp_tool_config as config
+
+    log = config._McpStderrLog(tmp_path / "mcp-stderr.log")
+    try:
+        log.write("first line\nsecond line\nthird line\n")
+    finally:
+        log.close()
+    assert (tmp_path / "mcp-stderr.log").read_bytes() == b"first line\nsecond line\nthird line\n"

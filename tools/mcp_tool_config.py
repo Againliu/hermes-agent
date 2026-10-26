@@ -52,7 +52,8 @@ class _McpStderrLog:
         self.name = str(path)  # file-object parity for callers that read ``.name``
         self.closed = False
         self._lock = threading.Lock()
-        self._fh = open(path, "a", encoding="utf-8", errors="replace", buffering=1)
+        # newline="": no ``\n`` -> ``\r\n`` on Windows, so the size check counts what reaches disk.
+        self._fh = open(path, "a", encoding="utf-8", errors="replace", buffering=1, newline="")
         try:
             self._lock_fh = open(f"{path}.lock", "a+b")
         except OSError:  # pragma: no cover - best effort: keep the in-process lock only
