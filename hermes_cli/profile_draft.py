@@ -65,7 +65,9 @@ Rules:
 
 _REVISE_RULES = """
 You are revising the CURRENT DRAFT below. Apply the user's change request and keep every
-field the request does not touch word-for-word identical."""
+field the request does not touch word-for-word identical. When it has saved_soul_md, that is
+the bot's whole saved instruction file: read it for what the bot already does (the sections
+above are only the parts of it under the five known headings)."""
 
 
 @dataclass
@@ -132,6 +134,25 @@ def compose_soul(heading: str, sections: dict[str, str]) -> str:
     return "\n\n".join(parts) + ("\n" if parts else "")
 
 
+def merge_sections(soul: str, sections: dict[str, str]) -> str:
+    """``soul`` with each non-empty, changed section of ``sections`` written over its ``## Title``
+    block in place (appended when absent); every other byte — the heading, custom sections,
+    plain text — is kept, so revising a saved SOUL.md never drops what the draft cannot see."""
+    out = soul or ""
+    for key, title in SECTIONS:
+        body = (sections.get(key) or "").strip()
+        if not body or body == split_soul(out).get(key, "").strip():
+            continue
+        m = next((h for h in _HEADING_RE.finditer(out) if _HEADING_TO_KEY.get(h.group(1).strip().lower()) == key), None)
+        if m is None:
+            out = f"{out.rstrip()}\n\n## {title}\n\n{body}\n" if out.strip() else f"## {title}\n\n{body}\n"
+            continue
+        nxt = _HEADING_RE.search(out, m.end())
+        tail = out[nxt.start():] if nxt else ""
+        out = f"{out[:m.end()]}\n\n{body}\n" + (f"\n{tail}" if tail else "")
+    return out
+
+
 # ── catalog ──────────────────────────────────────────────────────────────────────────────────
 
 
@@ -193,11 +214,23 @@ def _clip(value, limit: int) -> str:
     return value.strip()[:limit] if isinstance(value, str) else ""
 
 
+def _as_current(current) -> Optional[dict]:
+    """``current`` with ``sections`` as a key → text mapping. Also takes the list of
+    ``{key, title, text}`` that ``to_wire`` returns, so a client can send a result straight back."""
+    if not isinstance(current, dict):
+        return None
+    raw = current.get("sections")
+    if isinstance(raw, list):
+        raw = {str(s["key"]): str(s.get("text") or "") for s in raw if isinstance(s, dict) and s.get("key")}
+    return current | {"sections": raw if isinstance(raw, dict) else {}}
+
+
 def _current_block(current: dict) -> str:
     import json
-    sections = current.get("sections") if isinstance(current.get("sections"), dict) else {}
-    body = {k: current.get(k, "") for k in FIELDS} | {"sections": sections}
+    body = {k: current.get(k, "") for k in FIELDS} | {"sections": current["sections"]}
     body |= {k: current.get(k) or [] for k in CAPABILITY_KINDS}
+    if str(current.get("soul") or "").strip():
+        body["saved_soul_md"] = current["soul"]
     return "CURRENT DRAFT:\n" + json.dumps(body, ensure_ascii=False, indent=2)
 
 
@@ -241,7 +274,7 @@ def _draft_from(parsed: dict, catalog: Catalog) -> ProfileDraft:
 
 def _keep_untouched(draft: ProfileDraft, current: dict, only: str) -> None:
     """Regenerate-one-part: everything except ``only`` is restored from ``current`` verbatim."""
-    cur_sections = current.get("sections") if isinstance(current.get("sections"), dict) else {}
+    cur_sections = current["sections"]
     for key in FIELDS:
         if key != only:
             setattr(draft, key, str(current.get(key) or ""))
@@ -265,6 +298,7 @@ def draft_profile(
         return ProfileDraft(False, "describe the bot first")
     if only and only not in {k for k, _ in SECTIONS} | set(FIELDS) | {"capabilities"}:
         return ProfileDraft(False, f"unknown part '{only}'")
+    current = _as_current(current)
     try:
         from agent.auxiliary_client import call_llm
     except ImportError:

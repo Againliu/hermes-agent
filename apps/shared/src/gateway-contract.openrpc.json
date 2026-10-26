@@ -29014,6 +29014,27 @@
             },
             "title": "Sections",
             "type": "array"
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skills",
+            "type": "array"
+          },
+          "toolsets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Toolsets",
+            "type": "array"
+          },
+          "mcp_servers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Mcp Servers",
+            "type": "array"
           }
         },
         "title": "ProfileDraftPrevious",
@@ -30077,7 +30098,7 @@
       },
       "ProfilesDraftResult": {
         "additionalProperties": false,
-        "description": "Nothing is written. ``dropped`` = suggested names absent from the target's catalog;\n``previous`` (edit mode) = the saved profile the draft is compared against.",
+        "description": "Nothing is written. ``dropped`` = suggested names absent from the target's catalog;\n``previous`` (edit mode) = the saved profile the draft is compared against, and ``soul`` is\nthat saved SOUL.md with only the changed sections rewritten.",
         "properties": {
           "ok": {
             "title": "Ok",

@@ -344,11 +344,15 @@ class ProfileDraftPrevious(Result):
     description: str = ""
     soul: str = ""
     sections: list[ProfileDraftSection] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    toolsets: list[str] = Field(default_factory=list)
+    mcp_servers: list[str] = Field(default_factory=list)
 
 
 class ProfilesDraftResult(Result):
     """Nothing is written. ``dropped`` = suggested names absent from the target's catalog;
-    ``previous`` (edit mode) = the saved profile the draft is compared against."""
+    ``previous`` (edit mode) = the saved profile the draft is compared against, and ``soul`` is
+    that saved SOUL.md with only the changed sections rewritten."""
 
     ok: bool
     reason: str = ""

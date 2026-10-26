@@ -2182,7 +2182,7 @@ export interface ProfilesDraftParams {
   note?: string | null
   only?: string | null
 }
-/** Nothing is written. ``dropped`` = suggested names absent from the target's catalog; ``previous`` (edit mode) = the saved profile the draft is compared against. */
+/** Nothing is written. ``dropped`` = suggested names absent from the target's catalog; ``previous`` (edit mode) = the saved profile the draft is compared against, and ``soul`` is that saved SOUL.md with only the changed sections rewritten. */
 export interface ProfilesDraftResult {
   ok: boolean
   reason?: string
@@ -2211,6 +2211,9 @@ export interface ProfileDraftPrevious {
   description?: string
   soul?: string
   sections?: ProfileDraftSection[]
+  skills?: string[]
+  toolsets?: string[]
+  mcp_servers?: string[]
 }
 /** ``data`` is a data URL or bare base64 (PNG/JPEG/WebP, sniffed); ``clear`` deletes instead. */
 export interface ProfilesSetAssetParams {
