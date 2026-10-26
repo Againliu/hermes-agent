@@ -240,7 +240,8 @@ Memory entries are scanned for injection and exfiltration patterns before being 
 - **Shared sessions.** When several members share one session (threads by default, or `group_sessions_per_user: false`), every write goes to channel memory, yours included: other members can steer a running turn and the background review reads all of their messages.
 - **Everyone else.** When a group member who could not DM the agent asks it to remember something, the write goes to that chat's channel memory instead, and the tool result tells the model where it went. This covers the automatic background review too, so a member's self-introduction never becomes your `USER.md`.
 - **Where it loads.** A chat's channel memory enters the system prompt only in that chat's sessions, labelled as notes written by chat members. Like `MEMORY.md`, it is a frozen snapshot taken when the session starts (and again after context compression): writes during a session show up in the next one, so the prompt cache is never invalidated mid-conversation.
-- **DMs, CLI, TUI and cron** are unchanged.
+- **What counts as a DM.** Only a chat the platform proves is one-to-one: a Telegram, Signal, SMS or email conversation addressed by the sender's own id, a Slack `D…` IM, a Discord DM channel, a Mattermost direct channel, a Matrix room with at most two members, a Teams personal chat, and the equivalent 1:1 chat on the other adapters. A Slack group DM, a chat the relay delivered without a type, or any chat whose kind is unknown is treated as a shared group chat: channel memory, and no writes to your files from anyone, because everyone in it shares one session.
+- **Confirmed DMs, CLI, TUI and cron** are unchanged.
 
 ```yaml
 memory:

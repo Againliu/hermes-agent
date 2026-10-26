@@ -14,15 +14,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from gateway.private_chat import is_confirmed_private_chat
 from gateway.session_identity import replace_source
 from tools.memory_tool_channel import (
     CHANNEL_MEMORY, ChannelMemoryBinding, channel_char_limit, channel_memory_config, safe_scope)
 from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
-
-_DM_CHAT_TYPES = frozenset({"dm", "direct", "private", ""})
-
 
 def _scope_key(source: Any, mode: str) -> Optional[str]:
     """Chat key: a thread shares its parent chat's notes; ``workspace`` widens the scope to
@@ -56,16 +54,19 @@ def _sender_can_dm(runner: Any, source: Any) -> bool:
 
 def channel_memory_binding(runner: Any, source: Any, config: dict[str, Any], *,
                            shared_session: bool = False) -> Optional[ChannelMemoryBinding]:
-    """This turn's binding, or None for DMs, local sessions and when channel memory is off.
+    """This turn's binding, or None for confirmed 1:1 chats, local sessions and when channel
+    memory is off. A chat labelled "dm" without proof is bound like a group (gateway/private_chat.py).
     A session other members share never gets owner writes: they can steer its running turn and
-    its background review reads their messages, neither of which re-checks the sender."""
+    its background review reads their messages, neither of which re-checks the sender. An
+    unconfirmed "dm" counts as shared, because a "dm" session key holds every member of the chat."""
     from gateway.config import Platform
 
     cfg = channel_memory_config(config)
     if not is_truthy_value(cfg.get("enabled"), default=True):
         return None
-    if source.platform == Platform.LOCAL or str(source.chat_type or "").lower() in _DM_CHAT_TYPES:
+    if source.platform == Platform.LOCAL or is_confirmed_private_chat(source):
         return None
+    shared_session = shared_session or source.chat_type == "dm"
     key = _scope_key(source, str(cfg.get("scope") or "chat").lower())
     if key is None:
         return None
