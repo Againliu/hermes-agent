@@ -297,8 +297,9 @@ def _hook_specs(cfg: Optional[dict[str, Any]]) -> tuple[Optional[list[ShellHookS
     return _parse_hooks(cfg.get("hooks"))
 
 
-def _key(home_key: str, spec: ShellHookSpec) -> tuple[str, str, Optional[str], str]:
-    return (home_key, spec.event, spec.matcher, spec.command)
+def _key(home_key: str, spec: ShellHookSpec) -> tuple[str, str, tuple[str, ...], str]:
+    # Matcher ENTRIES, not the joined display text: "a|b" and [a, b] can match different tools.
+    return (home_key, spec.event, tuple(text for _rx, text in spec.compiled_matcher), spec.command)
 
 
 def _wire(manager: Any, home_key: str, specs: list[ShellHookSpec]) -> list[ShellHookSpec]:
