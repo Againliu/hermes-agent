@@ -4,6 +4,7 @@ Ollama / LM Studio / vLLM; the pickers, the switch path and ``hermes model`` rea
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -276,3 +277,42 @@ async def test_a_gateway_session_picking_a_detected_row_runs_on_that_server(serv
 
         _, runtime = _resolve_policy_agent_runtime(runner, restore_policy(committed["policy"]))
     assert runtime["base_url"].rstrip("/") == f"http://127.0.0.1:{srv.port}/v1"
+
+
+def _raw_server(reply) -> int:
+    """A loopback port whose every connection gets ``reply(conn)`` after the request arrives."""
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen()
+
+    def serve():
+        while True:
+            try:
+                conn, _ = sock.accept()
+            except OSError:
+                return
+            with conn:
+                conn.recv(65536)
+                try:
+                    reply(conn)
+                except OSError:
+                    pass
+
+    threading.Thread(target=serve, daemon=True).start()
+    return sock.getsockname()[1]
+
+
+def _point(monkeypatch, kind: str, port: int) -> None:
+    known = [k if k.kind != kind else detect._Kind(k.kind, k.label, port) for k in detect.KNOWN_SERVERS]
+    monkeypatch.setattr(detect, "KNOWN_SERVERS", tuple(known))
+    monkeypatch.setattr(detect, "_KIND_BY_NAME", {k.kind: k for k in known})
+
+
+def test_a_port_speaking_broken_http_does_not_fail_the_scan(servers, monkeypatch):
+    """Whatever listens on a scanned port may not speak HTTP; that port yields no row and the other
+    servers are still offered (the scan used to raise and the picker lost every row)."""
+    servers("ollama", {"/v1/models": _models(["llama3.2:3b"], "library")})
+    _point(monkeypatch, "vllm", _raw_server(lambda conn: conn.sendall(b"SSH-2.0-OpenSSH_9.6\r\n\r\n")))
+
+    assert [s.kind for s in detect.detect_local_servers(refresh=True)] == ["ollama"]
+

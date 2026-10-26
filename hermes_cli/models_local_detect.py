@@ -15,6 +15,7 @@ it is a saved provider like any other. Nothing is ever selected automatically.
 
 from __future__ import annotations
 
+import http.client
 import json
 import threading
 import time
@@ -99,13 +100,15 @@ def _get_json(url: str, timeout: float):
             if r.status != 200:
                 return None
             body = r.read(_MAX_BODY_BYTES + 1)
-    except (urllib.error.URLError, OSError, ValueError):
+    # HTTPException: whatever answers on a scanned port may speak broken HTTP (bad status line,
+    # truncated chunked body); that port yields no row instead of failing the whole scan.
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
         return None
     if len(body) > _MAX_BODY_BYTES:
         return None
     try:
         return json.loads(body)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
 
 
