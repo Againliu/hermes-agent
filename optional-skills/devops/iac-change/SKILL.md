@@ -49,8 +49,8 @@ contain secrets).
 | Tool | Drift | Saved plan / diff | Health gate | Rollback |
 | --- | --- | --- | --- | --- |
 | Terraform / OpenTofu | `terraform plan -refresh-only` | `terraform plan -out=tfplan` then `terraform show tfplan` | a follow-up `plan` reports no changes, plus the service's own signal | revert the commit and apply the prior config; a destroyed resource does not come back |
-| Pulumi | `pulumi refresh --preview-only` | `pulumi preview --diff` (`--save-plan` + `pulumi up --plan` to pin it) | `pulumi preview` shows no changes | revert and `pulumi up` the prior program |
-| CloudFormation | `aws cloudformation detect-stack-drift` | a change set (`create-change-set`, `describe-change-set`) reviewed before `execute-change-set` | stack reaches `UPDATE_COMPLETE` | automatic rollback on failure, or a change set to the prior template |
+| Pulumi | `pulumi refresh --preview-only` | `pulumi preview --diff` (`--save-plan` + `pulumi up --plan` to pin it) | `pulumi preview` shows no changes, plus the service's own signal | revert and `pulumi up` the prior program |
+| CloudFormation | `aws cloudformation detect-stack-drift` | a change set (`create-change-set`, `describe-change-set`) reviewed before `execute-change-set` | stack reaches `UPDATE_COMPLETE`, plus the service's own signal | automatic rollback on failure, or a change set to the prior template |
 | Kubernetes / kustomize | `kubectl diff -f <manifests>` | `kubectl diff -f` or `kustomize build` output | `kubectl rollout status <kind>/<name> --timeout=<t>` | `kubectl rollout undo` for a workload; re-apply the prior manifest otherwise |
 | Helm | `helm diff upgrade` (plugin) or `helm get manifest` | `helm diff upgrade` or `helm template` | `helm upgrade --wait --timeout <t>`, then the release's probes | `helm rollback <release> <revision>` |
 
@@ -80,7 +80,9 @@ Replacement markers: Terraform `-/+` or `+/-` / "must be replaced"; CloudFormati
    those resources; a missing estimate is not zero.
 6. **Staged apply.** Lowest environment first. Re-plan per environment, apply that environment's
    saved plan, observe its health gate, then promote. Stop on any gate failure (roll that stage
-   back) or on a plan that differs from the reviewed one. Production additionally needs every
+   back) or on a plan that differs from the reviewed one. A clean follow-up plan or a completed
+   stack update proves the change applied, not that the service works: every gate includes a
+   service check (health endpoint, synthetic request, error rate) read after the apply. Production additionally needs every
    earlier gate green and explicit approval for any stateful replacement. A stage with no health
    gate or no rollback is not a stage.
 
