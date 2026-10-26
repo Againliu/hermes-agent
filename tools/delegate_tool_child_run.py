@@ -609,9 +609,14 @@ def _no_fallback_note(child: Any, failure_reason: Any) -> str:
     gives subagents a chain instead of leaving the parent to conclude fallback does not exist."""
     if getattr(child, "_fallback_chain", None) or failure_reason not in _route_failure_reasons():
         return ""
-    return ("No fallback provider was tried: this subagent has no fallback chain. Subagents pinned to a "
-            "provider or model do not use the main fallback_providers; set delegation.fallback_providers in "
-            "config.yaml to give them one.")
+    note = "No fallback provider was tried: this subagent has no fallback chain."
+    # The route's owner names the setting: a caller-owned route (e.g. /review -> auxiliary.review) takes no chain
+    # from the delegation block, so pointing there would send the user to a setting that changes nothing.
+    setting = getattr(child, "_delegate_fallback_setting", "delegation.fallback_providers in config.yaml")
+    if not setting:
+        return f"{note} Its route comes from the caller that spawned it, not from the delegation settings."
+    return (f"{note} Subagents pinned to a provider or model do not use the main fallback_providers; set "
+            f"{setting} to give them one.")
 
 
 def _build_result_entry(
