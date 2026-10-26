@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from hermes_constants import get_hermes_home
 from utils import atomic_json_write
@@ -33,7 +34,18 @@ logger = logging.getLogger(__name__)
 _FILE_NAME = "usage_holds.json"
 # A weekly window is the longest plan limit in the wild; anything past it is a bad stamp.
 MAX_HOLD_SECONDS = 7 * 24 * 3600
-_LOCK = threading.Lock()
+
+
+def _endpoint_identity(base_url: Any) -> str:
+    """Scheme and host are case-insensitive; the path is not (``/TeamA/v1`` is another account)."""
+    raw = str(base_url).strip().rstrip("/")
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return raw
+    if not parts.scheme or not parts.netloc:
+        return raw
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path, parts.query, ""))
 
 
 def hold_key(provider: Any, base_url: Any = "") -> str:
@@ -42,12 +54,22 @@ def hold_key(provider: Any, base_url: Any = "") -> str:
     if not name:
         return ""
     if name == "custom" and base_url:
-        return f"custom:{str(base_url).strip().rstrip('/').lower()}"
+        return f"custom:{_endpoint_identity(base_url)}"
     return name
 
 
 def _path(home: Optional[Path] = None) -> Path:
     return (home or get_hermes_home()) / _FILE_NAME
+
+
+@contextmanager
+def _locked(home: Optional[Path] = None):
+    """Cross-process lock around a whole read-change-write of the hold file: a CLI turn and the
+    gateway each rewriting the file from their own read would otherwise drop each other's hold."""
+    from tools.skill_usage import skill_file_lock
+
+    with skill_file_lock(_path(home).with_suffix(".json.lock")):
+        yield
 
 
 def _load(home: Optional[Path] = None) -> dict[str, dict[str, Any]]:
@@ -76,7 +98,7 @@ def record_hold(
     if not key or not isinstance(until, (int, float)) or until <= now:
         return None
     until = min(float(until), now + MAX_HOLD_SECONDS)
-    with _LOCK:
+    with _locked():
         data = _live(_load(), now)
         prior = data.get(key) or {}
         hold = {
@@ -103,10 +125,15 @@ def active_hold(
     return _live(_load(home), time.time() if now is None else now).get(key)
 
 
+def any_active_hold(*, home: Optional[Path] = None) -> bool:
+    """Cheap pre-check so callers skip per-run route resolution when nothing is held."""
+    return bool(_live(_load(home), time.time()))
+
+
 def claim_notice(provider: Any, base_url: Any = "", *, home: Optional[Path] = None) -> bool:
     """True exactly once per hold: the caller that gets True posts the one notice."""
     key = hold_key(provider, base_url)
-    with _LOCK:
+    with _locked(home):
         data = _live(_load(home), time.time())
         hold = data.get(key)
         if not hold or hold.get("notified"):
@@ -119,7 +146,7 @@ def claim_notice(provider: Any, base_url: Any = "", *, home: Optional[Path] = No
 def release_hold(provider: Any, base_url: Any = "") -> None:
     """A run on *provider* succeeded: the wall is gone, stop holding work for it."""
     key = hold_key(provider, base_url)
-    with _LOCK:
+    with _locked():
         data = _load()
         if key not in data:
             return
@@ -129,9 +156,17 @@ def release_hold(provider: Any, base_url: Any = "") -> None:
 
 
 def release_after_turn(agent: Any, *, completed: bool, failed: bool) -> None:
-    """The provider answered a whole turn: any usage-limit hold on it is over."""
-    if completed and not failed and getattr(agent, "_turn_received_provider_response", False):
+    """The provider answered a whole turn: any usage-limit hold on it is over.
+
+    Bookkeeping only: a hold file that cannot be written (disk full, read-only home) is logged
+    and never replaces the turn's own result.
+    """
+    if not (completed and not failed and getattr(agent, "_turn_received_provider_response", False)):
+        return
+    try:
         release_hold(getattr(agent, "provider", ""), getattr(agent, "base_url", ""))
+    except OSError:
+        logger.warning("Could not release the usage-limit hold after a successful turn", exc_info=True)
 
 
 def record_from_plan(plan: Any, *, provider: Any, base_url: Any = "", account: str = "") -> None:
@@ -142,8 +177,15 @@ def record_from_plan(plan: Any, *, provider: Any, base_url: Any = "", account: s
     """
     if not isinstance(plan, dict) or plan.get("reason") != "rate_limit":
         return
-    record_hold(provider, until=plan.get("resume_at"), base_url=base_url, account=account,
-                source=str(plan.get("source") or ""))
+    # A window that caps one model family says nothing about the provider's other models.
+    if plan.get("scope") == "model":
+        return
+    try:
+        record_hold(provider, until=plan.get("resume_at"), base_url=base_url, account=account,
+                    source=str(plan.get("source") or ""))
+    except OSError:
+        # Never let hold bookkeeping replace the provider failure the caller is reporting.
+        logger.warning("Could not record the usage-limit hold for %s", provider, exc_info=True)
 
 
 def format_until(hold: dict[str, Any]) -> str:
