@@ -200,6 +200,11 @@ def _model_flow_custom(config):
         print(f"  API key saved to .env as {custom_key_env}")
 
     def _apply_endpoint(model: dict) -> None:
+        from utils import same_base_url_origin
+        if not same_base_url_origin(str(model.get("base_url") or current_url), effective_url):
+            # An inline key (or its legacy ``api`` alias) was entered for the previous host.
+            model.pop("api_key", None)
+            model.pop("api", None)
         model["provider"] = "custom"
         model["base_url"] = effective_url
         # A previous endpoint's key_env pointer would outrank the credential written below.
