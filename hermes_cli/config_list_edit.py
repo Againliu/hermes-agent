@@ -67,14 +67,19 @@ def _current_list(user_config: dict, key: str, default: Any) -> list:
 
 
 def _refuse_path_through_missing_list(user_config: dict, key: str) -> None:
-    """``custom_providers.0.models`` with no ``custom_providers`` must not create the mapping
-    ``custom_providers: {'0': ...}``, which every reader of that list then ignores."""
+    """``custom_providers.0.models`` must address an item that exists. An absent or ``null`` list
+    would become the mapping ``custom_providers: {'0': ...}``, which every reader of that list
+    ignores, and an index past the end of a saved list cannot be written at all."""
     from hermes_cli.config import _MISSING, _exit_invalid, _expected_container_type, _get_nested, _split_key_path
 
     parts = _split_key_path(key)
     for depth in range(1, len(parts)):
         prefix = ".".join(parts[:depth])
-        if _get_nested(user_config, prefix) is _MISSING and _expected_container_type(prefix, user_config) == "list":
+        if _expected_container_type(prefix, user_config) != "list":
+            continue
+        has_item = (isinstance(_get_nested(user_config, prefix), list)
+                    and _get_nested(user_config, ".".join(parts[:depth + 1])) is not _MISSING)
+        if not has_item:
             _exit_invalid(f"✗ '{prefix}' is a list with no item {parts[depth]!r} yet; nothing was written.")
 
 

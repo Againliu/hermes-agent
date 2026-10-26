@@ -61,6 +61,10 @@ def test_add_and_remove_edit_one_item_and_keep_comments(home, capsys):
     pytest.param(("--json", "toolsets", "{web"), "", "not valid JSON", id="bad-json"),
     pytest.param(("OPENROUTER_API_KEY", "x"), "", "environment setting", id="env-key"),
     pytest.param(("custom_providers.0.models", "x"), "", "is a list with no item '0'", id="index-into-missing-list"),
+    pytest.param(("custom_providers.0.models", "x"), "custom_providers: null\n", "is a list with no item '0'",
+                 id="index-into-null-list"),
+    pytest.param(("custom_providers.0.models", "x"), "custom_providers: []\n", "is a list with no item '0'",
+                 id="index-past-end-of-list"),
 ])
 def test_non_list_targets_are_refused_and_nothing_is_written(home, capsys, argv, saved, refusal):
     if saved:
