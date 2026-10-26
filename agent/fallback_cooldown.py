@@ -53,12 +53,18 @@ def switch_deferred_by_reset(agent, reason: FailoverReason | None, reset_at) -> 
 
 
 def _leaving_primary(agent) -> bool:
-    """False when chain-switching from an active fallback: the primary was not the failing source."""
+    """False when chain-switching from an active fallback: the primary was not the failing source.
+    A fallback on the primary's provider with another model is still a fallback, so the route must
+    match on provider AND model before an outage there may re-bench the primary."""
     if not getattr(agent, "_fallback_activated", False):
         return True
-    current_provider = (getattr(agent, "provider", "") or "").strip().lower()
-    primary_provider = ((getattr(agent, "_primary_runtime", None) or {}).get("provider") or "").strip().lower()
-    return bool(primary_provider) and current_provider == primary_provider
+    rt = getattr(agent, "_primary_runtime", None) or {}
+
+    def norm(value) -> str:
+        return str(value or "").strip().lower()
+
+    return bool(norm(rt.get("provider"))) and all(
+        norm(getattr(agent, field, "")) == norm(rt.get(field)) for field in ("provider", "model"))
 
 
 def outage_cooldown_seconds() -> float:
