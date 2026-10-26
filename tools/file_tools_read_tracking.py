@@ -6,7 +6,8 @@ stores: ``last_key``/``consecutive`` (loop detection; reset by any OTHER tool
 call), ``read_history`` (diagnostics), ``dedup`` (key -> file metadata; survives context
 compression), ``dedup_generation_reads`` (keys whose full content was served since
 the last compaction boundary; cleared on compression so one recovery read returns
-full content), ``dedup_hits`` (stub-loop breaker), ``read_timestamps``
+full content), ``dedup_continuations`` (key -> where a truncated read stopped, so its
+stub names the ``next_offset``), ``dedup_hits`` (stub-loop breaker), ``read_timestamps``
 (staleness warnings), ``read_coverage`` (per resolved path: the line ranges the
 task has paged through at one file version — contiguous pages that reach the last line
 count as a whole-file read), ``full_write_baselines`` (resolved paths whose
@@ -54,8 +55,8 @@ def _task_data(task_id: str) -> dict:
     (search_tool / tests create partial entries). Lock must be held."""
     task_data = _read_tracker.setdefault(task_id, {
         "last_key": None, "consecutive": 0, "read_history": set()})
-    for key in ("dedup", "dedup_hits", "read_timestamps", "read_coverage", "full_write_baselines",
-                "blind_patches"):
+    for key in ("dedup", "dedup_continuations", "dedup_hits", "read_timestamps", "read_coverage",
+                "full_write_baselines", "blind_patches"):
         task_data.setdefault(key, {})
     task_data.setdefault("dedup_generation_reads", set())
     return task_data
@@ -88,6 +89,7 @@ def _cap_read_tracker_data(task_data: dict) -> None:
     for key, cap in (
         ("read_history", _READ_HISTORY_CAP),
         ("dedup", _DEDUP_CAP),
+        ("dedup_continuations", _DEDUP_CAP),
         ("dedup_hits", _DEDUP_CAP),
         ("dedup_generation_reads", _DEDUP_CAP),
         ("read_timestamps", _READ_TIMESTAMPS_CAP),
