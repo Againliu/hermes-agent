@@ -18,6 +18,7 @@ import pytest
 from agent.usage_hold import record_hold
 from gateway.config import Platform
 from gateway import run_turn_usage_hold as uh
+from agent.quota_resume import resume_note
 
 
 @pytest.fixture
@@ -26,18 +27,23 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _source(user="alice", platform=Platform.TELEGRAM, chat_id="1"):
+    from gateway.session import SessionSource
+    return SessionSource(platform=platform, chat_id=chat_id, chat_type="dm", user_id=user, user_name=user)
+
+
 def _ctx(*, opted_in=True, max_attempts=2, **over):
     cfg = {"desktop": {"quota_resume": {"enabled": opted_in, "max_attempts": max_attempts}}}
     base = dict(session_key="agent:main:telegram:dm:1", session_id="sess-1", message="summarize the doc",
-                source=SimpleNamespace(platform=Platform.TELEGRAM),
-                scheduled_heartbeat=False, persist_user_display_kind=None, persist_user_message=None,
-                user_config=cfg)
+                source=_source(), scheduled_heartbeat=False, persist_user_display_kind=None,
+                persist_user_message=None, user_config=cfg)
     base.update(over)
     return SimpleNamespace(**base)
 
 
-def _runner(fallback=None):
-    return SimpleNamespace(_refresh_fallback_model=lambda: fallback)
+def _runner(fallback=None, images=()):
+    state = SimpleNamespace(persistent=SimpleNamespace(native_image_paths=list(images)))
+    return SimpleNamespace(_refresh_fallback_model=lambda: fallback, _peek_session_state=lambda _k: state)
 
 
 ROUTE = {"provider": "custom", "base_url": "http://127.0.0.1:9/v1"}
@@ -76,12 +82,12 @@ def test_opted_in_turn_is_queued_once_per_session_and_bounded(home):
 
     # A reset beyond the wait cap, a media turn, or an internal turn is never queued.
     record_hold("custom", until=now + 30 * 3600, base_url=ROUTE["base_url"], source="provider_error")
-    assert uh.queue_rerun(_ctx(), {"until": now + 30 * 3600, "provider": "custom"}) is None
+    assert uh.queue_rerun(_runner(), _ctx(), {"until": now + 30 * 3600, "provider": "custom"}) is None
     hold = {"until": now + 600, "provider": "custom"}
-    assert uh.queue_rerun(_ctx(persist_user_message=[{"type": "image_url"}]), hold) is None
-    assert uh.queue_rerun(_ctx(persist_user_display_kind="cron_delivery"), hold) is None
-    # A LOCAL one-shot has no inbound handler to re-send into: told the reset, never promised a rerun.
-    assert uh.queue_rerun(_ctx(source=SimpleNamespace(platform=Platform.LOCAL)), hold) is None
+    assert uh.queue_rerun(_runner(), _ctx(persist_user_message=[{"type": "image_url"}]), hold) is None
+    assert uh.queue_rerun(_runner(), _ctx(persist_user_display_kind="cron_delivery"), hold) is None
+    # A LOCAL one-shot has no session owner to admit a rerun into: told the reset, never promised one.
+    assert uh.queue_rerun(_runner(), _ctx(source=_source(platform=Platform.LOCAL)), hold) is None
 
 
 def test_rerun_lands_one_grace_after_the_reported_reset(home):
@@ -93,7 +99,7 @@ def test_rerun_lands_one_grace_after_the_reported_reset(home):
     plan = plan_quota_resume(failure_reason="rate_limit", error_context={"reset_at": now + 600}, now=now)
     record_from_plan(plan.to_dict(), provider="custom", base_url=ROUTE["base_url"])
     hold = active_hold("custom", ROUTE["base_url"])
-    assert uh.queue_rerun(_ctx(), hold, now=now) == pytest.approx(now + 600 + DEFAULT_GRACE_SECONDS, abs=1)
+    assert uh.queue_rerun(_runner(), _ctx(), hold, now=now) == pytest.approx(now + 600 + DEFAULT_GRACE_SECONDS, abs=1)
 
 
 class _Store:
@@ -109,14 +115,16 @@ class _Store:
 class _Adapter:
     def __init__(self):
         self.sent = []
+        self.events = []
 
     async def handle_message(self, event):
         self.sent.append(event.text)
+        self.events.append(event)
 
 
 def _rerun_runner(transcript, *, session_id="sess-1", adapter=None, running=False,
-                  route_key="agent:main:telegram:dm:1"):
-    entry = SimpleNamespace(session_id=session_id, origin=SimpleNamespace(platform="telegram"))
+                  route_key="agent:main:telegram:dm:1", origin_user="alice"):
+    entry = SimpleNamespace(session_id=session_id, origin=_source(origin_user), transport_profile=None)
 
     async def load_transcript(_sid):
         return transcript
@@ -140,7 +148,7 @@ def _rerun_runner(transcript, *, session_id="sess-1", adapter=None, running=Fals
 def _queued(home, *, due=True):
     now = time.time()
     record_hold("custom", until=now + 60, base_url=ROUTE["base_url"], source="provider_error")
-    uh.queue_rerun(_ctx(), {"until": now + 60, "provider": "custom"}, now=now)
+    uh.queue_rerun(_runner(), _ctx(), {"until": now + 60, "provider": "custom"}, now=now)
     queued_at = json.loads((home / uh.QUEUE_FILE).read_text(encoding="utf-8-sig"))["agent:main:telegram:dm:1"]["queued_at"]
     tail = [{"role": "user", "content": "summarize the doc"},
             {"role": "assistant", "content": uh.QUEUED_NOTICE, "timestamp": queued_at + 1}]
@@ -154,9 +162,9 @@ def test_rerun_fires_exactly_once_and_survives_a_restart(home):
     assert asyncio.run(uh.rerun_due(runner, [home], now=at - 7200)) == 0  # not due yet
     # A fresh pass reads only the file: nothing in memory carries the queue across a restart.
     assert asyncio.run(uh.rerun_due(runner, [home], now=at)) == 1
-    assert adapter.sent == ["/retry"]
+    assert adapter.sent == [resume_note("summarize the doc")]
     assert asyncio.run(uh.rerun_due(runner, [home], now=at)) == 0  # claimed: never re-sent
-    assert adapter.sent == ["/retry"]
+    assert adapter.sent == [resume_note("summarize the doc")]
 
 
 @pytest.mark.parametrize("change", ["new_session", "moved_on", "running", "origin_reroutes"])
@@ -179,4 +187,4 @@ def test_offline_adapter_keeps_the_rerun_pending(home):
     assert json.loads((home / uh.QUEUE_FILE).read_text(encoding="utf-8-sig"))["agent:main:telegram:dm:1"]["state"] == "pending"
     adapter = _Adapter()
     assert asyncio.run(uh.rerun_due(_rerun_runner(tail, adapter=adapter), [home], now=at)) == 1
-    assert adapter.sent == ["/retry"]
+    assert adapter.sent == [resume_note("summarize the doc")]

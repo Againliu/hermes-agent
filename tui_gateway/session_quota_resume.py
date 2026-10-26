@@ -36,7 +36,6 @@ from .method_ctx import bind_module
 _QUOTA_RESUME_POLL_SECONDS = 15.0
 
 
-_QUOTA_RESUME_NOTE_PREFIX = "[Resumed after a provider usage limit"
 # Request id of a resume dispatch: the one turn that continues a request instead of starting one.
 _QUOTA_RESUME_RID_PREFIX = "__quota_resume__"
 
@@ -52,22 +51,6 @@ def _quota_resume_config() -> tuple[bool, int]:
         _coerce_int_config_value(
             cfg.get("max_attempts"), _QUOTA_RESUME_MAX_ATTEMPTS_DEFAULT, min_value=0
         ),
-    )
-
-
-def _quota_resume_note(prompt: str) -> str:
-    """Continuation note for the resumed turn.
-
-    Carries the original request because the failed turn produced no assistant
-    message to continue from, and warns that earlier tool work may already be
-    done — the turn died after the model call, so side effects can predate it.
-    """
-    return (
-        f"{_QUOTA_RESUME_NOTE_PREFIX} — the provider's quota window has reset and "
-        "the interrupted request is being retried automatically. Some of the work may "
-        "already be complete; check the current state before redoing anything, then "
-        "finish the task. The interrupted request was:]\n\n"
-        f"{prompt}"
     )
 
 
@@ -200,6 +183,7 @@ def _maybe_fire_quota_resume(sid: str, session: dict) -> None:
     session["_quota_resume_attempt"] = int(session.get("_quota_resume_attempt", 0) or 0) + 1
     session["_quota_resume_origin"] = prompt
     rid = f"{_QUOTA_RESUME_RID_PREFIX}{int(time.time() * 1000)}"
+    from agent.quota_resume import resume_note
     try:
         _emit("status.update", sid, {
             "kind": "process",
@@ -207,7 +191,7 @@ def _maybe_fire_quota_resume(sid: str, session: dict) -> None:
         })
         _emit("message.start", sid)
         _run_prompt_submit(
-            rid, sid, session, _quota_resume_note(prompt), display_kind="auto_continue"
+            rid, sid, session, resume_note(prompt), display_kind="auto_continue"
         )
     except Exception as exc:  # health: allow BLE001 -- poller boundary; logged, turn released
         _notif_log_failure("quota-resume dispatch failed", exc)

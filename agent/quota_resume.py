@@ -73,6 +73,25 @@ DEFAULT_GRACE_SECONDS = 45.0
 _USAGE_API_EXHAUSTED_PERCENT = 99.0
 
 
+RESUME_NOTE_PREFIX = "[Resumed after a provider usage limit"
+
+
+def resume_note(prompt: str) -> str:
+    """The turn text that reruns a request a usage limit refused or killed (every surface).
+
+    Carries the original request because the failed turn produced no assistant message to
+    continue from, and warns that earlier tool work may already be done: a turn that died after
+    the model call can have side effects that predate it.
+    """
+    return (
+        f"{RESUME_NOTE_PREFIX} — the provider's quota window has reset and "
+        "the interrupted request is being retried automatically. Some of the work may "
+        "already be complete; check the current state before redoing anything, then "
+        "finish the task. The interrupted request was:]\n\n"
+        f"{prompt}"
+    )
+
+
 @dataclass(frozen=True)
 class QuotaResumePlan:
     """Whether this failure can be waited out, and until when.

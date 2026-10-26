@@ -6,18 +6,22 @@ fallback takes over; without one the gateway answers at once, naming the local r
 never calls the provider.
 
 When the user opted in to reruns at the reset (``desktop.quota_resume.enabled``, the same switch
-that arms the Desktop/TUI rerun), the refused message is queued durably per profile in
-``<HERMES_HOME>/usage_hold_reruns.json`` and re-sent once at the reset as a ``/retry`` from the
-original chat. The rules the queue keeps:
+that arms the TUI rerun), a request a usage limit refused (held here) or killed (the provider
+answered with a reported reset) is queued durably per profile in
+``<HERMES_HOME>/usage_hold_reruns.json``. The gateway is the session's owner for every route it
+serves, messaging chats and local Desktop chats alike, so this one queue covers both. At the reset
+the exact stored request runs again as one producer turn (``agent.quota_resume.resume_note``) in
+the same session, as the sender who wrote it. The rules the queue keeps:
 
 * At most once: an entry is claimed (written ``claimed``) before it is dispatched, and a claimed
   entry is never dispatched again, so a crash mid-dispatch loses the rerun instead of doubling it.
-* Only a turn whose outcome is known: the held turn never reached the provider. At the reset the
-  session must still be the same session id and its transcript tail must still be this held turn's
-  boundary row; any newer activity (a reply, ``/new``, a turn on another model) drops the rerun.
-* Bounded: one pending rerun per session (a newer held message replaces it, and the rerun's own
-  history still carries the older one), ``max_attempts`` consecutive reruns, and nothing queued
-  past ``agent.quota_resume.DEFAULT_MAX_WAIT_SECONDS``.
+* Only the request it stored: the entry carries the request text and its sender. At the reset the
+  session must still be the same session id, idle, and its latest human turn must still be that
+  text; any newer request, ``/new`` or a running turn drops the rerun.
+* Only text: a turn with native images or another attachment the re-sent text cannot carry is
+  told the reset time and never promised a rerun.
+* Bounded: one pending rerun per session (a newer refused request replaces it), ``max_attempts``
+  consecutive reruns, and nothing queued past ``agent.quota_resume.DEFAULT_MAX_WAIT_SECONDS``.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ import json
 import logging
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any, Optional
 
@@ -38,10 +43,9 @@ logger = logging.getLogger(__name__)
 QUEUE_FILE = "usage_hold_reruns.json"
 QUEUED_NOTICE = "This message is queued and runs automatically once the usage limit resets."
 TICK_SECONDS = 20.0
+PRODUCER = "usage-limit-rerun"
 # A claimed entry only remembers the attempt count for the rerun it started.
 _CLAIMED_TTL_SECONDS = 3600.0
-# The boundary row is written moments after the entry; a wider gap is a different turn.
-_BOUNDARY_SLACK_SECONDS = 300.0
 _LOCK = threading.Lock()
 
 
@@ -67,27 +71,50 @@ def _rerun_settings(user_config: Any) -> tuple[bool, int]:
     return is_truthy_value(cfg.get("enabled"), default=RERUN_ENABLED_DEFAULT), attempts
 
 
-def _rerunnable(ctx: Any) -> bool:
-    """A person's plain-text messaging-chat turn: what ``/retry`` can re-send faithfully. A LOCAL
-    route (one-shot, ``chat -q``, TUI attach) has no inbound handler to re-send into and its client
-    is gone by the reset; Desktop/TUI sessions own their rerun in ``tui_gateway``."""
+def _request_text(ctx: Any) -> Any:
+    """The user row this turn persists: what the rerun re-sends and recognizes at the reset."""
+    return ctx.persist_user_message if ctx.persist_user_message is not None else ctx.message
+
+
+def _has_native_images(runner: Any, session_key: str) -> bool:
+    """Images the native-vision path buffered for this turn: the stored text cannot carry them."""
+    peek = getattr(runner, "_peek_session_state", None)
+    state = peek(session_key) if callable(peek) else None
+    return bool(state is not None and getattr(state.persistent, "native_image_paths", None))
+
+
+def _local_owner_live(runner: Any, ctx: Any) -> bool:
+    """A local chat reruns only through the session authority that owns it (Desktop, ``serve``);
+    a one-shot or ``chat -q`` route has no owner to admit the rerun into."""
+    from gateway.session_authorities import active_authority
+
+    authority = active_authority(runner)
+    live = authority.sessions.get(ctx.source.chat_id) if authority is not None else None
+    return live is not None and live.route == ctx.session_key
+
+
+def _rerunnable(runner: Any, ctx: Any) -> bool:
+    """A person's plain-text turn in a chat the gateway can admit a turn into later."""
     from gateway.config import Platform
 
-    return bool(
-        ctx.session_key and ctx.session_id and ctx.message
-        and getattr(ctx.source, "platform", None) not in (None, Platform.LOCAL)
-        and not ctx.scheduled_heartbeat and not ctx.persist_user_display_kind
-        and isinstance(ctx.persist_user_message if ctx.persist_user_message is not None else ctx.message, str)
-    )
+    platform = getattr(ctx.source, "platform", None)
+    if not (ctx.session_key and ctx.session_id and ctx.message and platform is not None
+            and not ctx.scheduled_heartbeat and not ctx.persist_user_display_kind
+            and not getattr(ctx, "voice_turn", False) and isinstance(_request_text(ctx), str)
+            and callable(getattr(ctx.source, "to_dict", None))):
+        return False
+    if _has_native_images(runner, ctx.session_key):
+        return False
+    return platform != Platform.LOCAL or _local_owner_live(runner, ctx)
 
 
-def queue_rerun(ctx: Any, hold: dict[str, Any], *, now: Optional[float] = None) -> Optional[float]:
-    """Queue this held turn to run once at the reset. Returns the rerun time, or None when the
-    user has not opted in or a bound refuses it."""
+def queue_rerun(runner: Any, ctx: Any, hold: dict[str, Any], *, now: Optional[float] = None) -> Optional[float]:
+    """Queue this refused request to run once at the reset. Returns the rerun time, or None when
+    the user has not opted in or a bound refuses it."""
     from agent.quota_resume import DEFAULT_MAX_WAIT_SECONDS
 
     enabled, max_attempts = _rerun_settings(ctx.user_config)
-    if not enabled or not _rerunnable(ctx):
+    if not enabled or not _rerunnable(runner, ctx):
         return None
     now = time.time() if now is None else now
     # The hold's ``until`` is the quota-resume plan's time, which already adds the reset grace.
@@ -108,11 +135,30 @@ def queue_rerun(ctx: Any, hold: dict[str, Any], *, now: Optional[float] = None) 
             "session_key": ctx.session_key, "session_id": ctx.session_id, "state": "pending",
             "resume_at": resume_at, "queued_at": now, "attempt": attempt,
             "provider": str(hold.get("provider") or ""),
+            # The rerun's text and its author, never re-derived from the session at the reset.
+            "text": _rerun_request(prior, ctx), "sender": ctx.source.to_dict(),
         }
         atomic_json_write(path, data)
     logger.info("Usage limit: queued session %s to rerun at %s (attempt %d/%d)", ctx.session_key,
                 time.strftime("%H:%M", time.localtime(resume_at)), attempt, max_attempts)
     return resume_at
+
+
+def _rerun_request(prior: dict[str, Any], ctx: Any) -> str:
+    """The original request: a rerun refused again re-queues what it was rerunning, not its note."""
+    from agent.quota_resume import resume_note
+
+    text = _request_text(ctx)
+    if prior.get("state") == "claimed" and prior.get("text") and text == resume_note(prior["text"]):
+        return prior["text"]
+    return text
+
+
+def _plan_payload(hold_until: float, provider: Any, source: str, rerun_at: Optional[float]) -> dict[str, Any]:
+    out = {"eligible": True, "resume_at": hold_until, "source": source, "scheduled": rerun_at is not None}
+    if provider:
+        out["provider"] = str(provider)
+    return out
 
 
 def held_turn_result(runner: Any, ctx: Any, runtime_kwargs: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -124,21 +170,43 @@ def held_turn_result(runner: Any, ctx: Any, runtime_kwargs: dict[str, Any]) -> O
         return None
     from agent.turn_failure_copy import limit_reset_copy, provider_label_for, stamp_failure
 
-    rerun_at = queue_rerun(ctx, hold)
+    rerun_at = queue_rerun(runner, ctx, hold)
+    until = float(hold["until"])
     lead = (f"{provider_label_for(hold.get('provider')) or 'This provider'} is at its usage limit, so this "
-            f"message was not sent to it. {limit_reset_copy(float(hold['until']))}").strip()
+            f"message was not sent to it. {limit_reset_copy(until)}").strip()
     result = {
         "final_response": lead, "messages": [], "api_calls": 0, "tools": [], "failed": True,
-        "completed": False, "error": "provider usage limit hold", "failure_resets_at": float(hold["until"]),
+        "completed": False, "error": "provider usage limit hold", "failure_resets_at": until,
         # The agent never ran, so nothing flushed the user row: the gateway writes it.
         "agent_persisted": False,
+        # The terminal frame's limit card reads this (``completion_payload``).
+        "quota_resume": _plan_payload(until, hold.get("provider"), "usage_hold", rerun_at),
     }
     if rerun_at is not None:
         result["failed_turn_notice"] = QUEUED_NOTICE
     logger.info("Usage limit: held turn for session %s (%s until %s), rerun=%s", ctx.session_key,
-                hold.get("provider"), time.strftime("%H:%M", time.localtime(float(hold["until"]))),
-                rerun_at is not None)
+                hold.get("provider"), time.strftime("%H:%M", time.localtime(until)), rerun_at is not None)
     return stamp_failure(result, "rate_limit", True)
+
+
+def _sent_text_only(result: dict[str, Any]) -> bool:
+    """The provider saw this request as plain text (no image parts the stored text would drop)."""
+    users = [m for m in result.get("messages") or [] if isinstance(m, dict) and m.get("role") == "user"]
+    return not users or isinstance(users[-1].get("content"), str)
+
+
+def schedule_failed_turn(runner: Any, ctx: Any, result: Any) -> None:
+    """A turn the provider refused with a reported reset: queue its rerun like a held one and tell
+    the user (the failed-turn notice and the terminal frame's ``quota_resume.scheduled``)."""
+    plan = result.get("quota_resume") if isinstance(result, dict) and result.get("failed") else None
+    if not isinstance(plan, dict) or not plan.get("eligible") or not isinstance(plan.get("resume_at"), (int, float)):
+        return
+    rerun_at = None
+    if _sent_text_only(result):
+        rerun_at = queue_rerun(runner, ctx, {"until": plan["resume_at"], "provider": plan.get("provider")})
+    plan["scheduled"] = rerun_at is not None
+    if rerun_at is not None:
+        result["failed_turn_notice"] = QUEUED_NOTICE
 
 
 # ----------------------------------------------------------------- rerun at the reset
@@ -151,27 +219,44 @@ def _session_entry(runner: Any, session_key: str) -> Any:
         return store._entries.get(session_key)
 
 
-def _tail_is_held_turn(transcript: list[dict[str, Any]], entry: dict[str, Any]) -> bool:
-    rows = [r for r in transcript if r.get("role") in {"user", "assistant", "tool"}]
-    if len(rows) < 2 or rows[-2].get("role") != "user":
-        return False
-    tail = rows[-1]
-    if tail.get("role") != "assistant" or str(tail.get("content") or "").strip() != QUEUED_NOTICE:
-        return False
-    stamp = tail.get("timestamp")
-    queued_at = float(entry.get("queued_at") or 0)
-    return not isinstance(stamp, (int, float)) or queued_at - 5 <= stamp <= queued_at + _BOUNDARY_SLACK_SECONDS
+def _latest_request(transcript: list[dict[str, Any]]) -> Any:
+    """Content of the session's latest human turn (bookkeeping and producer rows skipped)."""
+    from agent.context_compressor import user_originated_turn_view
+
+    for row in reversed(transcript):
+        view = user_originated_turn_view(row)
+        if view is not None:
+            return view.get("content")
+    return None
+
+
+def _sender_source(runner: Any, session: Any, entry: dict[str, Any]) -> Any:
+    """The stored sender, re-pinned to the session's receiving bot (no live provenance yet)."""
+    from gateway.session import SessionSource
+    from gateway.session_identity import restore_identity
+
+    sender = entry.get("sender")
+    if not isinstance(sender, dict):
+        return None
+    try:
+        source = SessionSource.from_dict(sender)
+    except (KeyError, TypeError, ValueError):
+        return None
+    restore_identity(source, runner=runner, transport_profile=getattr(session, "transport_profile", None))
+    return source
 
 
 async def _rerun_target(runner: Any, entry: dict[str, Any]) -> tuple[str, Any, Any]:
     """``(verdict, adapter, source)``: ``run``, ``wait`` (adapter offline: keep it pending) or a
-    drop reason (the turn identity no longer holds). Every identity check runs after the last
+    drop reason (the request identity no longer holds). Every identity check runs after the last
     await, so nothing can start a newer turn between the checks and the dispatch."""
+    from gateway.config import Platform
+
     key = entry["session_key"]
     session = _session_entry(runner, key)
-    source = runner._restored_source(session) if session is not None else None
+    source = _sender_source(runner, session, entry) if session is not None else None
     if source is None:
-        return "no session or origin to reply to", None, None
+        return "no session or sender to rerun as", None, None
     async with runner._async_profile_scope_for_source(source):
         transcript = await runner.async_session_store.load_transcript(session.session_id)
     session = _session_entry(runner, key)
@@ -179,12 +264,16 @@ async def _rerun_target(runner: Any, entry: dict[str, Any]) -> tuple[str, Any, A
         return "session changed", None, None
     if runner._is_session_running(key):
         return "a newer turn is running", None, None
-    if not _tail_is_held_turn(transcript or [], entry):
+    # The request itself, or (a rerun held again) the rerun turn that carried it.
+    from agent.quota_resume import resume_note
+    if _latest_request(transcript or []) not in (entry.get("text"), resume_note(str(entry.get("text") or ""))):
         return "the conversation moved on", None, None
     if runner._session_key_for_source(source) != key:
-        # A re-sent /retry from this origin would open another session (per-delivery webhook
-        # routes): it could only answer "no previous message", never rerun this turn.
-        return "the origin no longer routes to this session", None, None
+        # The sender's message would land in another session (per-delivery routes, a re-keyed
+        # thread): it could never continue this one.
+        return "the sender no longer routes to this session", None, None
+    if source.platform == Platform.LOCAL:
+        return "run", None, source  # the owning authority's local adapter admits it
     adapter = runner._delivery_adapter_for(source)
     if adapter is None:
         return "wait", None, None
@@ -229,10 +318,59 @@ def _due(path: Path, now: float) -> list[dict[str, Any]]:
     return [v for v in live.values() if v.get("state") == "pending" and float(v.get("resume_at") or 0) <= now]
 
 
-async def rerun_due(runner: Any, homes: list[Path], *, now: Optional[float] = None) -> int:
-    """One pass over every served profile's queue: re-send each due, still-valid held turn."""
-    from gateway.platforms.event import MessageEvent, MessageType
+def _committed_sender_matches(authority: Any, session: Any, source: Any) -> bool:
+    """The authority borrows the route's last committed human envelope for a producer turn: it
+    must be the stored sender's, or the rerun would speak (and be authorized) as someone else."""
+    from gateway.session_automation import committed_route_envelope
 
+    envelope = committed_route_envelope(authority, session)
+    sender = (envelope or {}).get("source") or {}
+    return bool(envelope) and sender.get("user_id") == source.user_id and sender.get("chat_id") == source.chat_id
+
+
+async def _admit_owned(runner: Any, authority: Any, adapter: Any, source: Any, entry: dict[str, Any]) -> bool:
+    """Admit the rerun into the session authority's FIFO as a producer turn; False when refused."""
+    from agent.quota_resume import resume_note
+    from gateway.config import Platform
+    from gateway.session_automation import admit_route_wake
+
+    text = resume_note(entry["text"])
+    if source.platform == Platform.LOCAL:
+        from gateway.session_local_recovery import local_adapter_map, restore_local_session
+
+        restore_local_session(authority, source.chat_id)  # a chat a restart left closed
+        live = authority.sessions.get(source.chat_id)
+        if live is None:
+            return False
+        return await admit_route_wake(runner, local_adapter_map(authority)[Platform.LOCAL], live.source, text, PRODUCER)
+    if not _committed_sender_matches(authority, _session_entry(runner, entry["session_key"]), source):
+        return False
+    return await admit_route_wake(runner, adapter, source, text, PRODUCER)
+
+
+async def _dispatch(runner: Any, adapter: Any, source: Any, entry: dict[str, Any]) -> bool:
+    """Run the stored request once more in its session, as its sender."""
+    from agent.quota_resume import resume_note
+    from gateway.platforms.event import MessageEvent, MessageType
+    from gateway.session_authorities import active_authority
+
+    async with runner._async_profile_scope_for_source(source):
+        authority = active_authority(runner)
+        if authority is not None:
+            return await _admit_owned(runner, authority, adapter, source, entry)
+        if adapter is None:
+            return False
+        # No authority (a bare runner): the adapter's inbound path, on the receiving bot's transport
+        # so delivery and provenance resolve as they did for the sender's own message.
+        source._transport_adapter_ref = weakref.ref(adapter)
+        await adapter.handle_message(MessageEvent(
+            text=resume_note(entry["text"]), message_type=MessageType.TEXT, source=source, internal=True,
+            allow_gateway_control=False, metadata={"gateway_session_key": entry["session_key"]}))
+        return True
+
+
+async def rerun_due(runner: Any, homes: list[Path], *, now: Optional[float] = None) -> int:
+    """One pass over every served profile's queue: rerun each due, still-valid request."""
     sent = 0
     for home in homes:
         path = Path(home) / QUEUE_FILE
@@ -248,14 +386,21 @@ async def rerun_due(runner: Any, homes: list[Path], *, now: Optional[float] = No
                 continue
             if not _claim(path, entry["session_key"], entry.get("queued_at")):
                 continue
-            logger.info("Usage limit reset: re-sending the held message for %s", entry["session_key"])
-            await adapter.handle_message(MessageEvent(text="/retry", message_type=MessageType.TEXT, source=source))
+            logger.info("Usage limit reset: rerunning the held request for %s", entry["session_key"])
+            try:
+                admitted = await _dispatch(runner, adapter, source, entry)
+            except Exception:
+                logger.warning("Usage limit: the rerun for %s was refused", entry["session_key"], exc_info=True)
+                admitted = False
+            if not admitted:
+                logger.info("Usage limit: the session owner refused the rerun for %s", entry["session_key"])
+                continue
             sent += 1
     return sent
 
 
 async def rerun_watcher(runner: Any) -> None:
-    """Supervised loop: reruns held turns at their reset across every served profile."""
+    """Supervised loop: reruns held requests at their reset across every served profile."""
     from gateway.run_idle_exit import _served_homes
 
     while not runner._shutdown_event.is_set():
