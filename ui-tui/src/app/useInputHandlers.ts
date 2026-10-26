@@ -77,6 +77,34 @@ export type CtrlCComposerAction = 'clear' | 'interrupt' | 'exit'
  * in that order. A non-empty composer always wins — mid-stream, the chord
  * used to interrupt the turn even when the user was trying to dump a draft.
  */
+/**
+ * F7 (and Ctrl+R while the live-work dock is on screen) only changes the dock
+ * preview; it does not open the monitor or move composer focus. Ctrl+R is the
+ * fallback on macOS terminals that reserve the function row. With no dock
+ * showing, Ctrl+R is the shell's reverse history search. True when handled.
+ */
+function handleDockOrHistoryKey(
+  key: { ctrl: boolean; meta: boolean; shift: boolean; super?: boolean },
+  ch: string, keyName: string | undefined, draft: string): boolean {
+  if (key.meta || key.shift || key.super) {
+    return false
+  }
+
+  const ctrlR = isCtrl(key, ch, 'r')
+
+  if ((keyName === 'f7' && !key.ctrl) || (ctrlR && $agentDockVisible.get())) {
+    $agentDockCollapsed.set(!$agentDockCollapsed.get())
+
+    return true
+  }
+
+  if (ctrlR) {
+    patchOverlayState({ historySearch: { query: historySearchSeed(draft) } })
+  }
+
+  return ctrlR
+}
+
 /** Ctrl+R search starts from the single-line draft; a multi-line draft starts empty. */
 export const historySearchSeed = (draft: string) => (draft.includes('\n') ? '' : draft.trim())
 
@@ -746,20 +774,8 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
       return patchOverlayState({ sessions: true })
     }
 
-    // F7 (and Ctrl+R while the live-work dock is on screen) only changes the
-    // dock preview; it does not open the monitor or move composer focus.
-    // Ctrl+R is the fallback on macOS terminals that reserve the function row.
-    // With no dock showing, Ctrl+R is the shell's reverse history search.
-    const ctrlR = isCtrl(key, ch, 'r') && !key.meta && !key.shift && !key.super
-
-    if ((event.keypress.name === 'f7' && !key.ctrl && !key.meta && !key.shift && !key.super) || (ctrlR && $agentDockVisible.get())) {
-      $agentDockCollapsed.set(!$agentDockCollapsed.get())
-
+    if (handleDockOrHistoryKey(key, ch, event.keypress.name, cState.input)) {
       return
-    }
-
-    if (ctrlR) {
-      return patchOverlayState({ historySearch: { query: historySearchSeed(cState.input) } })
     }
 
     // Ctrl+O opens the model picker without disturbing a typed draft — the

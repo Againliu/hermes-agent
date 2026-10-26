@@ -6,7 +6,6 @@ import {
   useHasSelection,
   useSelection,
   useStdout,
-  useTerminalNotification,
   useTerminalTitle
 } from '@hermes/ink'
 import type { SessionControlSnapshot } from '@hermes/shared/gateway-events'
@@ -34,7 +33,7 @@ import type {
 } from '../gatewayTypes.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { pruneVirtualHeightCache, useVirtualHistory } from '../hooks/useVirtualHistory.js'
-import { messages, t } from '../i18n/runtime.js'
+import { t } from '../i18n/runtime.js'
 import { useT } from '../i18n/useT.js'
 import { composerPromptWidth } from '../lib/inputMetrics.js'
 import { appendTranscriptMessage, capTranscriptHistory } from '../lib/messages.js'
@@ -57,7 +56,6 @@ import { getInputSelection } from './inputSelectionStore.js'
 import { type GatewayRpc, type SlashHandler, type StateSetter, type TranscriptRow, type UiState } from './interfaces.js'
 import { requestLiveSessions } from './liveSessions.js'
 import { applyControlSnapshot } from './loopStatus.js'
-import { type AttentionKind, notificationTerminalForEnv, warpAgentPayload } from './notificationTerminal.js'
 import { $overlayState, capturePromptResponseGuard, hasSensitivePrompt, patchOverlayState } from './overlayStore.js'
 import { $goodVibesTick } from './petFlashStore.js'
 import { applyProcessSnapshot, type ProcessEntry } from './processRoster.js'
@@ -69,6 +67,7 @@ import { captureDestination, isCurrentDestination, type SubmissionDestination } 
 import { turnController } from './turnController.js'
 import { patchTurnState, useTurnSelector } from './turnStore.js'
 import { $uiState, getUiState, patchUiState } from './uiStore.js'
+import { useAttentionNotifier } from './useAttentionNotifier.js'
 import { useBatteryPoll } from './useBatteryPoll.js'
 import { useComposerState } from './useComposerState.js'
 import { useConfigSync } from './useConfigSync.js'
@@ -320,38 +319,7 @@ export function useMainApp(gw: GatewayClient) {
   const [lastTurnEndedAt, setLastTurnEndedAt] = useState<null | number>(null)
   // Bumped by the gateway `reaction` event (core-detected affection).
   const goodVibesTick = useStore($goodVibesTick)
-  const [bellOnComplete, setBellOnComplete] = useState(false)
-  const [bellOnPrompt, setBellOnPrompt] = useState(false)
-  const { notifyBell, notifyGhostty, notifyITerm2, notifyKitty } = useTerminalNotification()
-
-  // display.bell_on_complete / bell_on_prompt: BEL always (tmux bell-action, SSH), plus the
-  // detected terminal's desktop notification (OSC 9 / 99 / 777, Warp's OSC 777 agent event).
-  const notifyAttention = useCallback(
-    (kind: AttentionKind) => {
-      const terminal = notificationTerminalForEnv(process.env)
-      const message = messages().notify[kind]
-
-      notifyBell()
-
-      if (terminal === 'warp') {
-        notifyGhostty({
-          message: warpAgentPayload(kind, message, {
-            cwd: process.cwd(),
-            protocolVersion: process.env.WARP_CLI_AGENT_PROTOCOL_VERSION,
-            sessionId: $uiState.get().sid ?? ''
-          }),
-          title: 'warp://cli-agent'
-        })
-      } else if (terminal === 'ghostty') {
-        notifyGhostty({ message, title: 'Hermes' })
-      } else if (terminal === 'kitty') {
-        notifyKitty({ id: 1, message, title: 'Hermes' })
-      } else if (terminal === 'iterm2') {
-        notifyITerm2({ message, title: 'Hermes' })
-      }
-    },
-    [notifyBell, notifyGhostty, notifyITerm2, notifyKitty]
-  )
+  const { bellOnComplete, bellOnPrompt, notifyAttention, setBellOnComplete, setBellOnPrompt } = useAttentionNotifier()
 
   const ui = useStore($uiState)
   const overlay = useStore($overlayState)
@@ -1106,12 +1074,12 @@ export function useMainApp(gw: GatewayClient) {
       createServerRequestHandler({
         ringPromptBell: () => {
           if (bellOnPrompt && stdout?.isTTY) {
-            stdout.write('\x07')
+            notifyAttention('prompt')
           }
         },
         setStatus: status => patchUiState({ status })
       }),
-    [bellOnPrompt, stdout]
+    [bellOnPrompt, notifyAttention, stdout]
   )
 
   onServerRequestRef.current = onServerRequest
