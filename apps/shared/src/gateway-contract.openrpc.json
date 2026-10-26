@@ -8759,6 +8759,18 @@
           "held": {
             "title": "Held",
             "type": "boolean"
+          },
+          "holder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Holder"
           }
         },
         "required": [
@@ -8947,8 +8959,7 @@
                 "items": {
                   "enum": [
                     "steer",
-                    "replace",
-                    "reorder"
+                    "replace"
                   ],
                   "type": "string"
                 },
@@ -8984,6 +8995,18 @@
             ],
             "default": null,
             "title": "Hold Reason"
+          },
+          "reorderable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reorderable"
           }
         },
         "required": [
@@ -47986,7 +48009,7 @@
     },
     {
       "name": "prompt.hold_queued",
-      "summary": "Hold (held=true) or release a still-queued admission while a client edits it: the drain does not start a held admission (pending snapshots say hold_reason 'editing'). A hold lapses after 120 s unless renewed; prompt.replace_queued and prompt.cancel end it. Refusals: admission_started, unsupported_control, not_found.",
+      "summary": "Hold (held=true) or release a still-queued admission while a client edits it: the drain does not start a held admission (pending snapshots say hold_reason 'editing'). Each editor (connection + holder) holds separately; a hold lapses after 120 s unless renewed; prompt.replace_queued and prompt.cancel end it. Refusals: admission_started, unsupported_control, not_found.",
       "params": [
         {
           "name": "params",
@@ -48022,7 +48045,7 @@
     },
     {
       "name": "prompt.reorder_queued",
-      "summary": "Move a still-queued admission to `position` among the session's reorderable queued rows (rows whose controls include 'reorder'); other rows keep their places. Refusals: admission_started, unsupported_control, invalid_params, not_found.",
+      "summary": "Move a still-queued admission to `position` among the session's reorderable queued rows (rows listed reorderable); other rows keep their places. Refusals: admission_started, unsupported_control, invalid_params, not_found.",
       "params": [
         {
           "name": "params",

@@ -421,9 +421,10 @@ class SessionAuthority:
             text = payload.get('native_text_v1', {}).get('event', {}).get('text', '')
         from gateway.session_queued_controls import queued_controls
         from gateway.session_queue_holds import hold_reason
+        controls = queued_controls(self, row)
         return PendingAdmission(**vars(self._receipt(row)), input_id=row['request_id'], text=text,
-                                controls=queued_controls(self, row), steering=row['outcome'] == STEERING,
-                                hold_reason=hold_reason(self, row))
+                                controls=controls, steering=row['outcome'] == STEERING,
+                                hold_reason=hold_reason(self, row), reorderable='replace' in controls)
 
     def _publish_pending(self, ref):
         live = self.sessions[ref.session_id]

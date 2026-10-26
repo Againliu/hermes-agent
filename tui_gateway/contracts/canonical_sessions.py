@@ -86,10 +86,10 @@ class CanonicalSessionHandle(Result):
 class CanonicalPendingAdmission(AdmissionStatus):
     input_id: str
     text: str
-    # The queued-row verbs the owner serves for this row: ``steer`` (``prompt.steer_queued``),
-    # ``replace`` (``prompt.replace_queued``, with ``prompt.hold_queued`` while editing) and ``reorder``
-    # (``prompt.reorder_queued``). Absent from an owner that predates them.
-    controls: list[Literal['steer', 'replace', 'reorder']] | None = None
+    # The queued-row verbs the owner serves for this row: ``steer`` (``prompt.steer_queued``) and
+    # ``replace`` (``prompt.replace_queued``, with ``prompt.hold_queued`` while editing). Absent from an
+    # owner that predates them.
+    controls: list[Literal['steer', 'replace']] | None = None
     # A queued admission in transfer to the running turn (``prompt.steer_queued``): listed ``started``
     # until that turn settles it, but it returns to ``queued`` if its text never reached the turn, so a
     # client keeps it at its queued rank. Absent from an owner that predates it.
@@ -99,6 +99,8 @@ class CanonicalPendingAdmission(AdmissionStatus):
     # ``restarting``, ``paused`` (a lost turn waits to be resolved), or another admission gate's
     # reason (a provider limit, host memory). Absent when nothing holds it or from an older owner.
     hold_reason: str | None = None
+    # The owner serves ``prompt.reorder_queued`` for this row. Absent from an owner that predates it.
+    reorderable: bool | None = None
 
 
 class CanonicalPendingPrompt(Result):
@@ -270,6 +272,9 @@ class CanonicalReplaceQueuedParams(CanonicalSessionParams):
 class CanonicalHoldQueuedParams(CanonicalSessionParams):
     admission_id: str
     held: bool
+    # The editor's own token: holds are per connection and holder, so one editor's release never
+    # ends another editor's hold on the same row.
+    holder: str | None = None
 
 
 class CanonicalReorderQueuedParams(CanonicalSessionParams):
@@ -374,10 +379,11 @@ canonical_method('prompt.replace_queued', params=CanonicalReplaceQueuedParams, r
 canonical_method('prompt.hold_queued', params=CanonicalHoldQueuedParams, result=AdmissionStatus,
                  doc="Hold (held=true) or release a still-queued admission while a client edits it: "
                      "the drain does not start a held admission (pending snapshots say "
-                     "hold_reason 'editing'). A hold lapses after 120 s unless renewed; "
+                     "hold_reason 'editing'). Each editor (connection + holder) holds separately; a hold "
+                     "lapses after 120 s unless renewed; "
                      "prompt.replace_queued and prompt.cancel end it. "
                      "Refusals: admission_started, unsupported_control, not_found.")
 canonical_method('prompt.reorder_queued', params=CanonicalReorderQueuedParams, result=CanonicalReorderQueuedResult,
                  doc="Move a still-queued admission to `position` among the session's reorderable "
-                     "queued rows (rows whose controls include 'reorder'); other rows keep their "
+                     "queued rows (rows listed reorderable); other rows keep their "
                      "places. Refusals: admission_started, unsupported_control, invalid_params, not_found.")

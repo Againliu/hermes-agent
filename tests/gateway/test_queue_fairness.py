@@ -112,7 +112,7 @@ def test_a_freed_slot_goes_to_a_person_before_automation():
     runner._running_agent_count = lambda: 0
     assert _slot_blocked(authority, SimpleNamespace(session_id='cron'), live, cron)
     assert not _slot_blocked(authority, SimpleNamespace(session_id='chat'), live, person)
-    assert not _slot_blocked(authority, SimpleNamespace(session_id='cron'), live, cron)
+    assert _slot_blocked(authority, SimpleNamespace(session_id='cron'), live, cron), "the person's won slot is reserved"
 
 
 def test_an_edit_hold_lapses(monkeypatch):
@@ -122,3 +122,75 @@ def test_an_edit_hold_lapses(monkeypatch):
     assert session_queue_holds.edit_held(authority, 'a')
     monkeypatch.setattr(session_queue_holds.time, 'monotonic', lambda: 10 ** 9)
     assert not session_queue_holds.edit_held(authority, 'a'), 'a crashed editor pinned the FIFO'
+
+
+def _slot_authority(sources=None):
+    runner = SimpleNamespace(config=SimpleNamespace(max_concurrent_sessions=1), _running_agent_count=lambda: 0)
+    running = set()
+    runner._is_session_running = lambda route: route in running
+    return SimpleNamespace(runner=runner, profile_id='p', launch_sources=sources or {}), running
+
+
+def test_a_won_slot_stays_reserved_until_its_turn_runs():
+    authority, running = _slot_authority()
+    live = lambda sid: SimpleNamespace(route=sid, source=SimpleNamespace(platform=None))
+    row = {'principal_id': 'messaging:x', 'payload': {'text': 'hi'}}
+    assert not _slot_blocked(authority, SimpleNamespace(session_id='one'), live('one'), row)
+    # 'one' is still claiming (its turn is not counted as running yet): the one slot is taken.
+    assert _slot_blocked(authority, SimpleNamespace(session_id='two'), live('two'), row), 'two drains took one slot'
+    running.add('one')
+    authority.runner._running_agent_count = lambda: 1
+    assert _slot_blocked(authority, SimpleNamespace(session_id='two'), live('two'), row)
+    running.clear()
+    authority.runner._running_agent_count = lambda: 0
+    assert not _slot_blocked(authority, SimpleNamespace(session_id='two'), live('two'), row)
+
+
+def test_a_forwarded_a2a_turn_yields_a_freed_slot_to_a_person():
+    from gateway.config import Platform
+    authority, _ = _slot_authority({'a2a-s': 'a2a', 'chat': 'tui'})
+    live = lambda sid: SimpleNamespace(route=sid, source=SimpleNamespace(platform=Platform.LOCAL))
+    # A forward submits as the hosting local principal with plain text: only the launch source says a2a.
+    forwarded = {'principal_id': 'local:owner', 'payload': {'text': 'peer asks'}, 'target_session_id': 'a2a-s'}
+    person = {'principal_id': 'local:owner', 'payload': {'text': 'hi'}, 'target_session_id': 'chat'}
+    authority.runner._running_agent_count = lambda: 1
+    assert _slot_blocked(authority, SimpleNamespace(session_id='a2a-s'), live('a2a-s'), forwarded)
+    assert _slot_blocked(authority, SimpleNamespace(session_id='chat'), live('chat'), person)
+    authority.runner._running_agent_count = lambda: 0
+    assert _slot_blocked(authority, SimpleNamespace(session_id='a2a-s'), live('a2a-s'), forwarded)
+    assert not _slot_blocked(authority, SimpleNamespace(session_id='chat'), live('chat'), person)
+
+
+@pytest.mark.asyncio
+async def test_one_editor_closing_never_releases_another_editors_hold(tmp_path, monkeypatch):
+    from gateway.session_queue_holds import edit_held
+    db, authority = _authority(tmp_path, monkeypatch)
+    interactive(db)
+    monkeypatch.setattr(authority, '_schedule', lambda ref: None)
+    with db:
+        head = await _submit(authority, 'head')
+        first, second = _connection(authority), _connection(authority)
+        for conn in (first, second):
+            assert 'error' not in await _call(conn, 'prompt.hold_queued', admission_id=head.admission_id, held=True)
+        assert 'error' not in await _call(first, 'prompt.hold_queued', admission_id=head.admission_id, held=False)
+        assert edit_held(authority, head.admission_id), "the first editor released the second editor's hold"
+
+
+@pytest.mark.asyncio
+async def test_a_hold_waits_for_a_claim_in_flight_and_then_refuses(tmp_path, monkeypatch):
+    from hermes_state_runtime import claim_session_input
+    db, authority = _authority(tmp_path, monkeypatch)
+    interactive(db)
+    monkeypatch.setattr(authority, '_schedule', lambda ref: None)
+    with db:
+        head = await _submit(authority, 'head')
+        gate = authority.sessions['s'].claim_gate
+        await gate.acquire()  # a drain between its head check and its claim commit
+        hold = asyncio.ensure_future(_call(_connection(authority), 'prompt.hold_queued',
+                                           admission_id=head.admission_id, held=True))
+        for _ in range(20):  # let the hold reach the gate
+            await asyncio.sleep(0)
+        claim_session_input(db, epoch=authority.epoch, session_id='s')
+        gate.release()
+        answer = await asyncio.wait_for(hold, 30)
+    assert 'error' in answer, 'a hold was accepted on a row the drain had already claimed'

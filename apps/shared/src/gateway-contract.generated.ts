@@ -5005,9 +5005,10 @@ export interface CanonicalPendingAdmission {
   execution_generation: number | null
   input_id: string
   text: string
-  controls?: ('steer' | 'replace' | 'reorder')[] | null
+  controls?: ('steer' | 'replace')[] | null
   steering?: boolean | null
   hold_reason?: string | null
+  reorderable?: boolean | null
 }
 export interface CanonicalPendingPrompt {
   kind: 'approval' | 'clarify'
@@ -5223,6 +5224,7 @@ export interface CanonicalHoldQueuedParams {
   session_id: string
   admission_id: string
   held: boolean
+  holder?: string | null
 }
 export interface CanonicalReorderQueuedParams {
   profile?: string | null
@@ -6840,11 +6842,11 @@ export interface CanonicalRpcMethods {
   'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
   /** Retire a queued admission; a started one is interrupted in the same call. */
   'prompt.cancel': { params: PromptCancelParams; result: AdmissionStatus }
-  /** Hold (held=true) or release a still-queued admission while a client edits it: the drain does not start a held admission (pending snapshots say hold_reason 'editing'). A hold lapses after 120 s unless renewed; prompt.replace_queued and prompt.cancel end it. Refusals: admission_started, unsupported_control, not_found. */
+  /** Hold (held=true) or release a still-queued admission while a client edits it: the drain does not start a held admission (pending snapshots say hold_reason 'editing'). Each editor (connection + holder) holds separately; a hold lapses after 120 s unless renewed; prompt.replace_queued and prompt.cancel end it. Refusals: admission_started, unsupported_control, not_found. */
   'prompt.hold_queued': { params: CanonicalHoldQueuedParams; result: AdmissionStatus }
   /** Current receipt of one admission the caller submitted (or controls). */
   'prompt.receipt': { params: PromptReceiptParams; result: PromptReceiptResult }
-  /** Move a still-queued admission to `position` among the session's reorderable queued rows (rows whose controls include 'reorder'); other rows keep their places. Refusals: admission_started, unsupported_control, invalid_params, not_found. */
+  /** Move a still-queued admission to `position` among the session's reorderable queued rows (rows listed reorderable); other rows keep their places. Refusals: admission_started, unsupported_control, invalid_params, not_found. */
   'prompt.reorder_queued': { params: CanonicalReorderQueuedParams; result: CanonicalReorderQueuedResult }
   /** Cancel a still-queued admission and admit the edited prompt as a new admission at the back of the FIFO (in the replaced admission's place when the profile sets display.queue_edit_keeps_place), in one write bound to the replaced admission; any edit hold on it ends. Refusals: admission_started, admission_conflict (the submission_id replaced another admission), queue_full, unsupported_control, not_found. */
   'prompt.replace_queued': { params: CanonicalReplaceQueuedParams; result: AdmissionStatus }

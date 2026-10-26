@@ -5,7 +5,7 @@ Steer and Edit consume the queued row inside one owner write transaction, so it 
 its own queued turn, and a retry replays the recorded outcome. An edit joins the FIFO tail unless the
 profile opts into keeping its place (``display.queue_edit_keeps_place``), and a held row is never
 claimed (gateway/session_queue_holds.py). A reorder permutes the places of the session's reorderable
-rows only (``queued_controls``); automation rows keep theirs.
+rows only (rows offered ``replace``, published as ``reorderable``); automation rows keep theirs.
 
 A steer is a TRANSFER to the running claim, not an outcome: the row goes queued -> terminal
 ``steering`` bound to the claim's generation, and settles with that claim (``steered`` once the claim
@@ -66,7 +66,7 @@ def queued_controls(authority, row):
             or (payload.get('display_v1') or {}).get('kind') == 'hidden'
             or not _interactive(authority, row['target_session_id'])):
         return []
-    return ['steer', 'replace', 'reorder']
+    return ['steer', 'replace']
 
 
 def pending_rows(authority, ref):
@@ -276,10 +276,15 @@ async def _reorderable(connection, ref, admission_id, verb):
 
 async def hold_queued(connection, ref, params):
     """Hold a queued admission while a client edits it (``held``), or release it. The drain parks on
-    a held head (it never starts mid-edit); the hold lapses after ``EDIT_HOLD_S``."""
+    a held head (it never starts mid-edit); the hold lapses after ``EDIT_HOLD_S``. Each editor
+    (this connection + its optional ``holder`` token) holds on its own, so closing one editor never
+    releases another's hold. Checked and set under the session's ``claim_gate``: a drain between its
+    head check and its claim commit finishes first, and this answers ``admission_started``."""
     authority, admission_id = connection.authority, params['admission_id']
-    receipt = await _reorderable(connection, ref, admission_id, 'replace')
-    set_edit_hold(authority, admission_id, params.get('held') is True)
+    holder = (id(connection), params.get('holder'))
+    async with authority.sessions[ref.session_id].claim_gate:
+        receipt = await _reorderable(connection, ref, admission_id, 'replace')
+        set_edit_hold(authority, admission_id, params.get('held') is True, holder)
     authority._publish_pending(ref)
     if params.get('held') is not True:
         authority._schedule(ref)  # a drain parked on this head claims it now
@@ -289,9 +294,9 @@ async def hold_queued(connection, ref, params):
 async def reorder_queued(connection, ref, params):
     """Move a queued admission to ``position`` among the session's reorderable queued rows."""
     authority, admission_id = connection.authority, params['admission_id']
-    await _reorderable(connection, ref, admission_id, 'reorder')
+    await _reorderable(connection, ref, admission_id, 'replace')
     rows = await asyncio.to_thread(list_session_admissions, authority.db, session_id=ref.session_id)
-    movable = [row['admission_id'] for row in rows if 'reorder' in queued_controls(authority, row)]
+    movable = [row['admission_id'] for row in rows if 'replace' in queued_controls(authority, row)]
     from gateway.session_runtime_workers import tracked_write
     from hermes_state_runtime_queue import reorder_queued_input
     order = await tracked_write(authority, partial(
