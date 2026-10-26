@@ -36,19 +36,24 @@ def _lines(path: Path) -> int | None:
         return sum(1 for _ in fh)
 
 
+def _paths(output: str) -> list[str]:
+    """Split ``-z`` output: raw paths, unlike the C-quoted display lines core.quotePath produces."""
+    return [p for p in output.split("\0") if p]
+
+
 def churn(repo: Path, since: str | None, scope: str | None) -> Counter:
-    args = ["log", "--format=", "--name-only", "--no-renames"]
+    args = ["log", "-z", "--format=", "--name-only", "--no-renames"]
     if since:
         args.append(f"--since={since}")
     if scope:
         args += ["--", scope]
-    return Counter(line for line in _git(repo, *args).splitlines() if line.strip())
+    return Counter(_paths(_git(repo, *args)))
 
 
 def rank(repo: Path, since: str | None, top: int, scope: str | None) -> dict:
     counts = churn(repo, since, scope)
     live = [(p, n, _lines(repo / p)) for p, n in counts.most_common() if (repo / p).is_file()]
-    tracked = _git(repo, "ls-files", *(["--", scope] if scope else [])).splitlines()
+    tracked = _paths(_git(repo, "ls-files", "-z", *(["--", scope] if scope else [])))
     sizes = sorted(((p, _lines(repo / p)) for p in tracked), key=lambda t: t[1] or 0, reverse=True)
     return {
         "repo": str(repo),

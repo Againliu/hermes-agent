@@ -46,6 +46,15 @@ def test_ranks_live_files_by_churn_and_size(churn_rank, repo):
     assert "blob.bin" not in {r["path"] for r in result["by_size"]}
 
 
+def test_non_ascii_paths_are_ranked_under_default_quotepath(churn_rank, repo):
+    (repo / "café.py").write_text("c = 3\n" * 700, encoding="utf-8")
+    _git(repo, "add", "café.py")
+    _git(repo, "commit", "-q", "-m", "accent")
+    result = churn_rank.rank(repo, since=None, top=10, scope=None)
+    assert {"path": "café.py", "commits": 1, "lines": 700} in result["by_churn"]
+    assert result["by_size"][0] == {"path": "café.py", "lines": 700, "commits": 1}
+
+
 def test_not_a_repo_exits_2(churn_rank, tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     assert churn_rank.main(["--repo", str(tmp_path)]) == 2
