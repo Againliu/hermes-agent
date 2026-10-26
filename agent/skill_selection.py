@@ -1,297 +1,251 @@
-"""Per-turn skill candidate ranking.
+"""Per-turn skill shortlist: up to three skills that fit THIS request, named on the current user message.
 
-The system-prompt catalog stays byte-stable for the life of a conversation.
-When ``skills.selection`` is ``shortlist``, this module annotates only the
-current user message (API copy). Durable persistence keeps the original text
-via the existing ``persist_user_message`` seam.
+The ``<available_skills>`` index lives in the cached system prompt with descriptions clipped to 60
+characters, and picking from it is the model's judgment alone; on a large library the model follows
+the task and skips the scan (#113469). With ``skills.selection: shortlist`` every turn ranks the
+request against the skills that index already offers — their full description plus optional
+``metadata.hermes.situations`` phrases, which only this module reads and the index never renders —
+and names at most three on the per-turn note channel (the ``api_content`` sidecar), behind the cached
+prefix. It suggests; it never loads a skill.
+
+Precision beats recall here: a wrong line costs every turn's attention, a missing one costs nothing
+the catalog did not already cost. So small talk, slash/injected messages and pasted blobs get no
+line, a candidate must share two content words with the request (or one strong one), and a
+suggestion set is shown once per session. Measured by ``evals/skill_selection``.
 """
-
 from __future__ import annotations
 
+import json
 import logging
 import re
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Iterable, Optional
+
+from agent.message_content import flatten_message_text
 
 logger = logging.getLogger(__name__)
 
 SELECTION_CATALOG = "catalog"
 SELECTION_SHORTLIST = "shortlist"
-SELECTION_OFF = "off"
-_VALID_MODES = frozenset({SELECTION_CATALOG, SELECTION_SHORTLIST, SELECTION_OFF})
-DEFAULT_SELECTION_MODE = SELECTION_CATALOG
-DEFAULT_SELECTION_LIMIT = 12
-MAX_SELECTION_LIMIT = 40
-CANDIDATE_OPEN = "<skill_candidates>"
-CANDIDATE_CLOSE = "</skill_candidates>"
+MAX_CANDIDATES = 3
+# A runner-up below this share of the leader's score is noise riding on one shared word.
+RUNNER_UP_SCORE_RATIO = 0.5
+_MIN_CONTENT_TERMS = 2
+_PASTE_HEAD_TAIL_CHARS = 300
+_PASTE_THRESHOLD_CHARS = 1500
 
-_TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
-_STOPWORDS = frozenset({
-    "the", "and", "for", "are", "you", "your", "this", "that", "with", "from",
-    "have", "been", "then", "than", "they", "them", "was", "were", "will",
-    "just", "into", "also", "only", "over", "such", "when", "what", "which",
-    "while", "about", "into", "onto", "each", "very", "more", "some", "able",
-})
+NOTE_PREFIX = ("[System: Skills that may fit this request — suggestions only. Load one with "
+               "skill_view(name) if it applies; otherwise ignore this note.")
+_ROW = "    - "
 
-
-def _skills_section() -> Dict[str, Any]:
-    from agent.skill_utils import _skills_cfg
-    cfg = _skills_cfg()
-    return cfg if isinstance(cfg, dict) else {}
-
-
-def resolve_selection_mode(skills_cfg: Optional[Dict[str, Any]]) -> str:
-    raw = ""
-    if isinstance(skills_cfg, dict):
-        raw = str(skills_cfg.get("selection") or "").strip().lower()
-    return raw if raw in _VALID_MODES else DEFAULT_SELECTION_MODE
-
-
-def resolve_selection_limit(skills_cfg: Optional[Dict[str, Any]]) -> int:
-    raw = DEFAULT_SELECTION_LIMIT
-    if isinstance(skills_cfg, dict) and skills_cfg.get("selection_limit") is not None:
-        try:
-            raw = int(skills_cfg.get("selection_limit"))
-        except (TypeError, ValueError):
-            raw = DEFAULT_SELECTION_LIMIT
-    return max(1, min(MAX_SELECTION_LIMIT, raw))
+_ASCII_RE = re.compile(r"[A-Za-z0-9]+")
+_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]+")
+_FENCE_RE = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
+_SKIPPED_LINE_RE = re.compile(r"^(?:\s*>|    |\t)")  # quoted reply, indented code/log
+# Function words plus request filler every skill description shares ("use when", "help me").
+_STOPWORDS = frozenset("""
+a about after again all also am an and any are as at be been before being both but by can could
+did do does doing done for from get got had has have having he her here hers him his how i if in
+into is it its just let lets like me more most my no not now of off on once only or other our out
+over please same she should so some such than that the their them then there these they this those
+through to too under until up us very was we were what when where which while who whom why will
+with would you your yours yourself hi hello hey thanks thank ok okay yes yeah sure cool great nice
+lol good morning evening night today tomorrow tonight weekend day week time really think know want
+need help use using used make made new one two way thing things something anything stuff lot bit
+skill skills user users task tasks work working tell said say ask asks question answer go going
+""".split())
 
 
-def extract_skill_triggers(frontmatter: Dict[str, Any]) -> List[str]:
-    raw = frontmatter.get("triggers") if isinstance(frontmatter, dict) else None
-    if raw is None and isinstance(frontmatter, dict):
-        metadata = frontmatter.get("metadata")
-        hermes = metadata.get("hermes") if isinstance(metadata, dict) else None
-        raw = hermes.get("triggers") if isinstance(hermes, dict) else None
-    if isinstance(raw, str):
-        raw = [raw]
-    if not isinstance(raw, list):
+def selection_mode(skills_cfg: Optional[dict[str, Any]]) -> str:
+    """``shortlist`` or the legacy ``catalog`` (unknown values fall back to ``catalog``)."""
+    raw = str(skills_cfg.get("selection") or "").strip().lower() if isinstance(skills_cfg, dict) else ""
+    return SELECTION_SHORTLIST if raw == SELECTION_SHORTLIST else SELECTION_CATALOG
+
+
+def _terms(text: str) -> list[str]:
+    """Stemmed ASCII content words plus CJK character bigrams (a lone CJK character stays a unigram).
+    CJK has no spaces between words; bigrams keep a two-character word like 周报 one unit where
+    per-character tokens would match any text sharing a common character."""
+    from tools.tool_search_catalog import _stem
+    out = [_stem(w) for w in (t.lower() for t in _ASCII_RE.findall(text)) if len(w) > 1 and w not in _STOPWORDS]
+    for run in _CJK_RUN_RE.findall(text):
+        out += [run] if len(run) == 1 else [run[i:i + 2] for i in range(len(run) - 1)]
+    return out
+
+
+def request_text(user_message: Any) -> str:
+    """The part of the turn that states the ask: fenced code, quoted replies and indented
+    code/log lines are pasted material, not the request. A long residue is a pasted blob whose ask
+    sits at its head or tail."""
+    raw = user_message if isinstance(user_message, str) else flatten_message_text(user_message)
+    text = _FENCE_RE.sub(" ", raw)
+    text = "\n".join(line for line in text.splitlines() if not _SKIPPED_LINE_RE.match(line)).strip()
+    if len(text) > _PASTE_THRESHOLD_CHARS:
+        text = text[:_PASTE_HEAD_TAIL_CHARS] + "\n" + text[-_PASTE_HEAD_TAIL_CHARS:]
+    return text
+
+
+def _explicit_invocation(text: str, names: Iterable[str]) -> bool:
+    """A slash command, an injected ``[...]`` note, or a request naming a skill outright (hyphenated
+    or ``plugin:skill`` names only — single words like ``plan`` are ordinary vocabulary)."""
+    if text.startswith(("/", "[")):
+        return True
+    lowered = text.lower()
+    return any(("-" in n or ":" in n) and re.search(rf"(?<![\w-]){re.escape(n.lower())}(?![\w-])", lowered)
+               for n in names)
+
+
+class _Doc:
+    """One skill's search document: name x3, situations x2, full description x1. ``name`` and
+    ``_tokens`` are the duck type ``tools.tool_search_catalog._corpus_stats`` reads; ``strong`` holds
+    the name and situation terms, the words that say what the skill is FOR."""
+    __slots__ = ("_tokens", "name", "strong")
+
+    def __init__(self, name: str, description: str, situations: tuple[str, ...]):
+        name_terms, situation_terms = _terms(re.sub(r"[-_:]", " ", name)), _terms(" ".join(situations))
+        self.name = name
+        self._tokens = name_terms * 3 + situation_terms * 2 + _terms(description)
+        self.strong = frozenset(name_terms + situation_terms)
+
+
+@lru_cache(maxsize=8)
+def _corpus(docs: tuple[tuple[str, str, tuple[str, ...]], ...]):
+    from tools.tool_search_catalog import _corpus_stats
+    corpus = [_Doc(*doc) for doc in docs]
+    return corpus, _corpus_stats(corpus)  # type: ignore[arg-type]  # duck-typed CatalogEntry
+
+
+def shortlist(query: Any, docs: tuple[tuple[str, str, tuple[str, ...]], ...]) -> list[str]:
+    """At most :data:`MAX_CANDIDATES` skill names for ``query`` from ``docs`` (``(name, full
+    description, situations)``), best first; ``[]`` when nothing clears the admission gate."""
+    text = request_text(query)
+    if not docs or not text or _explicit_invocation(text, (n for n, _, _ in docs)):
         return []
-    out: List[str] = []
-    seen: set[str] = set()
-    for item in raw:
-        text = str(item).strip()
-        key = text.lower()
-        if text and key not in seen:
-            seen.add(key)
-            out.append(text)
-    return out
+    query_terms = _terms(text)
+    if len(set(query_terms)) < _MIN_CONTENT_TERMS:
+        return []
+    from tools.tool_search_catalog import _bm25_score
+    corpus, stats = _corpus(docs)
+    scored = sorted(((_bm25_score(query_terms, d._tokens, *stats), d) for d in corpus),
+                    key=lambda row: (-row[0], row[1].name))
+    # Admission (head-3 only): two distinct shared content words, or one that sits in the skill's
+    # name or situations. One shared description word ("explain", "answer") is how small talk and
+    # general questions reached a skill in the eval.
+    picked = []
+    for score, doc in scored[:MAX_CANDIDATES]:
+        anchors = set(query_terms) & set(doc._tokens)
+        if score > 0 and (len(anchors) >= 2 or anchors & doc.strong) and (
+                not picked or score >= RUNNER_UP_SCORE_RATIO * scored[0][0]):
+            picked.append(doc.name)
+    return picked
 
 
-def _flatten_user_text(user_message: Any) -> str:
-    if isinstance(user_message, str):
-        return user_message
-    if isinstance(user_message, list):
-        parts: List[str] = []
-        for block in user_message:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                text = block.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-        return "\n".join(parts)
-    return ""
+# ── live wiring ──────────────────────────────────────────────────────────────
 
 
-def _stems(token: str) -> set[str]:
-    token = token.lower()
-    out = {token}
-    if token.endswith("ing") and len(token) > 5:
-        stem = token[:-3]
-        out.add(stem)
-        if not stem.endswith("e"):
-            out.add(stem + "e")
-    if token.endswith("ed") and len(token) > 4:
-        out.add(token[:-2])
-        out.add(token[:-1])
-    if token.endswith("s") and len(token) > 3 and not token.endswith("ss"):
-        out.add(token[:-1])
-    return out
-
-
-def tokenize(text: str, *, min_len: int = 3) -> set[str]:
-    stems: set[str] = set()
-    for raw in _TOKEN_RE.findall(text or ""):
-        token = raw.lower()
-        if len(token) < min_len or token in _STOPWORDS:
-            continue
-        stems.update(_stems(token))
-    return stems
-
-
-def _trigger_hit(query_lower: str, triggers: Sequence[str]) -> bool:
-    for trigger in triggers:
-        phrase = str(trigger).strip().lower()
-        if phrase and phrase in query_lower:
-            return True
-    return False
-
-
-def score_skill_entry(query_tokens: set[str], query_lower: str, entry: Dict[str, Any]) -> Tuple[int, bool]:
-    name = str(entry.get("name") or "").strip()
-    if not name:
-        return 0, False
-    description = str(entry.get("description") or "")
-    triggers = entry.get("triggers") or []
-    via_trigger = _trigger_hit(query_lower, triggers if isinstance(triggers, (list, tuple)) else [])
-    name_tokens = tokenize(name.replace("-", " "))
-    desc_tokens = tokenize(description, min_len=4)
-    score = 0
-    if name.lower() in query_lower:
-        score += 8
-    score += 3 * len(query_tokens & name_tokens)
-    score += len(query_tokens & desc_tokens)
-    if via_trigger:
-        score += 5
-    return score, via_trigger
-
-
-def rank_skill_candidates(
-    query: str,
-    entries: Iterable[Dict[str, Any]],
-    limit: int = DEFAULT_SELECTION_LIMIT,
-) -> List[Dict[str, Any]]:
-    query_lower = (query or "").lower()
-    query_tokens = tokenize(query)
-    ranked: List[Tuple[int, str, Dict[str, Any]]] = []
-    for entry in entries:
-        score, via_trigger = score_skill_entry(query_tokens, query_lower, entry)
-        if score <= 0:
-            continue
-        name = str(entry.get("name") or "").strip()
-        ranked.append((score, name, {
-            "name": name,
-            "description": str(entry.get("description") or "").strip(),
-            "via_trigger": via_trigger,
-            "score": score,
-        }))
-    ranked.sort(key=lambda row: (-row[0], row[1]))
-    cap = max(1, min(MAX_SELECTION_LIMIT, int(limit or DEFAULT_SELECTION_LIMIT)))
-    return [row[2] for row in ranked[:cap]]
-
-
-def format_candidate_overlay(candidates: Sequence[Dict[str, Any]]) -> str:
-    if not candidates:
-        return ""
-    lines = [
-        CANDIDATE_OPEN,
-        "These skills look relevant to this turn. Load each that applies with skill_view(name) before proceeding:",
-    ]
-    for row in candidates:
-        name = row.get("name") or ""
-        desc = row.get("description") or ""
-        lines.append(f"- {name}: {desc}" if desc else f"- {name}")
-    lines.append(CANDIDATE_CLOSE)
-    return "\n".join(lines)
-
-
-def _append_overlay(user_message: Any, overlay: str) -> Any:
-    if isinstance(user_message, str):
-        return f"{user_message.rstrip()}\n\n{overlay}"
-    if isinstance(user_message, list):
-        return [*(user_message), {"type": "text", "text": overlay}]
-    return user_message
-
-
-def collect_skill_index_entries() -> List[Dict[str, Any]]:
-    """Visible skill name/description/trigger tuples for the active profile."""
-    from agent.skill_utils import (
-        extract_skill_description,
-        get_all_skills_dirs,
-        get_disabled_skill_names,
-        get_project_skills_dirs,
-        iter_skill_index_files,
-        parse_frontmatter,
-        skill_matches_environment,
-        skill_matches_platform,
-    )
-
-    disabled = get_disabled_skill_names()
-    entries: List[Dict[str, Any]] = []
-    seen: set[str] = set()
-    roots = list(get_all_skills_dirs())
+@lru_cache(maxsize=4096)
+def _skill_file_doc(path: str, _sig: tuple) -> tuple[tuple[str, ...], str, tuple[str, ...]]:
+    """``(names it answers to, full description, situations)`` for one SKILL.md, cached per file signature."""
+    from agent.skill_utils import _hermes_metadata, _normalize_skill_description, parse_frontmatter
     try:
-        roots.extend(get_project_skills_dirs())
-    except Exception:
-        pass
+        frontmatter, _ = parse_frontmatter(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError):
+        return (), "", ()
+    meta = _hermes_metadata(frontmatter)
+    phrases: list[str] = []
+    for key in ("situations", "triggers"):  # retrieval-only: the index never renders either
+        raw = meta.get(key, frontmatter.get(key))
+        phrases += [str(p).strip() for p in ([raw] if isinstance(raw, str) else raw or []) if str(p).strip()]
+    names = (str(frontmatter.get("name") or "").strip(), Path(path).parent.name)
+    return tuple(n for n in names if n), _normalize_skill_description(frontmatter), tuple(phrases)
+
+
+def skill_docs_from_roots(roots: Iterable[Path], index: dict[str, str]) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    """A document for every skill ``index`` (``{name: index row}``) offers. Skills not found under
+    ``roots`` (plugin skills) fall back to their index row."""
+    from agent.skill_utils import iter_skill_index_files
+    from utils import file_signature
+    found: dict[str, tuple[str, tuple[str, ...]]] = {}
     for root in roots:
         if not root.is_dir():
             continue
         for skill_file in iter_skill_index_files(root, "SKILL.md"):
             try:
-                frontmatter, _ = parse_frontmatter(skill_file.read_text(encoding="utf-8"))
-            except Exception:
+                sig = tuple(file_signature(skill_file.stat()))
+            except OSError:
                 continue
-            if not skill_matches_platform(frontmatter) or not skill_matches_environment(frontmatter):
-                continue
-            name = str(frontmatter.get("name") or skill_file.parent.name).strip()
-            if not name or name in disabled or name in seen:
-                continue
-            seen.add(name)
-            entries.append({
-                "name": name,
-                "description": extract_skill_description(frontmatter),
-                "triggers": extract_skill_triggers(frontmatter),
-            })
-    return entries
+            file_names, desc, situations = _skill_file_doc(str(skill_file), sig)
+            for n in file_names:
+                found.setdefault(n, (desc, situations))
+    return tuple(
+        (name, *found.get(name, (row.split(": ", 1)[1] if ": " in row else "", ())))
+        for name, row in sorted(index.items())
+    )
 
 
-def apply_turn_skill_selection(
-    user_message: Any,
-    persist_user_message: Any,
-    *,
-    skills_cfg: Optional[Dict[str, Any]] = None,
-    catalog: Optional[Sequence[Dict[str, Any]]] = None,
-) -> Tuple[Any, Any, List[Dict[str, Any]]]:
-    """Return ``(api_user_message, persist_user_message, candidates)``.
-
-    Catalog/off modes and empty shortlists are no-ops: persist stays untouched
-    so existing transcript semantics do not change. When a shortlist is applied
-    and persist was omitted, persist becomes the original user content so the
-    durable transcript and ``original_user_message`` stay clean.
-    """
-    if CANDIDATE_OPEN in _flatten_user_text(user_message):
-        return user_message, persist_user_message, []
-    cfg = skills_cfg if skills_cfg is not None else _skills_section()
-    if resolve_selection_mode(cfg) != SELECTION_SHORTLIST:
-        return user_message, persist_user_message, []
-    query = _flatten_user_text(user_message)
-    if not query.strip():
-        return user_message, persist_user_message, []
-    try:
-        entries = list(catalog) if catalog is not None else collect_skill_index_entries()
-        candidates = rank_skill_candidates(query, entries, resolve_selection_limit(cfg))
-    except Exception:
-        logger.debug("skill selection: catalog ranking failed", exc_info=True)
-        return user_message, persist_user_message, []
-    overlay = format_candidate_overlay(candidates)
-    if not overlay:
-        return user_message, persist_user_message, []
-    clean = persist_user_message if persist_user_message is not None else user_message
-    return _append_overlay(user_message, overlay), clean, candidates
+def _note(names: list[str], index: dict[str, str]) -> str:
+    return NOTE_PREFIX + "\n" + "\n".join(_ROW + (index.get(n, "").strip()[2:] or n) for n in names) + "]"
 
 
-def _message_tool_names(messages: Sequence[Any]) -> set[str]:
-    names: set[str] = set()
-    for msg in messages or []:
-        if not isinstance(msg, dict):
+def _shown_sets(conversation_history: Any) -> set[frozenset]:
+    """Every suggestion set already delivered in this session, read back from the transcript: a
+    gateway builds a fresh agent per turn, so agent state alone would repeat the line."""
+    shown: set[frozenset] = set()
+    for msg in conversation_history or []:
+        if not isinstance(msg, dict) or msg.get("role") != "user":
             continue
-        for tc in msg.get("tool_calls") or []:
-            if not isinstance(tc, dict):
-                continue
-            fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
-            name = fn.get("name") or tc.get("name")
-            if name:
-                names.add(str(name))
-    return names
+        sidecar = msg.get("api_content")
+        text = (sidecar if isinstance(sidecar, str) else "") + "\n" + flatten_message_text(msg.get("content"))
+        for chunk in text.split(NOTE_PREFIX)[1:]:
+            rows = []
+            for line in chunk.split("\n")[1:]:
+                if not line.startswith(_ROW):
+                    break
+                rows.append(line[len(_ROW):].removesuffix("]").split(": ", 1)[0].strip())
+            shown.add(frozenset(rows))
+    return shown
 
 
-def log_unused_skill_shortlist(agent: Any, messages: Sequence[Any]) -> None:
-    candidates = list(getattr(agent, "_skill_selection_candidates", None) or [])
-    if not candidates:
-        return
-    if "skill_view" in _message_tool_names(messages):
-        return
-    names = ", ".join(str(row.get("name") or "") for row in candidates if row.get("name"))
-    if names:
-        logger.info("skill selection: turn completed without skill_view; unused shortlist: %s", names)
+def _loaded_skills(conversation_history: Any) -> set[str]:
+    """Skills this session already loaded with skill_view: suggesting them again is noise."""
+    loaded: set[str] = set()
+    for msg in conversation_history or []:
+        for tc in (msg.get("tool_calls") or []) if isinstance(msg, dict) else []:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            if isinstance(fn, dict) and fn.get("name") == "skill_view":
+                try:
+                    loaded.add(str(json.loads(fn.get("arguments") or "{}").get("name") or ""))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+    return loaded
+
+
+def stage_skill_shortlist_note(agent: Any, prompt: Any, conversation_history: Any, user_message: Any) -> bool:
+    """Stage this turn's shortlist on ``agent._skill_shortlist_note`` (consumed with the other
+    per-turn notes). Returns whether it staged. Off unless ``skills.selection: shortlist``; skipped
+    for internal forks (no user request) and for MoA/codex_app_server turns, which never stamp
+    the sidecar the once-per-session check reads back."""
+    from agent.skill_utils import _skills_cfg, get_skill_search_roots
+    from agent.skills_index_delta import index_entries
+    from agent.system_prompt import _agent_skills_dir
+    if selection_mode(_skills_cfg()) != SELECTION_SHORTLIST or getattr(agent, "_persist_disabled", False):
+        return False
+    if getattr(agent, "provider", None) == "moa" or getattr(agent, "api_mode", None) == "codex_app_server":
+        return False
+    index = index_entries(prompt)
+    if not index:
+        return False
+    try:
+        loaded = _loaded_skills(conversation_history)
+        roots = [d for _t, d in get_skill_search_roots(_agent_skills_dir(agent))]
+        docs = tuple(d for d in skill_docs_from_roots(roots, index) if d[0] not in loaded)
+        names = shortlist(user_message, docs)
+    except Exception:
+        logger.debug("skill shortlist: ranking failed", exc_info=True)
+        return False
+    if not names or frozenset(names) in _shown_sets(conversation_history):
+        return False
+    agent._skill_shortlist_note = _note(names, index)
+    logger.info("Session %s: skill shortlist for this turn: %s", getattr(agent, "session_id", None), ", ".join(names))
+    return True

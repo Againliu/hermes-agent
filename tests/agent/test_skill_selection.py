@@ -1,252 +1,68 @@
-"""Per-turn skill candidate ranking — cache-stable overlay on the user turn."""
-
+"""Per-turn skill shortlist: suggestions ride the current user message, never the cached prompt."""
 from types import SimpleNamespace
 
-from agent.skill_selection import (
-    apply_turn_skill_selection,
-    format_candidate_overlay,
-    log_unused_skill_shortlist,
-    rank_skill_candidates,
-    resolve_selection_mode,
-)
+from agent import prompt_builder as pb
+from agent.skill_selection import stage_skill_shortlist_note
+from agent.turn_context import _pop_turn_note
 
 
-def _entry(name, description, triggers=None):
-    return {"name": name, "description": description, "triggers": list(triggers or [])}
+def _write_skill(skills, name, description, situations=()):
+    path = skills / "devops" / name / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    extra = "".join(f"      - {s}\n" for s in situations)
+    meta = f"metadata:\n  hermes:\n    situations:\n{extra}" if situations else ""
+    path.write_text(f"---\nname: {name}\ndescription: {description}\n{meta}---\nBody.\n", encoding="utf-8")
 
 
-DEBUG = _entry(
-    "systematic-debugging",
-    "4-phase root cause debugging: understand bugs before fixing.",
-    triggers=["root cause", "reproduce the bug"],
-)
-TDD = _entry(
-    "test-driven-development",
-    "TDD: enforce RED-GREEN-REFACTOR, tests before code.",
-    triggers=["failing test first"],
-)
-COOK = _entry(
-    "weeknight-cooking",
-    "Plan grocery lists and weeknight dinners.",
-)
+def _setup(tmp_path, monkeypatch, selection):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(pb, "get_disabled_skill_names", lambda *_: set())
+    pb.clear_skills_system_prompt_cache(clear_snapshot=True)
+    if selection:
+        (tmp_path / "config.yaml").write_text(f"skills:\n  selection: {selection}\n", encoding="utf-8")
+    skills = tmp_path / "skills"
+    _write_skill(skills, "merge-repair", "Untangle a broken branch history.",
+                 situations=["my pull request has merge conflicts"])
+    _write_skill(skills, "docker-ops", "Run and inspect containers.")
+    return "Identity.\n\n" + pb.build_skills_system_prompt()
 
 
-class TestResolveSelectionMode:
-    def test_missing_and_unknown_keep_catalog(self):
-        assert resolve_selection_mode({}) == "catalog"
-        assert resolve_selection_mode({"selection": "routed"}) == "catalog"
-        assert resolve_selection_mode({"selection": ""}) == "catalog"
-
-    def test_explicit_modes(self):
-        assert resolve_selection_mode({"selection": "shortlist"}) == "shortlist"
-        assert resolve_selection_mode({"selection": "catalog"}) == "catalog"
-        assert resolve_selection_mode({"selection": "off"}) == "off"
-        assert resolve_selection_mode({"selection": "SHORTLIST"}) == "shortlist"
+def _agent(home):
+    return SimpleNamespace(valid_tool_names={"skills_list", "skill_view", "skill_manage"}, platform="cli",
+                           provider="openrouter", api_mode="chat_completions", session_id="s1",
+                           _hermes_home=str(home), _session_db=SimpleNamespace(db_path=str(home / "state.db")))
 
 
-class TestRankSkillCandidates:
-    def test_task_pressure_ranks_relevant_skill_above_unrelated(self):
-        ranked = rank_skill_candidates(
-            "fix this bug, run the gate",
-            [COOK, TDD, DEBUG],
-            limit=8,
-        )
-        names = [row["name"] for row in ranked]
-        assert names[0] == "systematic-debugging"
-        assert "weeknight-cooking" not in names
-
-    def test_trigger_phrase_is_a_deterministic_floor(self):
-        ranked = rank_skill_candidates(
-            "Please write a failing test first then implement.",
-            [COOK, DEBUG, TDD],
-            limit=8,
-        )
-        assert ranked[0]["name"] == "test-driven-development"
-        assert ranked[0]["via_trigger"] is True
-
-    def test_unrelated_query_returns_no_candidates(self):
-        assert rank_skill_candidates("hello there", [COOK, DEBUG, TDD], limit=8) == []
-
-    def test_limit_caps_the_shortlist(self):
-        extras = [_entry(f"debug-tool-{i}", "debugging bugs and root cause analysis") for i in range(6)]
-        ranked = rank_skill_candidates("debug this bug root cause", extras + [DEBUG], limit=3)
-        assert len(ranked) == 3
-
-    def test_disabled_or_blank_names_are_ignored(self):
-        ranked = rank_skill_candidates(
-            "debug this bug",
-            [_entry("", "debugging bugs"), DEBUG],
-            limit=8,
-        )
-        assert [row["name"] for row in ranked] == ["systematic-debugging"]
+def _turn(agent, prompt, history, text):
+    """One turn as build_turn_context runs it: stage, consume on the note channel, record the row
+    with the note in its api_content sidecar only. Returns the note sent."""
+    history.append({"role": "user", "content": text})
+    stage_skill_shortlist_note(agent, prompt, history, text)
+    note = _pop_turn_note(agent, "_skill_shortlist_note")
+    if note:
+        history[-1]["api_content"] = f"{text}\n\n{note}"
+    history.append({"role": "assistant", "content": "ok"})
+    return note
 
 
-class TestOverlayAndPersist:
-    def test_shortlist_annotates_api_copy_and_keeps_persist_clean(self, monkeypatch):
-        catalog = [DEBUG, TDD, COOK]
-        monkeypatch.setattr(
-            "agent.skill_selection.collect_skill_index_entries",
-            lambda: catalog,
-        )
-        monkeypatch.setattr(
-            "agent.skill_selection._skills_section",
-            lambda: {"selection": "shortlist", "selection_limit": 8},
-        )
-        api, persist, candidates = apply_turn_skill_selection(
-            "fix this bug, run the gate",
-            None,
-        )
-        assert persist == "fix this bug, run the gate"
-        assert "fix this bug, run the gate" in api
-        assert "<skill_candidates>" in api
-        assert "systematic-debugging" in api
-        assert "weeknight-cooking" not in api
-        assert api != persist
-        assert candidates[0]["name"] == "systematic-debugging"
+def test_shortlist_suggests_once_per_session_from_situations_never_rendered_in_prompt(tmp_path, monkeypatch):
+    """``situations`` feed the ranking but never the cached index; the suggestion is a note on the
+    current turn (sidecar only, durable content clean), shown once per session — including to a
+    fresh per-turn gateway agent reading the transcript — and small talk gets none."""
+    prompt = _setup(tmp_path, monkeypatch, "shortlist")
+    assert "merge conflicts" not in prompt and "- merge-repair:" in prompt
+    agent, history = _agent(tmp_path), []
 
-    def test_catalog_and_off_leave_the_user_message_untouched(self, monkeypatch):
-        monkeypatch.setattr(
-            "agent.skill_selection.collect_skill_index_entries",
-            lambda: [DEBUG, TDD],
-        )
-        for mode in ("catalog", "off"):
-            monkeypatch.setattr(
-                "agent.skill_selection._skills_section",
-                lambda mode=mode: {"selection": mode},
-            )
-            api, persist, candidates = apply_turn_skill_selection(
-                "fix this bug, run the gate",
-                None,
-            )
-            assert api == "fix this bug, run the gate"
-            assert persist is None
-            assert candidates == []
+    note = _turn(agent, prompt, history, "my pull request has merge conflicts again, can you sort it out")
+    assert note.startswith("[System: Skills that may fit this request")
+    assert "    - merge-repair: Untangle a broken branch history.]" in note and "docker-ops" not in note
+    assert history[0]["content"] == "my pull request has merge conflicts again, can you sort it out"
 
-    def test_existing_persist_override_is_preserved(self, monkeypatch):
-        monkeypatch.setattr(
-            "agent.skill_selection.collect_skill_index_entries",
-            lambda: [DEBUG],
-        )
-        monkeypatch.setattr(
-            "agent.skill_selection._skills_section",
-            lambda: {"selection": "shortlist"},
-        )
-        api, persist, _ = apply_turn_skill_selection(
-            "Voice: fix this bug",
-            "fix this bug",
-        )
-        assert persist == "fix this bug"
-        assert "<skill_candidates>" in api
-        assert persist != api
-
-    def test_multimodal_appends_a_text_block(self, monkeypatch):
-        monkeypatch.setattr(
-            "agent.skill_selection.collect_skill_index_entries",
-            lambda: [DEBUG],
-        )
-        monkeypatch.setattr(
-            "agent.skill_selection._skills_section",
-            lambda: {"selection": "shortlist"},
-        )
-        original = [{"type": "text", "text": "fix this bug"}]
-        api, persist, _ = apply_turn_skill_selection(original, None)
-        assert persist is original
-        assert api is not original
-        assert api[0] == original[0]
-        assert api[-1]["type"] == "text"
-        assert "<skill_candidates>" in api[-1]["text"]
-
-    def test_overlay_is_idempotent(self):
-        overlay = format_candidate_overlay(
-            [{"name": "systematic-debugging", "description": "debug", "via_trigger": False}]
-        )
-        once = "fix this bug\n\n" + overlay
-        api, persist, candidates = apply_turn_skill_selection(once, None)
-        assert api == once
-        assert persist is None
-        assert candidates == []
+    assert _turn(agent, prompt, history, "the pull request still has merge conflicts") == ""
+    assert _turn(_agent(tmp_path), prompt, history, "pull request merge conflicts, please fix") == ""
+    assert _turn(_agent(tmp_path), prompt, [], "thanks, that's perfect!") == ""
 
 
-class TestUnusedShortlistAudit:
-    def test_logs_when_no_skill_view_ran(self, caplog):
-        import logging
-
-        agent = SimpleNamespace(
-            _skill_selection_candidates=[{"name": "systematic-debugging", "description": "d"}],
-        )
-        messages = [
-            {"role": "user", "content": "fix this"},
-            {"role": "assistant", "content": "working"},
-        ]
-        with caplog.at_level(logging.INFO, logger="agent.skill_selection"):
-            log_unused_skill_shortlist(agent, messages)
-        assert "systematic-debugging" in caplog.text
-        assert "skill_view" in caplog.text.lower() or "unused" in caplog.text.lower()
-
-    def test_silent_when_skill_view_ran(self, caplog):
-        import logging
-
-        agent = SimpleNamespace(
-            _skill_selection_candidates=[{"name": "systematic-debugging", "description": "d"}],
-        )
-        messages = [
-            {"role": "assistant", "tool_calls": [{"function": {"name": "skill_view", "arguments": "{}"}}]},
-            {"role": "tool", "content": "ok"},
-        ]
-        with caplog.at_level(logging.INFO, logger="agent.skill_selection"):
-            log_unused_skill_shortlist(agent, messages)
-        assert caplog.text == ""
-
-
-class TestConfigAndRealCatalog:
-    def test_default_config_registers_selection_keys(self):
-        from hermes_cli.config_defaults import DEFAULT_CONFIG
-
-        skills = DEFAULT_CONFIG["skills"]
-        assert skills["selection"] == "catalog"
-        assert skills["selection_limit"] == 12
-
-    def test_real_skills_dir_shortlist_on_temp_home(self, tmp_path, monkeypatch):
-        from agent.skill_selection import apply_turn_skill_selection, collect_skill_index_entries
-        from agent import skill_utils
-
-        home = tmp_path / ".hermes"
-        skills = home / "skills" / "software-development"
-        skills.mkdir(parents=True)
-        (skills / "systematic-debugging").mkdir()
-        (skills / "systematic-debugging" / "SKILL.md").write_text(
-            "---\n"
-            "name: systematic-debugging\n"
-            "description: 4-phase root cause debugging: understand bugs before fixing.\n"
-            "metadata:\n"
-            "  hermes:\n"
-            "    triggers:\n"
-            "      - root cause\n"
-            "---\n\nBody.\n",
-            encoding="utf-8",
-        )
-        (skills / "weeknight-cooking").mkdir()
-        (skills / "weeknight-cooking" / "SKILL.md").write_text(
-            "---\nname: weeknight-cooking\ndescription: Plan grocery lists and weeknight dinners.\n---\n\nBody.\n",
-            encoding="utf-8",
-        )
-        (home / "config.yaml").write_text(
-            "skills:\n  selection: shortlist\n  selection_limit: 8\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("HERMES_HOME", str(home))
-        getattr(skill_utils, "_raw_config_cache_clear", lambda: None)()
-        getattr(skill_utils, "_external_dirs_cache_clear", lambda: None)()
-
-        names = {row["name"] for row in collect_skill_index_entries()}
-        assert "systematic-debugging" in names
-        assert "weeknight-cooking" in names
-
-        api, persist, candidates = apply_turn_skill_selection(
-            "fix this bug, run the gate",
-            None,
-        )
-        assert persist == "fix this bug, run the gate"
-        assert "<skill_candidates>" in api
-        assert candidates[0]["name"] == "systematic-debugging"
-        assert "weeknight-cooking" not in api
+def test_legacy_default_sends_no_suggestion(tmp_path, monkeypatch):
+    prompt = _setup(tmp_path, monkeypatch, None)
+    assert _turn(_agent(tmp_path), prompt, [], "my pull request has merge conflicts again") == ""

@@ -118,15 +118,32 @@ hermes chat --toolsets skills -q "Show me the axolotl skill"
 
 By default the agent sees every eligible skill as a name + one-line description in the system prompt and decides whether to call `skill_view`. That catalog is cache-stable and does not rank the current turn.
 
-To surface a small relevancy shortlist on each user message without rebuilding the system prompt:
+To have Hermes name up to three skills that fit each request, without touching the system prompt:
 
 ```yaml
 skills:
-  selection: shortlist
-  selection_limit: 12
+  selection: shortlist   # default: catalog
 ```
 
-Matching uses the current user text against skill names, descriptions, and optional `triggers` / `metadata.hermes.triggers`. The overlay is API-only; the saved transcript keeps your original message. `catalog` (default) and `off` disable it.
+The request is ranked (BM25, with CJK bigrams) against each offered skill's name, full description and optional `situations`. A matching turn gets one note on its user message, for example:
+
+```text
+[System: Skills that may fit this request — suggestions only. Load one with skill_view(name) if it applies; otherwise ignore this note.
+    - requesting-code-review: Pre-commit review: security scan, quality gates, auto-fix.
+    - github: GitHub via gh CLI: PRs, issues, reviews, repos, auth.]
+```
+
+Nothing is auto-loaded. Small talk, slash commands, messages that already name a skill, and pasted material (code fences, quoted replies, indented logs) get no note, and the same suggestion set appears once per session.
+
+Skill authors can add retrieval-only phrases a user in that situation would type. They feed the shortlist only and are never shown in the system-prompt index, so they cost nothing per request:
+
+```yaml
+metadata:
+  hermes:
+    situations:
+      - my pull request has merge conflicts
+      - CI is red on my PR
+```
 
 ## Learning a skill from sources (`/learn`)
 

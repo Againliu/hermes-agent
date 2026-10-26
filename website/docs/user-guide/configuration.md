@@ -837,15 +837,14 @@ Resolved once per session when the system prompt is first built (so the prompt s
 
 ### Per-turn skill shortlist
 
-The system-prompt skill index is a static catalog; the model still has to notice the right row. On large libraries that scan loses to the actual task. `skills.selection: shortlist` ranks the current user message against skill names, descriptions, and optional frontmatter `triggers` / `metadata.hermes.triggers`, then appends a small `<skill_candidates>` block to **this turn's user message**. The system prompt is not rebuilt, so prompt caching stays intact, and the durable transcript keeps the original ask.
+The system-prompt skill index is a static catalog with one clipped line per skill; on a large library the model often skips the skill that fits. `skills.selection: shortlist` ranks each request against the skills that index already offers (full description plus the optional `metadata.hermes.situations` phrases) and names **at most three** in a one-line note on **this turn's user message only**. The system prompt is not rebuilt, so prompt caching stays intact, and the saved transcript keeps your original message.
 
 ```yaml
 skills:
-  selection: shortlist   # catalog (default) | shortlist | off
-  selection_limit: 12
+  selection: shortlist   # catalog (default) | shortlist
 ```
 
-`catalog` and `off` leave the user message unchanged. Skills can declare machine-checkable trigger phrases; a hit always enters the shortlist even when token overlap is weak.
+It only suggests: the model still decides, and no skill is loaded for it. Small talk, slash commands, messages that name a skill outright and pasted blocks (code fences, quoted replies, logs) get no note; a skill already loaded this session is not suggested again; the same suggestion set is shown once per session. See [Skills — per-turn shortlist](./features/skills.md#per-turn-shortlist-optional).
 
 ### Guard on agent-created skill writes
 
