@@ -17,8 +17,8 @@ from hermes_cli.config_issues import ConfigIssue, _issue
 # List slots whose own reader also accepts one plain value (``shlex``-split, wrapped, or parsed),
 # on top of the ``parse_config_string_list`` ones: a scalar there is a supported spelling.
 _SCALAR_TOLERANT_LIST_KEYS = frozenset({
-    "command_allowlist", "dashboard.trusted_proxies", "desktop.electron_flags", "plugins.host.launcher",
-    "security.fake_ip_ranges", "voice.stop_phrases"})
+    "browser.chromium_args", "command_allowlist", "dashboard.trusted_proxies", "desktop.electron_flags",
+    "plugins.host.launcher", "security.fake_ip_ranges", "voice.stop_phrases"})
 
 
 def _container_slots() -> dict[str, str]:

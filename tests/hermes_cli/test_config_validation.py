@@ -217,6 +217,7 @@ class TestListSlotShapes:
             "plugins": {"enabled": ["omh"], "disabled": None},
             "agent": {"disabled_toolsets": "web"},  # parse_config_string_list: one entry
             "desktop": {"electron_flags": "--disable-gpu"},  # shlex-split by its reader
+            "browser": {"chromium_args": "--lang=de"},  # comma/newline-split by its reader
             "my.app.token": "abc",  # unknown root: env-bridged on purpose
         })
         assert not [i for i in issues if "expects a YAML list" in i.message or "dotted path" in i.message]
