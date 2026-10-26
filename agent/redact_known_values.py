@@ -116,14 +116,17 @@ def _env_file_values(home: Path) -> list:
     return [v for k, v in load_env_file(home / ".env").items() if _ENV_SECRET_NAME_RE.search(k)]
 
 
-def _config_values(home: Path) -> list:
-    from hermes_cli.config_backend import get_config_backend
-    from hermes_yaml import YAMLError
+def _config_values(home: Path, snapshot) -> list:
+    if snapshot is not None:
+        cfg = snapshot
+    else:
+        from hermes_cli.config_backend import get_config_backend
+        from hermes_yaml import YAMLError
 
-    try:
-        cfg = get_config_backend().read_user_doc_readonly(home)
-    except (OSError, YAMLError, UnicodeDecodeError):  # absent or mid-edit: the other sources still apply
-        return []
+        try:
+            cfg = get_config_backend().read_user_doc_readonly(home)
+        except (OSError, YAMLError, UnicodeDecodeError):  # absent or mid-edit: the other sources still apply
+            return []
     out: list = []
     _walk_fields(cfg, out)
     servers = cfg.get("mcp_servers") if isinstance(cfg, dict) else None
@@ -135,7 +138,12 @@ def _config_values(home: Path) -> list:
 
 
 def _file_values(home: Path) -> list:
-    values = _env_file_values(home) + _config_values(home)
+    from agent.safe_worker_policy import worker_config_snapshot
+
+    # A managed worker runs on its owner's frozen config and never opens the profile's .env or
+    # config.yaml (safe mode / --ignore-user-config promise exactly that): mask the snapshot's values.
+    snapshot = worker_config_snapshot()
+    values = (_env_file_values(home) if snapshot is None else []) + _config_values(home, snapshot)
     for doc in [_read_json(home / "auth.json"), *(_read_json(p) for p in _token_files(home))]:
         _walk_fields(doc, values)
     return values
