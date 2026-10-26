@@ -9,9 +9,11 @@
  *   the command an approval would run. Prompts are parked under the runtime
  *   id that raised them; the runtime→stored bridge is the same one the dot
  *   state uses.
- * - `routines`: owner scopes with a cron run the scheduler still owns
- *   (`scheduler_owned`, not the 300 s `is_active` window, which stays lit for a
- *   finished run and goes dark during a long tool call).
+ * - `routines`: owner scopes with a cron run still in flight: not ended, and
+ *   owned by the scheduler. The session LIST does not stamp `scheduler_owned`
+ *   (only the session-detail read does), so a listed run falls back to the
+ *   backend's 300 s `is_active` window, which goes dark during a tool call
+ *   longer than that.
  *
  * Every input is reference-stable across stream deltas, so this recomputes on
  * prompt/status edges, not per token.
@@ -20,6 +22,7 @@
 import { computed } from 'nanostores'
 
 import { stableArray, stableRecord } from '@/lib/stable-array'
+import type { SessionInfo } from '@/types/hermes'
 
 import { $clarifyRequests } from './clarify'
 import { $approvalRequests } from './prompts'
@@ -57,6 +60,10 @@ function internQuote(kind: SessionPromptQuote['kind'], text: string): SessionPro
 
 export const routineScopeKey = (connectionId: null | string | undefined, profile: null | string | undefined) =>
   `${String(connectionId || '').trim()}::${String(profile || 'default').trim() || 'default'}`
+
+const cronRunInFlight = (row: SessionInfo) =>
+  row.ended_at == null &&
+  (typeof row.scheduler_owned === 'boolean' ? row.scheduler_owned : row.is_active === true)
 
 let prevPrompts: Readonly<Record<string, SessionPromptQuote>> = {}
 let prevRoutines: readonly string[] = []
@@ -96,7 +103,7 @@ export const $rosterSessionSignals = computed(
     }
 
     const routines = cron
-      .filter(row => row.scheduler_owned === true)
+      .filter(cronRunInFlight)
       .map(row => routineScopeKey(row.connection_id, row.profile))
 
     const nextPrompts = (prevPrompts = stableRecord(prevPrompts, prompts))

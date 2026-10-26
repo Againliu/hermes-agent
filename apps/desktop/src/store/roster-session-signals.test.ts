@@ -45,6 +45,18 @@ describe('$rosterSessionSignals', () => {
     expect($rosterSessionSignals.get().routines).toEqual(['::alpha', 'box::beta'])
   })
 
+  it('lights a listed in-flight run the list never stamped with scheduler_owned', () => {
+    // The sessions LIST row of a run the scheduler is executing right now:
+    // open, inside the activity window, no ownership stamp.
+    $cronSessions.set([
+      { id: 'c1', profile: 'alpha', ended_at: null, is_active: true },
+      { id: 'c2', profile: 'beta', ended_at: 1_700_000_000, is_active: true },
+      { id: 'c3', profile: 'gamma', ended_at: null, is_active: false }
+    ] as never)
+
+    expect($rosterSessionSignals.get().routines).toEqual(['::alpha'])
+  })
+
   it('keeps its reference while nothing it reports changed', () => {
     const first = $rosterSessionSignals.get()
     // A finished cron run changes the input list but nothing this reports.
