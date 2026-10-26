@@ -74,6 +74,15 @@ def _redundant_entries(entries: list[str], incoming: str = "", skip: Optional[in
     return [item for *_key, item in sorted(found, key=lambda f: (f[0], f[1]))[:limit]]
 
 
+def _op_texts(op: dict[str, Any]) -> tuple[str, str]:
+    """``(content, old_text)`` a batch op applies: ``new_text`` aliases ``content``; whole-entry
+    actions strip both, a patch span keeps its whitespace ("tea " -> "coffee ")."""
+    content, old_text = op.get("content") or op.get("new_text") or "", op.get("old_text") or ""
+    if op.get("action") != "patch":
+        content, old_text = content.strip(), old_text.strip()
+    return content, old_text
+
+
 def _store_target(filename: str) -> str:
     """The memory tool target that owns a store file, for hints that show the call to make."""
     return "user" if filename == "USER.md" else "memory"
@@ -635,9 +644,7 @@ class MemoryStore:
             produced = {}  # 1-based op index -> the entry a patch produced
             for i, op in enumerate(ops):
                 act = op.get("action")
-                content, old_text = op.get("content") or op.get("new_text") or "", op.get("old_text") or ""
-                if act != "patch":  # whole-entry actions; a patch span keeps its whitespace
-                    content, old_text = content.strip(), old_text.strip()
+                content, old_text = _op_texts(op)
                 msg, previous_content, failure_class, after = self._apply_batch_op(
                     working, act, content, old_text, f"Operation {i + 1} ({act or 'unknown'})",
                     op.get("matched_entry"))
@@ -665,7 +672,7 @@ class MemoryStore:
                          or (len(ops) == 1 and working == entries))
             if grows and new_total > limit:
                 if len(ops) == 1 and ops[0].get("action") == "add":  # the advertised single add
-                    return self._add_overflow(target, (ops[0].get("content") or ops[0].get("new_text") or "").strip(), limit)
+                    return self._add_overflow(target, _op_texts(ops[0])[0], limit)
                 return self._batch_failure(target, (
                     f"Applying all {len(operations)} operations {_over_limit(new_total, limit)} more. Add "
                     f"removes or shortening patches of other stale entries to the same batch, then retry."),

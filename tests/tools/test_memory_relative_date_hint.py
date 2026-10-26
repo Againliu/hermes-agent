@@ -44,6 +44,19 @@ def test_date_hint_anchors_on_the_profile_timezone_not_the_server_clock(zone, tm
     assert f"({datetime.now(ZoneInfo(zone)).date().isoformat()})" in result["date_hint"]
 
 
+def test_batch_hint_follows_the_text_the_batch_saves(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    store = MemoryStore()
+
+    via_alias = _dispatch(store, target="memory", operations=[{"action": "add", "new_text": "Call the bank tomorrow"}])
+    fixed_in_batch = _dispatch(store, target="user", operations=[
+        {"action": "add", "content": "Dentist appointment tomorrow"},
+        {"action": "patch", "old_text": "tomorrow", "content": "on 2026-11-02"}])
+
+    assert "'tomorrow'" in via_alias["date_hint"]
+    assert fixed_in_batch["success"] is True and "date_hint" not in fixed_in_batch
+
+
 def test_absolute_dates_and_rejected_writes_carry_no_hint(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
     store = MemoryStore(memory_char_limit=60, user_char_limit=60)
