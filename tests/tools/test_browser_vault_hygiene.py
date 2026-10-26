@@ -138,6 +138,17 @@ def test_screenshot_and_vision_refused_while_card_is_filled(filled_card, tmp_pat
     assert json.loads(browser_cdp("Page.captureScreenshot", task_id="t")).get("error_type") != "card_filled"
 
 
+@pytest.mark.parametrize("spelling", ["FILE://{}", "File://{}", "  {}  ", "\tfile://{}\n"])
+def test_vision_refusal_judges_the_file_the_reader_opens(filled_card, tmp_path, spelling):
+    """Any spelling the image reader accepts for a fresh capture (scheme case, surrounding whitespace)
+    must hit the same refusal as the plain path."""
+    from tools.browser_vault_card_guard import image_refusal
+
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n\x1a\n")
+    assert image_refusal("t", spelling.format(shot)), spelling
+
+
 def test_card_protection_follows_the_filled_tab_not_the_supervisors_focus(filled_card):
     """A later fill or focus moves the supervisor to another tab; the checkout tab still holds the card
     and can be captured by its target id, so its protection lasts until that tab navigates or closes."""

@@ -182,8 +182,13 @@ def image_refusal(task_id: Optional[str], image_path: str) -> Optional[str]:
         fills = list(_LIVE.get(_key(task_id), {}).values())
     if not fills:
         return None
+    from tools.image_source import ResolveContext, host_file_for
+
+    target = host_file_for(image_path, ResolveContext(task_id=task_id))  # the file vision_analyze would read
+    if target is None:
+        return None  # a URL or a sandbox-only path: not a capture of the page
     try:
-        written = os.path.getmtime(os.path.expanduser(image_path.removeprefix("file://")))
+        written = os.path.getmtime(target)
     except (OSError, ValueError):
-        return None  # a URL or a missing file: not a capture of the page
+        return None  # a missing file
     return capture_refusal(task_id) if written >= min(f.filled_at for f in fills) - 1 else None
