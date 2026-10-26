@@ -70,3 +70,37 @@ def test_plugin_selection_publication_keeps_the_next_sections_banner(tmp_path, m
 
     assert BANNER in proposed, proposed
     assert yaml.safe_load(proposed.split(BANNER, 1)[0])["plugins"]["enabled"] == ["foo"]
+
+
+_EVICTION_TAIL = "\n# ==== Model Configuration ====\nmodel:\n  default: some-model\n"
+
+
+@pytest.mark.parametrize(("plugins_block", "rejoin", "expected"), [
+    pytest.param("  enabled:\n    - foo\n    - bar\n", False,
+                 {"enabled": ["foo"], "disabled": ["bar"]}, id="park-last-enabled"),
+    pytest.param("  enabled:\n    - bar\n  disabled:\n    - baz\n", False,
+                 {"enabled": [], "disabled": ["baz", "bar"]}, id="append-to-disabled"),
+    pytest.param("  enabled:\n    - foo\n  disabled:\n    - bar\n"
+                 "  disabled_by_update:\n    bar:\n      enabled: true\n      reason: x\n", True,
+                 {"enabled": ["foo", "bar"], "disabled": []}, id="rejoin-empties-disabled"),
+])
+def test_update_plugin_eviction_keeps_the_next_sections_banner(tmp_path, plugins_block, rejoin, expected):
+    """``hermes update`` parks (and later restores) a plugin that no longer builds through its own
+    writer; that edit must not move, drop or corrupt the banner that follows ``plugins:``."""
+    from pm.plugin_eviction import PluginEviction
+
+    (tmp_path / "plugins" / "bar").mkdir(parents=True)
+    (tmp_path / "config.yaml").write_text("plugins:\n" + plugins_block + _EVICTION_TAIL, encoding="utf-8")
+    entry = (tmp_path / "plugins", "bar", tmp_path / "plugins" / "bar")
+
+    if rejoin:
+        eviction = PluginEviction([], {}, [entry], configs={})
+    else:
+        eviction = PluginEviction([entry], {entry[2].resolve(): "requires Python >=3.99"}, configs={})
+    proposed = eviction.edits[0][2].decode()
+
+    assert proposed.count("# ==== Model Configuration ====") == 1, proposed
+    assert "\n\n# ==== Model Configuration ====\nmodel:\n" in proposed, proposed
+    above = yaml.safe_load(proposed.split("# ==== Model Configuration ====", 1)[0])["plugins"]
+    assert {key: above[key] for key in expected} == expected
+    assert above == yaml.safe_load(proposed)["plugins"]

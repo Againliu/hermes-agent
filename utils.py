@@ -505,19 +505,10 @@ def _delete_rt_entry(container, key, parent=None) -> None:
     if not below:
         return
     if index > 0:
-        holder, holder_key = _trailing_comment_holder(container, keys[index - 1])
+        _put_trailing_lines(container, keys[index - 1], below)
     elif not len(container) and parent is not None:
-        # Emptied: the lines go below the collection's own key. Only a flow ``[]``/``{}`` can carry
-        # them; ruamel writes a block-style empty collection after the comment, corrupting the file.
-        container.fa.set_flow_style()
-        holder, holder_key = parent
-    if index > 0 or (not len(container) and parent is not None):
-        slot = 2 if isinstance(holder, CommentedMap) else 0
-        entry = holder.ca.items.setdefault(holder_key, [None] * 4)
-        if entry[slot] is None:
-            entry[slot] = CommentToken("\n" + below, CommentMark(0))
-        else:
-            entry[slot].value += below
+        # Emptied: the lines go below the collection's own key.
+        _put_trailing_lines(*parent, below)
     elif len(container):
         # Nothing above inside this collection: the lines become the new first entry's lead-in.
         entry = container.ca.items.setdefault(next(iter(container)) if isinstance(container, CommentedMap) else 0,
