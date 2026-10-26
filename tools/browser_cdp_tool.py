@@ -326,8 +326,9 @@ def browser_cdp(method: str, params: Optional[dict[str, Any]] = None, target_id:
     ``{"success": True, "method", "result"}`` or ``{"error": ...}``."""
     effective_task_id = task_id or "default"
     from tools.browser_vault_card_guard import CDP_CAPTURE_METHODS, capture_refusal
-    card_refusal = capture_refusal(effective_task_id) if method in CDP_CAPTURE_METHODS else None
-    if card_refusal:
+    # Judged on every call, not only captures: it also ends the CVC mask once its page has navigated.
+    card_refusal = capture_refusal(effective_task_id)
+    if card_refusal and method in CDP_CAPTURE_METHODS:
         return tool_error(card_refusal, method=method, error_type="card_filled")
 
     if frame_id:
