@@ -559,9 +559,16 @@ def load_hermes_dotenv(
         _sanitize_env_file_if_needed(project_env_path)
 
     if user_env.exists():
-        _load_dotenv_with_fallback(user_env, override=True, load_pass=load_pass)
-        loaded.append(user_env)
-        _clear_known_keys_missing_from_dotenv(user_env)  # mirrors reload_env(): inherited keys must not leak
+        try:
+            _load_dotenv_with_fallback(user_env, override=True, load_pass=load_pass)
+        except PermissionError:
+            # A sandbox launcher can withhold the profile's .env and pass its values in as environment,
+            # so a present but unreadable file loads like a missing one. Outside a sandbox this means
+            # missing keys, so say so.
+            logger.warning("%s is not readable; starting without the keys in it", user_env)
+        else:
+            loaded.append(user_env)
+            _clear_known_keys_missing_from_dotenv(user_env)  # mirrors reload_env(): inherited keys must not leak
 
     # .op.env AFTER .env so .env wins, but the bootstrap OP_SERVICE_ACCOUNT_TOKEN reaches
     # apply_onepassword_secrets() even in cron with no shell state; gitignored so the token never enters
