@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { type ChildProcess, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -57,39 +57,20 @@ export function ownAppImage(execPath: string, env: NodeJS.ProcessEnv): string | 
   return realAppDir && realExe && isInside(realAppDir, realExe) ? appImage : undefined
 }
 
-export type RelaunchStrategy =
-  /** Electron's app.relaunch(): process.execPath again once this process exits. */
-  | { kind: 'electron' }
-  /** A FUSE-mounted AppImage: the image file again, started now as a detached child. */
-  | { kind: 'appimage'; image: string }
-
 /**
- * How this app starts itself again.
+ * The file that starts this app again.
  *
- * Electron's relauncher execs its target with PR_SET_NO_NEW_PRIVS, so a
- * relaunched AppImage runtime cannot mount through the setuid fusermount
- * (EPERM, exit 127), and process.execPath lives in this process's FUSE mount,
- * which the runtime unmounts as soon as we exit. A mounted AppImage therefore
- * starts its image file as an ordinary child. Under --appimage-extract-and-run
- * APPDIR is a plain directory and the image would need the FUSE those users
- * lack, so the executable in it is relaunched as usual.
+ * process.execPath of a FUSE-mounted AppImage lives in this process's mount,
+ * which the runtime unmounts as soon as we exit, so a mounted image relaunches
+ * its image file. Under --appimage-extract-and-run APPDIR is a plain directory
+ * and the image would need the FUSE those users lack, so the executable in it
+ * is relaunched as usual.
  */
-export function relaunchStrategy(
-  execPath: string = process.execPath,
-  env: NodeJS.ProcessEnv = process.env
-): RelaunchStrategy {
+export function relaunchTarget(execPath: string = process.execPath, env: NodeJS.ProcessEnv = process.env): string {
   const image = ownAppImage(execPath, env)
+  const extracted = env.APPDIR && posix.basename(posix.resolve(env.APPDIR)).startsWith('appimage_extracted_')
 
-  if (!image || (env.APPDIR && posix.basename(posix.resolve(env.APPDIR)).startsWith('appimage_extracted_'))) {
-    return { kind: 'electron' }
-  }
-
-  return { kind: 'appimage', image }
-}
-
-export interface RelaunchHost {
-  relaunch(options: { args: string[] }): void
-  releaseSingleInstanceLock(): void
+  return image && !extracted ? image : execPath
 }
 
 function executableError(file: string): string | null {
@@ -103,7 +84,7 @@ function executableError(file: string): string | null {
 }
 
 /**
- * The shell that runs EXEC_WITH_STDIO_ONLY. dash (Debian/Ubuntu /bin/sh)
+ * The shell that runs EXEC_AFTER_EXIT. dash (Debian/Ubuntu /bin/sh)
  * cannot name fds above 9, and after `ready` Chromium holds dozens there, so
  * bash closes them where it exists. `-p` keeps BASH_ENV, ENV and exported
  * functions from running in it while still passing them to the image; bash
@@ -125,21 +106,17 @@ function trampolineShell(env: NodeJS.ProcessEnv): { file: string; args: string[]
 }
 
 /**
- * Whether `strategy` can start this app again. A spawn failure is reported
- * asynchronously, after the caller has already exited, so the image and the
+ * Whether `target` can start this app again. A spawn failure is reported
+ * asynchronously, possibly after the caller has exited, so the target and the
  * shell that starts it are checked up front and a refusal is logged now with
  * what the caller does instead.
  */
 export function canRelaunch(
-  strategy: RelaunchStrategy,
+  target: string,
   instead = 'continuing without the relaunch',
   env: NodeJS.ProcessEnv = process.env
 ): boolean {
-  if (strategy.kind === 'electron') {
-    return true
-  }
-
-  for (const file of [strategy.image, trampolineShell(env).file]) {
+  for (const file of [target, trampolineShell(env).file]) {
     const reason = executableError(file)
 
     if (reason) {
@@ -152,15 +129,22 @@ export function canRelaunch(
   return true
 }
 
+// The helper starts before the caller's shutdown wait and execs the target
+// once its stdin reaches EOF: that pipe's only writer is this process, so EOF
+// is this process's exit, crash or kill, after which the target replaces the
+// helper as Electron's relauncher would.
+//
 // libuv's spawn keeps every descriptor this process inherited without
 // O_CLOEXEC, which Chromium's launcher (app.relaunch) closes. Ours include the
 // AppImage runtime's keepalive pipe, whose last reader keeps this process's
 // FUSE mount and squashfuse daemon alive, and the launcher's ready pipe. The
 // child therefore goes through a shell (trampolineShell), which drops every fd
-// above 2 and then execs the image. POSIX only promises redirections on fds
+// above 2 and then execs the target. POSIX only promises redirections on fds
 // 0-9 and dash exits on `exec 10<&-`, so higher numbers are closed where the
 // shell takes them (bash, busybox) and left in place under dash.
-const EXEC_WITH_STDIO_ONLY = `big=
+const EXEC_AFTER_EXIT = `while read -r _; do :; done
+exec </dev/null
+big=
 (eval 'exec 10<&-') 2>/dev/null && big=1
 for f in /proc/self/fd/*; do
   n=\${f##*/}
@@ -210,25 +194,12 @@ function withoutMountEntries(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 /**
- * Start this app again with `args`; the caller exits right after.
- * Check `canRelaunch(strategy)` first. The detached child outlives this
- * process (and its mount) and takes the single-instance lock itself, so the
- * lock is dropped first.
+ * Start `target` with `args` once this process is gone, as an ordinary
+ * detached child: Electron's relauncher execs with PR_SET_NO_NEW_PRIVS, which
+ * locks sudo, pkexec and FUSE out of the new app and all its descendants.
+ * Check `canRelaunch(target)` first; kill the returned helper to cancel.
  */
-export function relaunchNow(
-  host: RelaunchHost,
-  args: string[],
-  strategy: RelaunchStrategy = relaunchStrategy(),
-  env: NodeJS.ProcessEnv = process.env
-): void {
-  if (strategy.kind === 'electron') {
-    host.relaunch({ args })
-
-    return
-  }
-
-  host.releaseSingleInstanceLock()
-
+export function spawnRelaunch(target: string, args: string[], env: NodeJS.ProcessEnv = process.env): ChildProcess {
   const shell = trampolineShell(env)
 
   if (shell.fallback) {
@@ -237,12 +208,14 @@ export function relaunchNow(
     )
   }
 
-  const child = spawn(shell.file, [...shell.args, '-c', EXEC_WITH_STDIO_ONLY, strategy.image, ...args], {
+  const child = spawn(shell.file, [...shell.args, '-c', EXEC_AFTER_EXIT, target, ...args], {
     detached: true,
-    stdio: 'ignore',
+    stdio: ['pipe', 'ignore', 'ignore'],
     env: withoutMountEntries(env)
   })
 
-  child.on('error', error => console.error(`[hermes] relaunching ${strategy.image} failed: ${error.message}`))
+  child.on('error', error => console.error(`[hermes] relaunching ${target} failed: ${error.message}`))
   child.unref()
+
+  return child
 }

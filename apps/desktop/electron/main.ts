@@ -341,7 +341,7 @@ import {
   writeLinuxGpuMarker
 } from './linux-gpu-fallback'
 import { notifyLauncherWindowRevealed } from './linux-launcher-ready'
-import { clearNvidiaEglBootMarker, parseNvidiaDriverMajor, parseNvidiaDriverVersion } from './linux-nvidia-egl-fallback'
+import { parseNvidiaDriverMajor, parseNvidiaDriverVersion } from './linux-nvidia-egl-fallback'
 import { createNvidiaEglRecovery } from './linux-nvidia-egl-recovery'
 import { relaunchIfNoSandboxCameTooLate } from './linux-sandbox-relaunch'
 import { createLocalBackendLifecycle, waitForTeardown } from './local-backend-lifecycle'
@@ -1283,7 +1283,7 @@ let desktopSshPathOverride = ''
 
 // Linux: a runtime `--no-sandbox` kills renderers on /dev/shm (linux-sandbox-relaunch.ts).
 if (isPrimaryInstance) {
-  relaunchIfNoSandboxCameTooLate(relauncher, () => clearNvidiaEglBootMarker(app.getPath('userData'), NVIDIA_EGL_FALLBACK))
+  relaunchIfNoSandboxCameTooLate(relauncher, () => nvidiaEglRecovery.cleanExit())
 }
 
 // ACTIVE_HERMES_ROOT — the canonical mutable Hermes install. Same path
