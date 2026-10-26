@@ -28,6 +28,13 @@ describe('mergeSoulSections', () => {
     expect(out.startsWith(saved.trimEnd())).toBe(true)
     expect(out.endsWith('## Voice\n\nTerse.\n')).toBe(true)
   })
+
+  it('replaces a section under a closed heading instead of appending a duplicate', () => {
+    const closed = saved.replace('## Role', '## Role ##')
+    const out = mergeSoulSections(closed, [{ key: 'role', title: 'Role', text: 'New role.' }])
+
+    expect(out).toBe(closed.replace('Old role.', 'New role.'))
+  })
 })
 
 describe('composeDraftSoul', () => {

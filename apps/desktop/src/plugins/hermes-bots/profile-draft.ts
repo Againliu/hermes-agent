@@ -68,7 +68,8 @@ export function mergeSoulSections(soul: string, accepted: DraftSection[]): strin
   let out = soul
 
   for (const s of accepted) {
-    const heading = new RegExp(`^##[ \\t]+${escapeRe(s.title)}[ \\t]*$`, 'im')
+    // Same heading syntax the backend's split_soul reads, closing hashes included.
+    const heading = new RegExp(`^##[ \\t]+${escapeRe(s.title)}[ \\t]*#*[ \\t]*$`, 'im')
     const match = heading.exec(out)
     const body = s.text.trim()
 
