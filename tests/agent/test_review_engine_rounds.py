@@ -49,7 +49,7 @@ def test_second_review_quotes_round_one_findings_and_scopes_to_the_delta(monkeyp
     ]
     start_review(SimpleNamespace(ephemeral_system_prompt=""), messages)
 
-    assert sent["goal"] == "Re-review (round 2)"
+    assert sent["goal"] == "Review recent work"  # the worker label is the same every round
     assert "Review round 2." in sent["context"] and re_mod._REREVIEW_RULES in sent["context"]
     # Left in the excerpt, the round-1 message (briefing + 11k excerpt) loses its result to the 12k cap.
     assert f"--- Review round 1 result ---\n{finding}" in sent["context"]

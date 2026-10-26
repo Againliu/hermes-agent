@@ -157,8 +157,8 @@ def build_review_task(snapshot: list[dict[str, str]], user_prompt: str = "", loa
     prior_results = prior_results or []
     review_round = len(prior_results) + 1
     focus = " ".join(user_prompt.split())
-    label = f"Re-review (round {review_round})" if prior_results else "Review"
-    goal = f"{label}: {focus}" if focus else (label if prior_results else "Review recent work")
+    # Every round keeps the documented worker label; the round number lives in the briefing.
+    goal = f"Review: {focus}" if focus else "Review recent work"
     if len(goal) > 80:
         goal = goal[:79].rstrip() + "…"
     # The goal is also the live worker label; keep the full instructions in context.
