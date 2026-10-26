@@ -100,7 +100,7 @@ export function customDefaultSupersedesPick(pickProvider: string, defaultProvide
   return key.length > 0 && pick === key
 }
 
-interface ModelOptionsRequest {
+export interface ModelOptionsRequest {
   /** An opened picker: the backend also scans this machine for local model
    *  servers (Ollama, LM Studio, vLLM) and lists them as `Detected:` rows.
    *  Other reads reuse that scan's rows without probing. */

@@ -26,7 +26,7 @@ vi.mock('@/lib/model-options', async importOriginal => ({
   requestModelOptions: vi.fn()
 }))
 
-import { requestModelOptions } from '@/lib/model-options'
+import { modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 
 stubResizeObserver()
 stubMenuDomApis()
@@ -493,5 +493,29 @@ describe('ModelPickerDialog search ranking', () => {
 
       expect(rows).toContain(expected)
     })
+  })
+})
+
+describe('ModelPickerDialog local server scan', () => {
+  it('scans for local model servers on open even when the composer already cached the catalog', async () => {
+    // The composer pill fetched the catalog (same query key) without a scan, and it is still
+    // fresh under the app client's staleTime, so opening the picker does not refetch it.
+    client.setDefaultOptions({ queries: { retry: false, staleTime: 60_000 } })
+    client.setQueryData(modelOptionsQueryKey(null, null), OPTIONS)
+    vi.mocked(requestModelOptions).mockImplementation(async ({ detectLocal }) =>
+      detectLocal
+        ? {
+            ...OPTIONS,
+            providers: [
+              ...OPTIONS.providers,
+              { slug: 'local-lmstudio', name: 'Detected: LM Studio', models: ['qwen/qwen3-4b'], source: 'detected' }
+            ]
+          }
+        : OPTIONS
+    )
+    renderPicker()
+
+    expect(await screen.findByText(/Detected: LM Studio/i)).toBeTruthy()
+    expect(vi.mocked(requestModelOptions).mock.calls.some(([req]) => req.detectLocal)).toBe(true)
   })
 })

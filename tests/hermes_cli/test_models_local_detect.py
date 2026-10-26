@@ -206,3 +206,73 @@ def test_model_options_rpc_accepts_the_picker_scan_flag(servers):
 
     assert "error" not in reply, reply
     assert "local-ollama" in [p["slug"] for p in reply["result"]["providers"]]
+
+
+def test_a_new_chat_pinned_to_a_detected_row_builds_on_that_server(servers, monkeypatch):
+    """Desktop pins a composer pick on the new chat (``session.create`` model + provider) with no
+    ``/model`` switch; the session must still resolve the picked server, not fail on an unknown
+    provider at the first turn."""
+    from hermes_cli.config import load_config
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+    from tui_gateway import server
+
+    for name in ("_schedule_agent_build", "_schedule_session_cap_enforcement", "_enable_gateway_prompts"):
+        monkeypatch.setattr(server, name, lambda *a: None)
+    monkeypatch.setattr(server, "_sessions", {})
+    srv = servers("lmstudio", {"/v1/models": _models(["qwen/qwen3-4b"], "organization_owner")})
+
+    reply = server._methods["session.create"]("r1", {"cols": 80, "model": "qwen/qwen3-4b", "provider": "local-lmstudio"})
+
+    assert "error" not in reply, reply
+    assert load_config()["providers"]["local-lmstudio"]["base_url"] == f"http://127.0.0.1:{srv.port}/v1"
+    runtime = resolve_runtime_provider(requested="local-lmstudio", target_model="qwen/qwen3-4b")
+    assert runtime["base_url"] == f"http://127.0.0.1:{srv.port}/v1"
+
+
+@pytest.mark.asyncio
+async def test_the_gateway_model_picker_scans_when_an_opened_picker_asks(servers, monkeypatch):
+    """The TUI (and a Desktop attached to the gateway) read ``model.options`` from the gateway's
+    session authority, which refused any flag it did not list: the picker showed an error instead."""
+    from types import SimpleNamespace
+
+    from gateway import session_config
+    from hermes_constants import get_hermes_home
+
+    servers("ollama", {"/v1/models": _models(["llama3.2:3b"], "library")})
+    connection = SimpleNamespace(authority=SimpleNamespace(profile_id=str(get_hermes_home()), agent=lambda ref: None))
+    monkeypatch.setattr(session_config, "_authorize", lambda connection, ref, params: None)
+
+    result = await session_config.model_options(
+        connection, SimpleNamespace(session_id=""), {"detect_local": True, "include_unconfigured": True})
+
+    assert "local-ollama" in [p["slug"] for p in result["providers"]]
+
+
+@pytest.mark.asyncio
+async def test_a_gateway_session_picking_a_detected_row_runs_on_that_server(servers, tmp_path):
+    """The TUI's ``/model`` goes through the gateway's session mutation, which freezes the picked
+    provider entry from a profile read taken before the switch saved it: the pick succeeded and the
+    next turn failed on an unknown provider."""
+    from dataclasses import asdict
+    from types import SimpleNamespace
+
+    from gateway.run_turn_prepare import _resolve_policy_agent_runtime
+    from gateway.session_mutation_model import prepare_model
+    from gateway.session_policy import build_policy, restore_policy
+    from hermes_state import SessionDB
+
+    srv = servers("lmstudio", {"/v1/models": _models(["qwen/qwen3-4b"], "organization_owner")})
+    (tmp_path / "config.yaml").write_text("model: {provider: custom, default: old, base_url: http://127.0.0.1:9/v1}\n")
+    with SessionDB(tmp_path / "state.db") as db:
+        authority = SimpleNamespace(instance_id="i", epoch=1, profile_id="p", db=db)
+        runner = SimpleNamespace(session_authority=authority, _resolve_session_agent_runtime=lambda **k: (None, {}))
+        authority.runner = runner
+        policy = build_policy({"cwd": str(tmp_path), "model": "old"},
+                              {"model": {"provider": "custom", "default": "old", "base_url": "http://127.0.0.1:9/v1"}})
+        prepared = {"snapshot": {"receipt": {"session_id": "sid", "policy": asdict(policy)}}}
+
+        committed = await prepare_model(authority, SimpleNamespace(source=None, route="r"),
+                                        {"model": "qwen/qwen3-4b", "provider": "local-lmstudio"}, prepared)
+
+        _, runtime = _resolve_policy_agent_runtime(runner, restore_policy(committed["policy"]))
+    assert runtime["base_url"].rstrip("/") == f"http://127.0.0.1:{srv.port}/v1"

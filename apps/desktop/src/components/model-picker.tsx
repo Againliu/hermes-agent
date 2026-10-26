@@ -13,6 +13,7 @@ import { useStore } from '@nanostores/react'
 import { useQuery } from '@tanstack/react-query'
 import { type ReactElement, useMemo, useRef, useState } from 'react'
 
+import { useLocalServerScan } from '@/hooks/use-local-server-scan'
 import { useI18n } from '@/i18n'
 import { catalogProviderMatches, modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { currentPickerSelection } from '@/lib/model-status-label'
@@ -97,6 +98,8 @@ export function ModelPickerDialog({
     queryFn: () => requestModelOptions({ detectLocal: true, gateway: gw, profile, request, sessionId }),
     enabled: open
   })
+
+  useLocalServerScan({ enabled: open, gateway: gw, ownerConnectionId, profile, request, sessionId })
 
   // Live load state for the managed local server: which model is loading
   // into memory right now, with a REAL percent (per-tensor callback relayed

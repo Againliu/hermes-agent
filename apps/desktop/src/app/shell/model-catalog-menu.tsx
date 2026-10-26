@@ -41,6 +41,7 @@ import { HighlightMatches } from '@/components/ui/highlight-matches'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tip, TipHintLabel } from '@/components/ui/tooltip'
 import type { HermesGateway } from '@/hermes'
+import { useLocalServerScan } from '@/hooks/use-local-server-scan'
 import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { isSubmitEnter } from '@/lib/ime'
@@ -285,6 +286,8 @@ export function ModelCatalogMenu({
     refetchOnMount: query => nousRefetchOnMount(query.state.data),
     refetchInterval: query => nousPricingPoll(query.state.data, query.state.dataUpdateCount)
   })
+
+  useLocalServerScan({ enabled: true, gateway, ownerConnectionId, profile, request, sessionId })
 
   const loading = modelOptions.isPending && !modelOptions.data
 
