@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from unittest.mock import patch
 
 import pytest
@@ -189,7 +188,7 @@ def test_list_withholds_other_sites_when_the_open_page_cannot_be_read(store):
     assert "github.com" not in json.dumps(out) and "example.org" not in json.dumps(out)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell fake CLI")
+@pytest.mark.platforms("posix")  # POSIX shell fake CLI
 def test_browser_exec_timeout_still_deletes_captures_of_a_filled_card(tmp_path, monkeypatch):
     """A call that screenshots the filled checkout and then times out must not leave the image behind
     for a later vision_analyze once the page has navigated."""
