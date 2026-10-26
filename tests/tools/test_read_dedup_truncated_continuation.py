@@ -65,3 +65,23 @@ def test_repeat_of_a_complete_read_stays_a_plain_stub(tmp_path):
     assert stub["dedup"] is True
     assert "next_offset" not in stub and "truncated" not in stub
     assert "offset=" not in stub["message"]
+
+
+def test_continuation_survives_cap_eviction_while_its_read_is_still_deduped(tmp_path, monkeypatch):
+    # A write leaves its range's continuation behind with no dedup entry; once the
+    # continuation map overflows, FIFO eviction must not drop a hint whose read is
+    # still deduped (it would stub with "still current" and no next_offset again).
+    from tools import file_tools_read_tracking
+    monkeypatch.setattr(file_tools_read_tracking, "_DEDUP_CAP", 2)
+    a, b, c = (_write_lines(tmp_path / f"{n}.txt", 300) for n in "abc")
+
+    read_file_tool(a, limit=100, task_id="t")
+    read_file_tool(b, limit=100, task_id="t")
+    file_tools_read_tracking._update_read_timestamp(b, "t")  # b written: dedup entry gone
+    file_tools_read_tracking.reset_file_dedup("t")           # compaction boundary
+    read_file_tool(a, limit=100, task_id="t")                # recovery read of a
+    read_file_tool(c, limit=100, task_id="t")                # overflows the maps
+    stub = json.loads(read_file_tool(a, limit=100, task_id="t"))
+
+    assert stub["dedup"] is True
+    assert stub["next_offset"] == 101 and "offset=101" in stub["message"]

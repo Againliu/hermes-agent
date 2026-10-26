@@ -89,7 +89,6 @@ def _cap_read_tracker_data(task_data: dict) -> None:
     for key, cap in (
         ("read_history", _READ_HISTORY_CAP),
         ("dedup", _DEDUP_CAP),
-        ("dedup_continuations", _DEDUP_CAP),
         ("dedup_hits", _DEDUP_CAP),
         ("dedup_generation_reads", _DEDUP_CAP),
         ("read_timestamps", _READ_TIMESTAMPS_CAP),
@@ -100,6 +99,13 @@ def _cap_read_tracker_data(task_data: dict) -> None:
         container = task_data.get(key)
         if container is not None and len(container) > cap:
             _evict_oldest(container, cap)
+    # Continuations are trimmed to the keys ``dedup`` still holds, never FIFO on their
+    # own: a write leaves a stale one behind and a re-read keeps its old position, so
+    # independent eviction could drop the hint of a read that still stubs.
+    conts, dedup = task_data.get("dedup_continuations"), task_data.get("dedup") or {}
+    if conts and len(conts) > _DEDUP_CAP:
+        for key in [k for k in conts if k not in dedup]:
+            del conts[key]
 
 
 def _resolved_or_none(filepath: str, task_id: str) -> str | None:
