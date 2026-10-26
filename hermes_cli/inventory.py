@@ -78,11 +78,14 @@ def _detected_local_rows(
     from hermes_cli.models_local_detect import picker_row, unsaved_servers
 
     shown = {_slug(r) for r in rows}
+    # Only a row listing models covers a server of its kind: an ``lmstudio`` row built from config
+    # alone (never probed) is empty, and hiding the detected row would hide the running models.
+    covered = {_slug(r) for r in rows if r.get("models")}
     excluded = {str(p).strip().lower() for p in (ctx.excluded_providers or []) if p}
     config = {"providers": ctx.user_providers, "custom_providers": ctx.custom_providers,
               "model": {"base_url": ctx.current_base_url}}
     return [picker_row(s, max_models=max_models) for s in unsaved_servers(config, cached_only=cached_only)
-            if s.slug not in shown and s.kind not in shown and not {s.slug, s.provider_key, s.kind} & excluded]
+            if s.slug not in shown and s.kind not in covered and not {s.slug, s.provider_key, s.kind} & excluded]
 
 
 # ─── Public: payload builder ────────────────────────────────────────────

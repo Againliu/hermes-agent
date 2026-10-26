@@ -388,3 +388,14 @@ async def test_a_new_gateway_chat_pinned_to_a_detected_row_runs_on_that_server(s
         owner.db.close()
     assert runtime["base_url"].rstrip("/") == f"http://127.0.0.1:{srv.port}/v1"
 
+
+def test_an_unprobed_lmstudio_row_does_not_hide_the_running_server(servers):
+    """``providers.lmstudio`` holding only a timeout makes an empty ``lmstudio`` row; the detected
+    server with its real models must still be offered."""
+    from hermes_cli.inventory import ConfigContext, build_models_payload
+
+    servers("lmstudio", {"/v1/models": _models(["qwen/qwen3-4b"], "organization_owner")})
+    ctx = ConfigContext("openrouter", "x", "", {"lmstudio": {"request_timeout_seconds": 120}}, [])
+    rows = build_models_payload(ctx, for_picker=True, local_detection="probe")["providers"]
+
+    assert [r["models"] for r in rows if r.get("source") == "detected"] == [["qwen/qwen3-4b"]]
