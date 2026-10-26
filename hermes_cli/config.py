@@ -16,7 +16,6 @@ import logging
 import os
 import platform
 import re
-import shlex
 import shutil
 import stat
 import subprocess
@@ -1046,48 +1045,6 @@ def _validate_fallback_model(fb: Any, issues: list[ConfigIssue]) -> None:
                         suffix=" — fallback will be disabled")
 
 
-def _container_slots() -> dict[str, str]:
-    """Dotted key -> ``"list"``/``"mapping"`` for every slot the schema fixes to a container:
-    ``DEFAULT_CONFIG`` (sections included) plus the known-container table for roots it omits."""
-    slots: dict[str, str] = {}
-
-    def walk(node: dict[str, Any], prefix: str) -> None:
-        for key, value in node.items():
-            path = f"{prefix}.{key}" if prefix else key
-            if isinstance(value, dict):
-                slots[path] = "mapping"
-                walk(value, path)
-            elif isinstance(value, list):
-                slots[path] = "list"
-
-    walk(DEFAULT_CONFIG, "")
-    slots.update(_KNOWN_CONTAINER_TYPES)
-    return slots
-
-
-def _validate_quoted_containers(config: dict[str, Any], issues: list[ConfigIssue]) -> None:
-    """A container slot holding ONE quoted string (``enabled: '["a","b"]'``) is skipped by every
-    isinstance-gated reader while ``config get`` echoes it back, so plugins silently unmount and
-    exclusions silently lapse (#83308, #105706). Finding only — the file is never rewritten."""
-    for key, kind in _container_slots().items():
-        # ``parse_config_string_list`` readers accept the quoted form; nothing is ignored there.
-        if key in _SCALAR_AS_ONE_ITEM_LIST_KEYS:
-            continue
-        value = cfg_get(config, *key.split("."))
-        if not isinstance(value, str) or not _looks_structured_value(value):
-            continue
-        try:
-            parsed = yaml.safe_load(value)
-        except yaml.YAMLError:
-            continue
-        if isinstance(parsed, (list, dict)):
-            _issue(issues, "warning",
-                   f"{key} is the quoted string {value!r} — Hermes expects a YAML {kind} here "
-                   "and every reader ignores the string",
-                   f"Run: hermes config set {key} {shlex.quote(value)}  (stores a real {kind}), "
-                   "or remove the quotes in config.yaml")
-
-
 def validate_config_structure(config: Optional[dict[str, Any]] = None) -> list[ConfigIssue]:
     """Validate config.yaml structure and return detected issues (accepts a pre-loaded dict).
     Catches common YAML mistakes that otherwise surface as confusing runtime errors."""
@@ -1099,6 +1056,7 @@ def validate_config_structure(config: Optional[dict[str, Any]] = None) -> list[C
             return [config_load_issue(exc)]
 
     from hermes_cli.config_value_checks import _validate_timezone, _validate_voice, _validate_web_backends
+    from hermes_cli.config_container_checks import validate_container_shapes, validate_dotted_root_keys
     issues: list[ConfigIssue] = []
     _validate_voice(config, issues)
     _validate_timezone(config, issues)
@@ -1128,7 +1086,8 @@ def validate_config_structure(config: Optional[dict[str, Any]] = None) -> list[C
                    f"Move '{key}' under the appropriate section")
 
     _validate_web_backends(config, issues)
-    _validate_quoted_containers(config, issues)
+    validate_container_shapes(config, issues)
+    validate_dotted_root_keys(config, issues)
     return issues
 
 

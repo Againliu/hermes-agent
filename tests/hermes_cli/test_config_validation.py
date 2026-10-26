@@ -193,3 +193,30 @@ class TestQuotedContainerValues:
             "plugins": {"enabled": ["a"]},
         })
         assert not [i for i in issues if "quoted string" in i.message]
+
+
+class TestListSlotShapes:
+    """A plain word or a mapping where a list belongs is skipped by every reader: ``plugins.enabled:
+    omh`` loads no user plugin at all. A dotted root key (``plugins.enabled:`` at column 0) is one
+    literal key nothing reads."""
+
+    def test_non_list_values_and_dotted_roots_are_flagged(self):
+        issues = validate_config_structure({
+            "plugins": {"enabled": "omh", "disabled": {"x": True}},
+            "skills.external_dirs": ["/opt/skills"],
+        })
+        messages = [i.message for i in issues]
+        assert any(m.startswith("plugins.enabled is the plain value 'omh'") for m in messages), messages
+        assert any(m.startswith("plugins.disabled is a mapping") for m in messages), messages
+        assert any("'skills.external_dirs' is a dotted path" in m for m in messages), messages
+        hint = next(i.hint for i in issues if i.message.startswith("plugins.enabled"))
+        assert "hermes config set plugins.enabled '[omh]'" in hint
+
+    def test_lists_unset_values_scalar_readers_and_env_style_roots_are_silent(self):
+        issues = validate_config_structure({
+            "plugins": {"enabled": ["omh"], "disabled": None},
+            "agent": {"disabled_toolsets": "web"},  # parse_config_string_list: one entry
+            "desktop": {"electron_flags": "--disable-gpu"},  # shlex-split by its reader
+            "my.app.token": "abc",  # unknown root: env-bridged on purpose
+        })
+        assert not [i for i in issues if "expects a YAML list" in i.message or "dotted path" in i.message]
