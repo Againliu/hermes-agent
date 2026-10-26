@@ -16,7 +16,7 @@ metadata:
 
 Decide what a release contains and its version, cut it so the tag points at a tested tree, roll
 it out in stages promoted by signals, and write the rollback trigger and literal rollback command
-down before the first stage ships. It does not cover app-store mobile releases or commanding an
+down before the tag is pushed. It does not cover app-store mobile releases or commanding an
 active incident.
 
 ## When to Use
@@ -61,7 +61,13 @@ actions: present the exact command, run it only on approval, then observe its ef
    fixes. Derive the version from those classes, not from how big it feels. Hold back what isn't
    ready behind a flag or out of the branch, and say which. Done when every change is classified
    and the version follows from the rule.
-2. **Cut in this order** (each step prevents a named failure):
+2. **Write the rollback before cutting.** Pushing a tag or publishing can itself deploy (a
+   release-triggered deploy workflow), so this comes before either. Trigger = signal + threshold
+   + window (e.g. "5xx rate above 1% for 5 minutes on the canary cohort"). Command = the literal line from the Quick
+   Reference table, plus who may run it. A release crossing a schema migration needs that
+   migration to be backward compatible (expand before contract) or the rollback is a restore; say
+   which. Done when trigger, threshold, window, command and owner are all written down.
+3. **Cut in this order** (each step prevents a named failure):
 
    | # | Step | Prevents |
    | --- | --- | --- |
@@ -73,11 +79,6 @@ actions: present the exact command, run it only on approval, then observe its ef
    | 6 | Curate the notes on top of the generated change list | a list of titles nobody can act on |
 
    After the cut, compare every version surface against the tag. Done when all match.
-3. **Write the rollback before shipping.** Trigger = signal + threshold + window (e.g. "5xx rate
-   above 1% for 5 minutes on the canary cohort"). Command = the literal line from the Quick
-   Reference table, plus who may run it. A release crossing a schema migration needs that
-   migration to be backward compatible (expand before contract) or the rollback is a restore; say
-   which. Done when trigger, threshold, window, command and owner are all written down.
 4. **Staged rollout, promoted by signals:**
 
    | Stage | Traffic | Bake | Promote when |
@@ -102,7 +103,7 @@ actions: present the exact command, run it only on approval, then observe its ef
 ## Verification
 
 - Every version surface equals the tag; every channel shows the new version.
-- The rollback trigger, threshold, window, command and owner were recorded before stage 1.
+- The rollback trigger, threshold, window, command and owner were recorded before the tag was pushed.
 - Each promotion is backed by an observed signal reading, not elapsed time.
 
 Ported from rlaope/oh-my-hermes (MIT), `skills/omh-release-cut`.
