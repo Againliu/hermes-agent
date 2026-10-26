@@ -10,10 +10,18 @@ process still works inside is kept, not reaped (#132401). Ownership is an OS-hel
 Hermes' own entry points take automatically (hermes_constants_scratch_lock), never a marker a
 lane must remember to drop, and never a guess from pids, start times or clocks: the kernel
 releases a dead holder's lock the instant it dies.
+
+One keep-only addition: a background process a profile's process registry recorded in its
+``processes.json`` is owned too while the registry's own same-process check (the rule
+``recover_from_checkpoint`` re-adopts by) says it is still that process. A recorded child
+outlives its spawner (a gateway restart, a managed worker between turns) until the next spawner
+re-adopts it and vouches for it with a lock; a prune due in that window must not kill it. This
+check can only add owners, never cause a kill: the locks stay the authority for everything else.
 """
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import shutil
@@ -187,17 +195,50 @@ def _own_lineage() -> set[int] | None:
     return set(lineage_pids() or ()) | _launcher_lineage
 
 
+def _recorded_background_pids(home: Path) -> dict[int, str]:
+    """Keep-only owners: pid -> why, for every background process recorded in the
+    ``processes.json`` of *home*, its root, and each profile under that root (one gateway serves
+    several homes, and this prune's owners dir covers the whole root) that passes the registry's
+    same-process check. A file that is missing or unreadable adds nothing; the registry itself
+    recovers nothing from it either."""
+    from hermes_constants import get_default_hermes_root
+    from tools.process_registry import process_registry
+
+    root = get_default_hermes_root(home=home)
+    homes = {home, root, *(path.parent for path in (root / "profiles").glob("*/processes.json"))}
+    owners: dict[int, str] = {}
+    for path in sorted(base / "processes.json" for base in homes):
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        for entry in entries if isinstance(entries, list) else []:
+            pid = entry.get("pid") if isinstance(entry, dict) else None
+            if type(pid) is not int or pid <= 1 or entry.get("pid_scope", "host") != "host":
+                continue
+            if process_registry._detached_host_fate(pid, entry.get("host_start_time")) == "running":
+                owners.setdefault(pid, f"background process pid={pid} recorded in {os.fspath(path)!r}")
+    return owners
+
+
+def _owners(home: Path) -> dict[int, str]:
+    """Pid -> why it is Hermes-owned: a held owner lock, else a recorded background process."""
+    owners = {pid: f"owner lock {path!r} held for pid={pid}" for pid, path in live_owner_pids(home).items()}
+    for pid, why in _recorded_background_pids(home).items():
+        owners.setdefault(pid, why)
+    return owners
+
+
 def _keep_owned(doomed: list[Path], candidates: list, owners: dict[int, str], audit: logging.Logger) -> list:
-    """Drop from *doomed* every entry an owned candidate works inside (audited with the lock that
-    owns it) and return the candidates that are not owned."""
+    """Drop from *doomed* every entry an owned candidate works inside (audited with what owns it)
+    and return the candidates that are not owned."""
     rest = []
     for proc, cwd_path in candidates:
         holder = owning_holder(proc.pid, owners)
         if holder is None:
             rest.append((proc, cwd_path))
             continue
-        _keep_entries_of(doomed, proc, cwd_path, audit,
-                         f"owner lock {owners[holder]!r} held for pid={holder}")
+        _keep_entries_of(doomed, proc, cwd_path, audit, owners[holder])
     return rest
 
 
@@ -223,8 +264,9 @@ def reap_processes_rooted_in(scratch_root: Path, doomed: list[Path], audit: logg
     about to delete, or in one already gone, has nothing left to run for.
 
     A process Hermes owns — it or a process on its parent chain holds a scratch owner lock
-    (hermes_constants_scratch_lock) — is never signalled; each doomed entry it works inside is
-    dropped from *doomed* in place and recorded as kept.
+    (hermes_constants_scratch_lock) or is a recorded background process (keep-only, see the
+    module docstring) — is never signalled; each doomed entry it works inside is dropped from
+    *doomed* in place and recorded as kept.
     """
     import psutil
 
@@ -257,7 +299,7 @@ def reap_processes_rooted_in(scratch_root: Path, doomed: list[Path], audit: logg
     # a cache/scratch symlinked onto another disk still belongs to <home>.
     home = Path(scratch_root).absolute().parent.parent
     if victims:
-        victims = _keep_owned(doomed, victims, live_owner_pids(home), audit)
+        victims = _keep_owned(doomed, victims, _owners(home), audit)
     # Re-filter against the shrunk *doomed*: an orphan in a kept entry is spared with it (the
     # reap only exists to clear the way for rmtree); one whose cwd is already gone still goes.
     victims = [(proc, cwd_path) for proc, cwd_path in victims
@@ -265,7 +307,7 @@ def reap_processes_rooted_in(scratch_root: Path, doomed: list[Path], audit: logg
     if victims:
         # Second read right before signalling: a process that took its lock since the first
         # read (a Hermes command starting inside the entry) is kept, not killed.
-        victims = _keep_owned(doomed, victims, live_owner_pids(home), audit)
+        victims = _keep_owned(doomed, victims, _owners(home), audit)
     if not victims:
         return 0
     for proc, cwd_path in victims:

@@ -172,3 +172,42 @@ def test_owner_locks_that_cannot_be_taken_make_the_prune_reap_nothing(tmp_path):
             _stop(gateway)
     finally:
         os.chmod(home / "locks", 0o755)
+
+
+@pytest.mark.platforms("any")
+def test_a_recorded_background_process_keeps_its_entry_only_while_it_is_still_that_process(tmp_path):
+    """A gateway restart (or a managed worker between turns) leaves a background process its registry
+    recorded with no lock until the next spawner re-adopts it. A prune due in that window must keep
+    it when any profile's ``processes.json`` records it and the registry's own same-process check
+    passes. A record whose start time no longer matches (a reused pid) keeps nothing: reaped."""
+    from tools.process_registry import ProcessRegistry
+
+    entry = get_scratch_dir(tmp_path, prune=False) / "bg-worker"
+    entry.mkdir(parents=True)
+    profile = tmp_path / "profiles" / "coder"
+    profile.mkdir(parents=True)
+    worker = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], cwd=str(entry),
+                              stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+    start = ProcessRegistry._safe_host_start_time(worker.pid)
+
+    def record(stamp):
+        (profile / "processes.json").write_text(json.dumps([{
+            "session_id": "proc_recorded", "command": "bg-worker", "pid": worker.pid, "pid_scope": "host",
+            "host_start_time": stamp}]), encoding="utf-8")
+
+    try:
+        record(start)
+        _age(entry)
+        prune_scratch_dir(entry.parent)
+        assert _alive(worker.pid), "a recorded background process was killed before its re-adoption"
+        assert entry.exists()
+        log = (tmp_path / "logs" / "scratch-prune.log").read_text(encoding="utf-8-sig")
+        assert f"recorded in {str(profile / 'processes.json')!r}" in log, log
+
+        record(start + 1)
+        _age(entry)
+        assert prune_scratch_dir(entry.parent) == 1
+        wait_until(lambda: not _alive(worker.pid), timeout=30, what="the no-longer-recorded process reaped")
+    finally:
+        worker.kill()
+        worker.wait(timeout=30)

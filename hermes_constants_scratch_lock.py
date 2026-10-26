@@ -72,7 +72,8 @@ def owners_dir(home: str | Path | None = None) -> Path:
 def owner_pid(name: str) -> int | None:
     """The pid a lock file name speaks for: ``<pid>.lock`` or ``<pid>.vouch-...lock``."""
     stem = name.split(".", 1)[0]
-    return int(stem) if name.endswith(_SUFFIX) and stem.isdigit() else None
+    # ASCII digits only: str.isdigit() also accepts other scripts' digits ("١٢").
+    return int(stem) if name.endswith(_SUFFIX) and stem.isascii() and stem.isdigit() else None
 
 
 def _try_lock(fd: int) -> bool:
@@ -146,12 +147,14 @@ def _release(path: str) -> None:
 
 def hold_owner_lock(home: str | Path | None = None) -> bool:
     """Take this process's owner lock for *home*'s root and hold it until the process exits.
-    Idempotent. False (logged) when it cannot be taken: the prune will not know this process."""
-    path = os.path.join(owners_dir(home), f"{os.getpid()}{_SUFFIX}")
-    already = _ours(path)
+    Idempotent. False (logged) when it cannot be taken: the prune will not know this process.
+    Never raises: entry points call it first thing, and no lock failure may stop one starting."""
     try:
+        path = os.path.join(owners_dir(home), f"{os.getpid()}{_SUFFIX}")
+        already = _ours(path)
         taken = _acquire(path)
-    except OSError as exc:
+    # health: allow BLE001 -- best-effort by contract: a home that cannot resolve (RuntimeError from Path.home()) must not abort the entry point
+    except Exception as exc:
         logger.warning("scratch owner lock not taken (%s): the scratch prune will not know this process", exc)
         return False
     if taken is None:
@@ -166,12 +169,14 @@ def vouch_for_child(pid: int, home: str | Path | None = None) -> str | None:
     """Hold a lock naming *pid*, a child this process spawned (or re-adopted) and still tracks,
     until :func:`release_vouch` with the returned handle. It cannot outlive this process. Each call
     gets its own file, so a release only ever drops the vouch it names. Best-effort: None when the
-    lock cannot be taken."""
-    path = os.path.join(owners_dir(home), f"{pid}.vouch-{os.getpid()}-{next(_vouch_seq)}{_SUFFIX}")
+    lock cannot be taken. Never raises: the registry calls it right after a spawn or during
+    checkpoint recovery, where an exception would kill the fresh child or abort the recovery."""
     try:
+        path = os.path.join(owners_dir(home), f"{pid}.vouch-{os.getpid()}-{next(_vouch_seq)}{_SUFFIX}")
         return _acquire(path)
-    except OSError as exc:
-        logger.debug("scratch owner vouch for pid %s not taken: %s", pid, exc)
+    # health: allow BLE001 -- best-effort by contract: a failed vouch only leaves the child unprotected from the prune
+    except Exception as exc:
+        logger.warning("scratch owner vouch for pid %s not taken (%s): the scratch prune will not know it", pid, exc)
         return None
 
 

@@ -267,13 +267,14 @@ with its source repo, whose activity would otherwise keep the clone forever). Be
 with its working directory inside that entry (or inside a scratch path that no longer exists,
 such as a headless browser left behind by a test run) and drops any `git worktree`
 registration that pointed into it. A process Hermes owns is never stopped: the gateway,
-`hermes serve`, a CLI or TUI session, a background `terminal` process while the Hermes process
-that started it runs (or the restarted gateway that took it over), and anything they launched
-that is still their child. Ownership is an OS
+`hermes serve`, a CLI or TUI session, a background `terminal` process Hermes still has on record,
+and anything they launched that is still their child. Ownership is an OS
 lock each of these holds under `~/.hermes/locks/scratch-owners/`, which the operating system
 releases the moment its holder exits, so clock changes, reboots and reused process ids never
-change the answer, and what a Hermes process that has since exited left behind counts as an
-orphan. The shell that started the Hermes command (or its parents) is never stopped either, even
+change the answer. A background process outlives the Hermes process that started it (a gateway
+restart); it stays owned while a profile's `processes.json` still records it as the same process,
+so the gateway that comes back can take it over. Anything else a Hermes process that has since
+exited left behind counts as an orphan. The shell that started the Hermes command (or its parents) is never stopped either, even
 after that command exited. An idle entry any of them is working inside is kept instead. On
 Windows an entry that some process still has a file open in is kept whole, never half-deleted.
 A pass that cannot inspect processes, or cannot read or take owner locks (an unwritable

@@ -84,6 +84,18 @@ elif role == "hermes":
     time.sleep(0.2)
     info["child"] = json.load(open(report, encoding="utf-8-sig"))
 else:
+    if role == "boot-recover":
+        # The restarted gateway's scratch prune is due at boot and runs (detached) before the
+        # gateway re-adopts what the checkpoint records: wait for its verdict on the lane first.
+        from hermes_constants import get_scratch_dir
+        get_scratch_dir()
+        log = os.path.join(os.environ["HERMES_HOME"], "logs", "scratch-prune.log")
+        read = lambda: open(log, encoding="utf-8-sig", errors="replace").read() if os.path.exists(log) else ""
+        deadline = time.monotonic() + 90
+        while "lane" not in read() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        time.sleep(1)  # the pass's reap (TERM, then KILL) settles
+        info["boot_prune_log"] = read()[-1500:]
     checkpoint = os.path.join(os.environ["HERMES_HOME"], "processes.json")
     entries = json.load(open(checkpoint, encoding="utf-8-sig")) if os.path.exists(checkpoint) else []
     info["checkpoint"] = [(e.get("pid"), e.get("host_start_time"), registry._safe_host_start_time(e.get("pid")),
@@ -294,6 +306,23 @@ def _recovered_worker(world, lane):
     return worker, ""
 
 
+def _worker_kept_by_the_boot_prune_then_recovered(world, lane):
+    """The gateway is terminated; the next one's boot-time prune is due and runs BEFORE it
+    re-adopts the worker, so the worker holds no lock in that window. The checkpoint still records
+    it as the same process: the prune keeps it, and the next gateway re-adopts it."""
+    first = world.registry(lane, "spawn")
+    worker = first["worker"]
+    world.spawned.append(worker)
+    psutil.Process(first["registry"]).kill()
+    wait_until(lambda: gone(first["registry"]), timeout=30, what="first gateway terminated")
+    assert alive(worker), "the worker died with the gateway that spawned it"
+    world.age()
+    nxt = world.registry(lane, "boot-recover")
+    assert alive(worker), f"the boot prune killed the worker before its re-adoption:\n{nxt['boot_prune_log']}"
+    assert nxt["recovered"] == 1 and worker in nxt["pids"], (nxt, first)
+    return worker, "recorded in"
+
+
 def _tui_backend_helper(world, lane):
     return world.tui_backend(lane)["helper"], ""
 
@@ -310,10 +339,11 @@ def _background_hermes_command(world, lane):
     return child, ""
 
 
-@pytest.mark.parametrize("make", [_recovered_worker, _tui_backend_helper, _background_hermes_command,
+@pytest.mark.parametrize("make", [_recovered_worker, _worker_kept_by_the_boot_prune_then_recovered,
+                                  _tui_backend_helper, _background_hermes_command,
                                   _gateway_whose_owners_dir_is_unusable],
-                         ids=["recovered-by-next-gateway", "tui-backend-helper", "background-hermes-command",
-                              "owners-dir-unusable"])
+                         ids=["recovered-by-next-gateway", "boot-prune-before-recovery", "tui-backend-helper",
+                              "background-hermes-command", "owners-dir-unusable"])
 def test_a_process_hermes_owns_or_may_own_keeps_its_idle_entry(world, make):
     """Each process is Hermes-owned through an owner lock, or its ownership cannot be known: neither
     it nor its idle entry may be pruned, and an unknown is named in the audit log."""
