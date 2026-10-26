@@ -196,6 +196,26 @@ async def test_one_editor_closing_never_releases_another_editors_hold(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_a_reconnected_editor_releases_its_own_hold(tmp_path, monkeypatch):
+    from gateway.session_queue_holds import edit_held
+    db, authority = _authority(tmp_path, monkeypatch)
+    interactive(db)
+    monkeypatch.setattr(authority, '_schedule', lambda ref: None)
+    with db:
+        head = await _submit(authority, 'head')
+        before, after = _connection(authority), _connection(authority)  # the same editor, a new socket
+        for token in ('mine', 'other window'):
+            assert 'error' not in await _call(before, 'prompt.hold_queued', admission_id=head.admission_id,
+                                              held=True, holder=token)
+        assert 'error' not in await _call(after, 'prompt.hold_queued', admission_id=head.admission_id,
+                                          held=False, holder='mine')
+        assert edit_held(authority, head.admission_id), "a release ended another window's hold"
+        assert 'error' not in await _call(after, 'prompt.hold_queued', admission_id=head.admission_id,
+                                          held=False, holder='other window')
+        assert not edit_held(authority, head.admission_id), 'a cancelled edit kept the queue waiting'
+
+
+@pytest.mark.asyncio
 async def test_a_hold_waits_for_a_claim_in_flight_and_then_refuses(tmp_path, monkeypatch):
     from hermes_state_runtime import claim_session_input
     db, authority = _authority(tmp_path, monkeypatch)

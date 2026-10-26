@@ -48009,7 +48009,7 @@
     },
     {
       "name": "prompt.hold_queued",
-      "summary": "Hold (held=true) or release a still-queued admission while a client edits it: the drain does not start a held admission (pending snapshots say hold_reason 'editing'). Each editor (connection + holder) holds separately; a hold lapses after 120 s unless renewed; prompt.replace_queued and prompt.cancel end it. Refusals: admission_started, unsupported_control, not_found.",
+      "summary": "Hold (held=true) or release a still-queued admission while a client edits it: the drain does not start a held admission (pending snapshots say hold_reason 'editing'). Each editor (holder token, else connection) holds separately; a hold lapses after 120 s unless renewed; prompt.replace_queued and prompt.cancel end it. Refusals: admission_started, unsupported_control, not_found.",
       "params": [
         {
           "name": "params",

@@ -276,12 +276,13 @@ async def _reorderable(connection, ref, admission_id, verb):
 
 async def hold_queued(connection, ref, params):
     """Hold a queued admission while a client edits it (``held``), or release it. The drain parks on
-    a held head (it never starts mid-edit); the hold lapses after ``EDIT_HOLD_S``. Each editor
-    (this connection + its optional ``holder`` token) holds on its own, so closing one editor never
-    releases another's hold. Checked and set under the session's ``claim_gate``: a drain between its
-    head check and its claim commit finishes first, and this answers ``admission_started``."""
-    authority, admission_id = connection.authority, params['admission_id']
-    holder = (id(connection), params.get('holder'))
+    a held head (it never starts mid-edit); the hold lapses after ``EDIT_HOLD_S``. Each editor holds
+    on its own, so closing one editor never releases another's hold: one with a ``holder`` token is
+    that token under the signed-in subject (a reconnected socket still releases it), one without is
+    this connection. Checked and set under the session's ``claim_gate``: a drain between its head
+    check and its claim commit finishes first, and this answers ``admission_started``."""
+    authority, admission_id, token = connection.authority, params['admission_id'], params.get('holder')
+    holder = (connection.actor.subject, token) if token else (id(connection), None)
     async with authority.sessions[ref.session_id].claim_gate:
         receipt = await _reorderable(connection, ref, admission_id, 'replace')
         set_edit_hold(authority, admission_id, params.get('held') is True, holder)

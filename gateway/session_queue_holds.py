@@ -14,8 +14,9 @@ snapshot names the reason (``hold_reason``) so Desktop and ``/queue list`` can s
   other drain saw running never pins the slot.
 - ``editing``: a client is editing the row (``prompt.hold_queued``). The drain does not start it
   until the edit is saved or abandoned; the hold lapses after ``EDIT_HOLD_S`` so a crashed client
-  cannot pin the FIFO. Each editor (connection + its holder token) holds separately: one editor
-  closing never releases another's hold.
+  cannot pin the FIFO. Each editor (its holder token under the signed-in subject, else its
+  connection) holds separately: one editor closing never releases another's hold, and a reconnected
+  editor still releases its own.
 - ``session_busy`` (a turn or worker runs on the session), ``restarting``, ``paused`` (a lost turn
   waits for the user): read from the drain's own pause reasons.
 

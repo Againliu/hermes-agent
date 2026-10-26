@@ -272,8 +272,8 @@ class CanonicalReplaceQueuedParams(CanonicalSessionParams):
 class CanonicalHoldQueuedParams(CanonicalSessionParams):
     admission_id: str
     held: bool
-    # The editor's own token: holds are per connection and holder, so one editor's release never
-    # ends another editor's hold on the same row.
+    # The editor's own token: a hold is per signed-in subject and token (per connection without one),
+    # so one editor's release never ends another's, and a reconnected editor still releases its own.
     holder: str | None = None
 
 
@@ -379,7 +379,7 @@ canonical_method('prompt.replace_queued', params=CanonicalReplaceQueuedParams, r
 canonical_method('prompt.hold_queued', params=CanonicalHoldQueuedParams, result=AdmissionStatus,
                  doc="Hold (held=true) or release a still-queued admission while a client edits it: "
                      "the drain does not start a held admission (pending snapshots say "
-                     "hold_reason 'editing'). Each editor (connection + holder) holds separately; a hold "
+                     "hold_reason 'editing'). Each editor (holder token, else connection) holds separately; a hold "
                      "lapses after 120 s unless renewed; "
                      "prompt.replace_queued and prompt.cancel end it. "
                      "Refusals: admission_started, unsupported_control, not_found.")

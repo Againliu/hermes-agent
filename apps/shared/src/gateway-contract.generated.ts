@@ -6842,7 +6842,7 @@ export interface CanonicalRpcMethods {
   'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
   /** Retire a queued admission; a started one is interrupted in the same call. */
   'prompt.cancel': { params: PromptCancelParams; result: AdmissionStatus }
-  /** Hold (held=true) or release a still-queued admission while a client edits it: the drain does not start a held admission (pending snapshots say hold_reason 'editing'). Each editor (connection + holder) holds separately; a hold lapses after 120 s unless renewed; prompt.replace_queued and prompt.cancel end it. Refusals: admission_started, unsupported_control, not_found. */
+  /** Hold (held=true) or release a still-queued admission while a client edits it: the drain does not start a held admission (pending snapshots say hold_reason 'editing'). Each editor (holder token, else connection) holds separately; a hold lapses after 120 s unless renewed; prompt.replace_queued and prompt.cancel end it. Refusals: admission_started, unsupported_control, not_found. */
   'prompt.hold_queued': { params: CanonicalHoldQueuedParams; result: AdmissionStatus }
   /** Current receipt of one admission the caller submitted (or controls). */
   'prompt.receipt': { params: PromptReceiptParams; result: PromptReceiptResult }
