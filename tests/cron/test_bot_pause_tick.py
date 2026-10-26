@@ -77,3 +77,24 @@ def test_resume_does_not_burst_the_runs_missed_while_paused(fleet):
     _tick(paused)
 
     assert fired == []
+
+
+def test_a_pause_no_tick_saw_still_skips_the_slot_that_fell_due_inside_it(fleet, monkeypatch):
+    """Pause, a slot falls due, resume, all before the next tick (or with the ticker down)."""
+    import tui_gateway.server as srv
+    from cron.jobs import _hermes_now, _parse_aware
+
+    paused, _active, fired = fleet
+    monkeypatch.setenv("HOME", str(paused.parent.parent.parent))  # profiles resolve under ~/.hermes
+
+    def configure(flag):
+        params = {"name": "scribe", "ui_meta": {"hermes-bots": {"title": "scribe", "paused": flag}}}
+        return srv._methods["profiles.configure"]("c", params)["result"]["applied"]
+
+    pause = configure(True)
+    held = _overdue_job(paused, minutes=0)  # due now: inside the pause
+    configure(False)
+    (job,) = _tick(paused)
+
+    assert pause["bot_pause_enforced"] is True  # the Desktop's proof this gateway enforces the pause
+    assert fired == [] and job["id"] == held and _parse_aware(job["next_run_at"]) > _hermes_now()

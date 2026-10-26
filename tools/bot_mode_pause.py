@@ -8,7 +8,10 @@ While paused:
 
 - its scheduled jobs do not fire. Each recurring slot that falls due is consumed (its
   ``next_run_at`` advances) instead of run, so a resume never bursts the missed runs; a due
-  one-shot is held and meets the scheduler's ordinary one-shot grace after the resume.
+  one-shot is held and meets the scheduler's ordinary one-shot grace after the resume. The
+  pause's start and end are recorded when ``profiles.configure`` flips the flag
+  (:func:`record_pause_change`), so a slot that fell due inside a pause no tick observed (shorter
+  than a tick, or with the ticker down) is still skipped at the first tick after the resume.
 - a teammate's ``message_agent`` delivery is refused with :data:`RECIPIENT_PAUSED`
   (``gateway/session_bot.py``), a definite no-send the sender is told about.
 
@@ -19,14 +22,20 @@ global emergency stop) is the switch that holds every turn. Hidden stays display
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 
 from tools.bot_failure_reasons import RECIPIENT_PAUSED
 
-__all__ = ["RECIPIENT_PAUSED", "hold_paused_profile_jobs", "is_bot_paused"]
+__all__ = ["RECIPIENT_PAUSED", "hold_paused_profile_jobs", "is_bot_paused", "record_pause_change"]
+
+# Pause intervals ``[{"start": ts, "end": ts | None}]``, newest last, in the profile home.
+_WINDOWS_FILE = "bot_pause_windows.json"
+_MAX_WINDOWS = 16
 
 # Profile homes whose pause was logged already: once per engagement, re-armed on resume.
 _logged_lock = threading.Lock()
@@ -40,6 +49,43 @@ def is_bot_paused(home: str | os.PathLike) -> bool:
 
     meta = _bots_meta(_read_yaml_dict(Path(home) / "profile.yaml", "paused"))
     return bool(meta) and meta.get("paused") is True
+
+
+def _read_windows(home: Path) -> list[dict]:
+    try:
+        windows = json.loads((home / _WINDOWS_FILE).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return []
+    return [w for w in windows if isinstance(w, dict)] if isinstance(windows, list) else []
+
+
+def record_pause_change(home: str | os.PathLike, paused: bool) -> None:
+    """Stamp a pause's start (``paused``) or end in the profile home. ``profiles.configure`` calls
+    this when it flips the flag, so the tick can tell which slots fell due during the pause even
+    when it never ran while the bot was paused."""
+    from utils import atomic_json_write
+
+    home = Path(home)
+    windows = _read_windows(home)
+    still_open = bool(windows) and windows[-1].get("end") is None
+    if paused and not still_open:
+        windows.append({"start": time.time(), "end": None})
+    elif not paused and still_open:
+        windows[-1]["end"] = time.time()
+    else:
+        return
+    atomic_json_write(home / _WINDOWS_FILE, windows[-_MAX_WINDOWS:])
+
+
+def _fell_due_while_paused(job: dict, windows: list[dict]) -> bool:
+    from cron.jobs import _parse_aware
+
+    slot = _parse_aware(job.get("next_run_at"))
+    if slot is None:
+        return False
+    due = slot.timestamp()
+    return any(isinstance(w.get("end"), (int, float)) and w.get("start", due + 1) <= due <= w["end"]
+               for w in windows)
 
 
 def _note_paused(home: Path, paused: bool, logger: logging.Logger) -> None:
@@ -67,10 +113,19 @@ def hold_paused_profile_jobs(due_jobs: list, logger: logging.Logger) -> list:
     home = get_hermes_home()
     paused = is_bot_paused(home)
     _note_paused(home, paused, logger)
-    if not paused or not due_jobs:
+    if not due_jobs:
         return due_jobs
+    if paused:
+        held, why = due_jobs, "Skipped: this bot is paused"
+    else:
+        # Resumed: a recurring slot that fell due inside a recorded pause is consumed all the same.
+        windows = _read_windows(Path(home))
+        held = [job for job in due_jobs if is_recurring(job) and _fell_due_while_paused(job, windows)]
+        why = "Skipped: it fell due while this bot was paused"
+        if not held:
+            return due_jobs
     # Never handed to the dispatcher: drop the due scan's pending-slot mark (else the next scan
     # "restores" the slot as a lost dispatch) and stamp why, as the headless gate does.
-    _note_fire_refused([str(job["id"]) for job in due_jobs], "Skipped: this bot is paused")
-    advance_next_runs([job["id"] for job in due_jobs if is_recurring(job)])
-    return []
+    _note_fire_refused([str(job["id"]) for job in held], why)
+    advance_next_runs([job["id"] for job in held if is_recurring(job)])
+    return [job for job in due_jobs if job not in held]
