@@ -43,21 +43,6 @@ export interface RosterSessionSignals {
   routines: readonly string[]
 }
 
-const quoteCache = new Map<string, SessionPromptQuote>()
-
-// Interned so an unchanged prompt keeps its reference and stableRecord holds.
-function internQuote(kind: SessionPromptQuote['kind'], text: string): SessionPromptQuote {
-  const key = `${kind}\u0000${text}`
-  let quote = quoteCache.get(key)
-
-  if (!quote) {
-    quote = Object.freeze({ kind, text })
-    quoteCache.set(key, quote)
-  }
-
-  return quote
-}
-
 export const routineScopeKey = (connectionId: null | string | undefined, profile: null | string | undefined) =>
   `${String(connectionId || '').trim()}::${String(profile || 'default').trim() || 'default'}`
 
@@ -74,13 +59,17 @@ export const $rosterSessionSignals = computed(
   (dots, clarifies, approvals, states, sessions, cron): RosterSessionSignals => {
     const prompts: Record<string, SessionPromptQuote> = {}
 
-    const claim = (runtimeId: string, quote: SessionPromptQuote) => {
+    // A still-live prompt keeps the quote object the last paint held, so
+    // stableRecord holds; an answered one drops out with its text.
+    const claim = (runtimeId: string, kind: SessionPromptQuote['kind'], text: string) => {
       if (!runtimeId) {
         return
       }
 
       for (const alias of lineageAliases(states[runtimeId]?.storedSessionId ?? runtimeId, sessions)) {
-        prompts[alias] = quote
+        const prev = prevPrompts[alias]
+
+        prompts[alias] = prev?.kind === kind && prev.text === text ? prev : Object.freeze({ kind, text })
       }
     }
 
@@ -88,7 +77,7 @@ export const $rosterSessionSignals = computed(
       const text = request.questions.map(q => q.question).find(Boolean)
 
       if (text) {
-        claim(runtimeId, internQuote('clarify', text))
+        claim(runtimeId, 'clarify', text)
       }
     }
 
@@ -98,7 +87,7 @@ export const $rosterSessionSignals = computed(
       const text = String(request.command || request.description || '').trim()
 
       if (text) {
-        claim(runtimeId, internQuote('approval', text))
+        claim(runtimeId, 'approval', text)
       }
     }
 

@@ -35,6 +35,15 @@ describe('$rosterSessionSignals', () => {
     expect($rosterSessionSignals.get().prompts['stored-1']).toBeUndefined()
   })
 
+  it('keeps a live prompt map by reference across an unrelated recompute', () => {
+    setApprovalRequest({ sessionId: 'rt-1', command: 'terraform apply', description: 'dangerous' })
+    const before = $rosterSessionSignals.get().prompts
+
+    $cronSessions.set([{ id: 'c9', profile: 'alpha', scheduler_owned: false, is_active: true }] as never)
+
+    expect($rosterSessionSignals.get().prompts).toBe(before)
+  })
+
   it('lists only cron runs the scheduler still owns, scoped by connection and profile', () => {
     $cronSessions.set([
       { id: 'c1', profile: 'alpha', scheduler_owned: true, is_active: true },
