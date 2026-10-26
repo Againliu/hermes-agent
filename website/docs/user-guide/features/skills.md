@@ -133,7 +133,7 @@ The request is ranked (BM25, with CJK bigrams) against each offered skill's name
     - github: GitHub via gh CLI: PRs, issues, reviews, repos, auth.]
 ```
 
-Nothing is auto-loaded. Small talk, slash commands, messages that already name a skill, and pasted material (code fences, quoted replies, indented logs) get no note, and the same suggestion set appears once per session.
+Nothing is auto-loaded. Small talk, slash commands, messages that already name a skill, and pasted material (code fences, quoted replies, indented logs) get no note; a skill the session already carries (`skills.auto_load`, a slash invocation, a `skill_view` call) is never suggested; and the same suggestion set appears once per session.
 
 Skill authors can add retrieval-only phrases a user in that situation would type. They feed the shortlist only and are never shown in the system-prompt index, so they cost nothing per request:
 

@@ -212,9 +212,13 @@ def _shown_sets(conversation_history: Any) -> set[frozenset]:
 
 
 def _loaded_skills(conversation_history: Any) -> set[str]:
-    """Skills this session already loaded with skill_view: suggesting them again is noise."""
-    loaded: set[str] = set()
+    """Skills this session already carries in full — ``skills.auto_load``, a slash/bundle or gateway
+    auto-load turn, a skill_view call: suggesting them again is noise."""
+    from agent.skill_commands import resolve_auto_load_skills, skills_loaded_by_scaffold
+    loaded = set(resolve_auto_load_skills())
     for msg in conversation_history or []:
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            loaded.update(skills_loaded_by_scaffold(msg.get("content")))
         for tc in (msg.get("tool_calls") or []) if isinstance(msg, dict) else []:
             fn = tc.get("function") if isinstance(tc, dict) else None
             if isinstance(fn, dict) and fn.get("name") == "skill_view":

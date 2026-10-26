@@ -96,3 +96,16 @@ def test_ranks_the_resolved_catalog_the_session_can_load_now(tmp_path, monkeypat
     (skills / "devops" / "merge-repair" / "SKILL.md").unlink()
     pb.clear_skills_system_prompt_cache()
     assert _turn(_agent(tmp_path), prompt, [], "my pull request has merge conflicts again, can you sort it out") == ""
+
+
+def test_skills_loaded_without_skill_view_are_not_suggested_again(tmp_path, monkeypatch):
+    """A gateway auto-load / slash turn and ``skills.auto_load`` load a skill with no skill_view call."""
+    prompt = _setup(tmp_path, monkeypatch, "shortlist")
+    ask = "my pull request has merge conflicts again, can you sort it out"
+    history = [{"role": "user", "content": '[IMPORTANT: The "merge-repair" skill is auto-loaded. '
+                                           "Follow its instructions for this session.]\n\nBody."}]
+    assert _turn(_agent(tmp_path), prompt, history, ask) == ""
+
+    (tmp_path / "config.yaml").write_text("skills:\n  selection: shortlist\n  auto_load: [merge-repair]\n",
+                                          encoding="utf-8")
+    assert _turn(_agent(tmp_path), prompt, [], ask) == ""
