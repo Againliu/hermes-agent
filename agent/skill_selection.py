@@ -147,16 +147,15 @@ def shortlist(query: Any, docs: tuple[tuple[str, str, tuple[str, ...]], ...]) ->
 @lru_cache(maxsize=4096)
 def _skill_file_doc(path: str, _sig: tuple) -> tuple[tuple[str, ...], str, tuple[str, ...]]:
     """``(names it answers to, full description, situations)`` for one SKILL.md, cached per file signature."""
-    from agent.skill_utils import _hermes_metadata, _normalize_skill_description, parse_frontmatter
+    from agent.skill_utils import _config_str_list, _hermes_metadata, _normalize_skill_description, parse_frontmatter
     try:
         frontmatter, _ = parse_frontmatter(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeDecodeError):
         return (), "", ()
     meta = _hermes_metadata(frontmatter)
-    phrases: list[str] = []
-    for key in ("situations", "triggers"):  # retrieval-only: the index never renders either
-        raw = meta.get(key, frontmatter.get(key))
-        phrases += [str(p).strip() for p in ([raw] if isinstance(raw, str) else raw or []) if str(p).strip()]
+    # Retrieval-only (the index never renders either); a malformed value (``triggers: true``) reads
+    # as no phrases instead of raising and silencing every suggestion.
+    phrases = [p for key in ("situations", "triggers") for p in _config_str_list(meta.get(key, frontmatter.get(key)))]
     names = (str(frontmatter.get("name") or "").strip(), Path(path).parent.name)
     return tuple(n for n in names if n), _normalize_skill_description(frontmatter), tuple(phrases)
 

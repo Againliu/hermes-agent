@@ -66,3 +66,12 @@ def test_shortlist_suggests_once_per_session_from_situations_never_rendered_in_p
 def test_legacy_default_sends_no_suggestion(tmp_path, monkeypatch):
     prompt = _setup(tmp_path, monkeypatch, None)
     assert _turn(_agent(tmp_path), prompt, [], "my pull request has merge conflicts again") == ""
+
+
+def test_malformed_situations_in_one_skill_do_not_silence_the_others(tmp_path, monkeypatch):
+    prompt = _setup(tmp_path, monkeypatch, "shortlist")
+    bad = tmp_path / "skills" / "devops" / "docker-ops" / "SKILL.md"
+    bad.write_text("---\nname: docker-ops\ndescription: Run and inspect containers.\ntriggers: true\n---\nBody.\n",
+                   encoding="utf-8")
+    note = _turn(_agent(tmp_path), prompt, [], "my pull request has merge conflicts again, can you sort it out")
+    assert "    - merge-repair:" in note
