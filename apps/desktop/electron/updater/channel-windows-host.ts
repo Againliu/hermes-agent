@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 
 import { downloadPinnedArtifact } from './artifact'
@@ -17,16 +17,32 @@ export async function verifyPreparedChannelInstaller(
     throw new Error('Expected a publisher-bound Windows package')
   }
 
-  const directory: string = await mkdtemp(path.join(path.dirname(file), '.channel-artifact-'))
+  if (!/^[0-9a-f]{64}$/.test(pkg.artifact.sha256)) {
+    throw new Error('Expected a sha256-pinned Windows package')
+  }
+
+  // Keyed by the pinned digest, not a fresh temp dir: a download that stalled
+  // or dropped keeps its partial bytes here and the next attempt resumes them.
+  const name: string = `.channel-artifact-${pkg.artifact.sha256}`
+  const directory: string = path.join(path.dirname(file), name)
+
+  // Partial bytes of any other (superseded) package can never be resumed.
+  for (const entry of await readdir(path.dirname(file))) {
+    if (entry.startsWith('.channel-artifact-') && entry !== name) {
+      await rm(path.join(path.dirname(file), entry), { recursive: true, force: true })
+    }
+  }
+
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+
+  const artifact: string = await downloadPinnedArtifact(directory, {
+    url: target.artifactUrl,
+    sha256: pkg.artifact.sha256,
+    size: pkg.artifact.size,
+    format: pkg.artifact.key.endsWith('.msixbundle') ? 'msixbundle' : 'msix'
+  })
 
   try {
-    const artifact: string = await downloadPinnedArtifact(directory, {
-      url: target.artifactUrl,
-      sha256: pkg.artifact.sha256,
-      size: pkg.artifact.size,
-      format: pkg.artifact.key.endsWith('.msixbundle') ? 'msixbundle' : 'msix'
-    })
-
     await command(
       String.raw`
 $ErrorActionPreference='Stop'
