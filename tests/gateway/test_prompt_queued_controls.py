@@ -247,5 +247,5 @@ async def test_pending_rows_name_the_controls_the_owner_serves(tmp_path, monkeyp
         claim_session_input(db, epoch=authority.epoch, session_id='s')
         pending = {row['input_id']: row for row in (asdict(authority._pending_receipt(r))
                                                      for r in authority._pending_rows(REF))}
-    assert pending['follower'].get('controls') == ['steer', 'replace']
+    assert pending['follower'].get('controls') == ['steer', 'replace', 'reorder']
     assert not pending['head'].get('controls'), 'a started row has no queued-row controls'
