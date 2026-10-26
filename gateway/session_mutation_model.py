@@ -48,7 +48,7 @@ async def prepare_model(authority, live, payload, prepared):
     from hermes_cli.model_switch import apply_model_selection, switch_model
     from hermes_cli.config import get_compatible_custom_providers
     old = restore_policy(prepared['snapshot']['receipt']['policy'])
-    await asyncio.to_thread(_adopt_detected_pick, authority, payload.get('provider', ''))
+    await asyncio.to_thread(adopt_detected_pick, authority, payload.get('provider', ''))
     config, current = _current_route(authority, live, old)
     # A pick is an explicit user action: it resolves against the owning profile's CURRENT named
     # providers, as CLI/TUI ``/model`` do (#139740). A following session's ``config`` already is
@@ -147,10 +147,11 @@ async def prepare_model(authority, live, payload, prepared):
     return dict(prepared, policy=asdict(policy))
 
 
-def _adopt_detected_pick(authority, provider):
+def adopt_detected_pick(authority, provider):
     """A ``Detected:`` local server pick (``local-lmstudio``) is saved into the OWNING profile's
-    ``providers:`` before anything reads that profile, so the resolution read below and the route this
-    session freezes both carry it (``switch_model`` saving it mid-switch was too late for both)."""
+    ``providers:`` before anything reads that profile, so the route a ``/model`` switch or a new chat
+    freezes carries it (``switch_model`` saving it mid-switch was too late for both). Blocking (it may
+    probe the server): callers run it off the owner loop."""
     from hermes_cli.models_local_detect import PROVIDER_KEY_PREFIX, adopt_detected_provider
     if not str(provider or '').lower().removeprefix('custom:').startswith(PROVIDER_KEY_PREFIX):
         return

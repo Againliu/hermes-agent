@@ -7,6 +7,7 @@ import json
 import socket
 import threading
 import time
+from types import SimpleNamespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -346,3 +347,44 @@ def test_a_key_saved_for_another_address_is_never_claimed(servers):
     (server,) = detect.detect_local_servers()
     assert detect.save_detected_server(server) is None
     assert load_config()["providers"]["local-ollama"] == remote
+
+
+@pytest.mark.asyncio
+async def test_a_new_gateway_chat_pinned_to_a_detected_row_runs_on_that_server(servers, monkeypatch):
+    """Desktop creates chats through the gateway's session authority; a composer pick of a detected
+    row froze ``local-lmstudio`` with no ``providers:`` entry behind it, and the first turn failed."""
+    from gateway import run
+    from gateway.config import GatewayConfig
+    from gateway.run_turn_prepare import _resolve_policy_agent_runtime
+    from gateway.session import SessionStore
+    from gateway.session_authority import initialize_session_authority
+    from gateway.session_controls import AuthorityConnection
+    from gateway.session_local_recovery import local_identity
+    from gateway.session_policy import restore_policy
+    from hermes_state_local import local_receipt
+
+    from hermes_constants import get_hermes_home
+
+    srv = servers("lmstudio", {"/v1/models": _models(["qwen/qwen3-4b"], "organization_owner")})
+    home = get_hermes_home()  # the authority's state.db and config.yaml share one home, as in production
+    (home / "config.yaml").write_text("platform_toolsets: {cli: []}\nmodel: {provider: custom, default: m, "
+                                      "base_url: http://127.0.0.1:9/v1}\n", encoding="utf-8")
+    monkeypatch.setattr(run, "_hermes_home", home)
+    store = SessionStore(home / "sessions", GatewayConfig())
+    runner = SimpleNamespace(session_store=store, _session_db=store._db, adapters={}, _draining=False,
+                             _cached_agent_for=lambda route: None, _adapter_for_source=lambda source: None,
+                             _evict_cached_agent=lambda route: None,
+                             _resolve_session_agent_runtime=lambda **k: (None, {}))
+    owner = await initialize_session_authority(runner, profile_id=str(home), instance_id="fixture")
+    connection = AuthorityConnection(owner, object(), {"user_id": "owner"})
+    try:
+        await connection.create(None, {"request_id": "r1", "source": "cli", "cwd": str(home), "toolsets": [],
+                                       "model": "qwen/qwen3-4b", "provider": "local-lmstudio"})
+        sid = local_identity(owner.profile_id, connection.actor.subject, "r1")
+        policy = restore_policy(local_receipt(owner.db, sid)["policy"])
+        _, runtime = _resolve_policy_agent_runtime(runner, policy)
+    finally:
+        await connection.close()
+        owner.db.close()
+    assert runtime["base_url"].rstrip("/") == f"http://127.0.0.1:{srv.port}/v1"
+
