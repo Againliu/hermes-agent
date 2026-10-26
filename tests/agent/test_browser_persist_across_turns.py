@@ -123,3 +123,15 @@ def test_gateway_cache_evict_keeps_the_browser_for_a_resume(sessions, monkeypatc
     runner._agent_cache["route"] = (_cached_agent({"local-abc"}), "sig")
     runner._evict_cached_agent("route")
     assert set(active) == {"local-abc"}
+
+
+def test_boundary_after_a_plain_evict_still_closes_the_kept_browser(sessions, monkeypatch):
+    """An idle/LRU evict drops the agent but keeps its browser (the chat may resume); a later /new or close
+    finds no cached agent and must still close what that conversation's turns kept."""
+    active = sessions("local-abc", "other-conversation")
+    runner = _gateway_runner(monkeypatch)
+    runner._agent_cache["route"] = (_cached_agent({"local-abc"}), "sig")
+    runner._evict_cached_agent("route")
+    assert set(active) == {"local-abc", "other-conversation"}
+    runner._evict_cached_agent_at_boundary("route")
+    assert set(active) == {"other-conversation"}

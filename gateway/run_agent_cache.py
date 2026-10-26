@@ -28,6 +28,8 @@ if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
 logger = logging.getLogger("gateway.run")
 
 # Override fields layered onto runtime kwargs when non-None (partial overrides don't clobber defaults).
+# Conversations whose plain-evicted agents kept browsers, remembered until their boundary closes them.
+_EVICTED_BROWSER_OWNERS_MAX = 512
 _OVERRIDE_APPLY_KEYS = (
     "provider", "requested_provider", "api_key", "base_url", "api_mode", "credential_pool", "capabilities", "max_tokens",
 )
@@ -857,6 +859,10 @@ class GatewayAgentCacheMixin:
         agent = _first_agent(evicted)
         # Never tear down an agent that's mid-turn — its client, sandbox and child subagents are in use.
         if agent is None or agent is _AGENT_PENDING_SENTINEL:
+            if commit_memory and session_key in self._evicted_browser_owner_map():
+                self._spawn_release_thread(self._release_stashed_browsers, (session_key,),
+                                           f"browser-release-{str(session_key)[:24]}", inline_fallback=True,
+                                           session_key=session_key)
             return
         if id(agent) in self._running_agent_ids():
             if release_after_turn and state is not None:
@@ -865,6 +871,7 @@ class GatewayAgentCacheMixin:
         if commit_memory:
             target, args = self._commit_then_release_soft, (agent, session_key, True)
         else:
+            self._stash_browser_owners(session_key, agent)
             target, args = self._release_evicted_agent_soft, (agent,)
         self._spawn_release_thread(target, args, f"agent-evict-{str(session_key)[:24]}", inline_fallback=True,
                                    session_key=session_key)
@@ -947,7 +954,31 @@ class GatewayAgentCacheMixin:
         if boundary:
             from agent.client_lifecycle import release_session_browsers
             release_session_browsers(agent)
+            self._release_stashed_browsers(key)
         self._release_evicted_agent_soft(agent)
+
+    def _evicted_browser_owner_map(self) -> dict:
+        """session key → task ids whose browsers a plain evict kept (the agent object is gone by the
+        conversation's end, so the boundary reads them here). Bounded: oldest keys drop first."""
+        return self.__dict__.setdefault("_evicted_browser_owners", {})
+
+    def _stash_browser_owners(self, session_key: str, agent: Any) -> None:
+        ids = set(getattr(agent, "_process_owner_task_ids", ()) or ())
+        if not ids:
+            return
+        owners = self._evicted_browser_owner_map()
+        with getattr(self, "_agent_cache_lock", None) or nullcontext():
+            owners[session_key] = owners.pop(session_key, set()) | ids
+            while len(owners) > _EVICTED_BROWSER_OWNERS_MAX:
+                del owners[next(iter(owners))]
+
+    def _release_stashed_browsers(self, session_key: str) -> None:
+        """Close the browsers earlier (plain-evicted) agents of this conversation kept across turns."""
+        with getattr(self, "_agent_cache_lock", None) or nullcontext():
+            ids = self._evicted_browser_owner_map().pop(session_key, set())
+        if ids:
+            from tools.browser_session_lifecycle import cleanup_conversation_browsers
+            cleanup_conversation_browsers(ids)
 
     def _release_evicted_agent_soft(self, agent: Any) -> None:
         """Soft cleanup for cache-evicted agents: unlike _cleanup_agent_resources, the session may
