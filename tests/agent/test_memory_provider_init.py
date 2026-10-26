@@ -118,14 +118,12 @@ def test_aiagent_forwards_gateway_identity_and_late_bound_status_bridge():
     assert provider.init_kwargs["user_id"] == "open-id"
     assert provider.init_kwargs["user_id_alt"] == "union-id"
     assert provider.init_kwargs["platform"] == "feishu"
-    assert "warning_callback" not in provider.init_kwargs
-    assert callable(provider.init_kwargs["status_callback"])
-
     status_events = []
     agent.status_callback = lambda kind, text: status_events.append((kind, text))
     provider.init_kwargs["status_callback"]("saving to memory")
+    provider.init_kwargs["warning_callback"]("backend unreachable")
 
-    assert status_events == [("lifecycle", "saving to memory")]
+    assert status_events == [("lifecycle", "saving to memory"), ("warn", "backend unreachable")]
 
 
 class CoreShadowProvider:
