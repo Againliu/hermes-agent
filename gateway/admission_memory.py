@@ -6,9 +6,8 @@ which often picks the gateway itself and ends every session on it at once. This 
 how much memory is really left and makes a NEW turn wait while that headroom is under the floor
 for its kind, instead of starting a turn that tips the host over:
 
-- headroom = the tighter of cgroup v2 headroom (``memory.max``/``memory.high`` minus
-  ``memory.current``, with reclaimable ``inactive_file`` page cache credited back) along the
-  gateway's cgroup chain, and ``/proc/meminfo`` ``MemAvailable``;
+- headroom comes from ``hermes_platform.memory.read_memory`` (cgroup v2 limits along the
+  gateway's cgroup chain, page cache credited back, and ``/proc/meminfo``);
 - people wait below ``critical``, background work (cron, internal events, kanban spawns) already
   below ``low``, so people are admitted first;
 - each admitted turn reserves ``reserve_mb`` for a short window, so a burst of waiters released
@@ -26,17 +25,17 @@ import asyncio
 import itertools
 import logging
 import os
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from hermes_platform.memory import MemoryReading, read_memory
+
 logger = logging.getLogger(__name__)
 
 _MB = 1024 * 1024
-_CGROUP_ROOT = Path("/sys/fs/cgroup")
 # A turn's own footprint (agent build, first tool spawns) lands in its first seconds.
 _RESERVATION_WINDOW_S = 30.0
 _POLL_INTERVAL_S = 2.0
@@ -47,13 +46,6 @@ _AUTO_CRITICAL = (0.10, 256)
 _AUTO_LOW = (0.20, 512)
 PERSON, BACKGROUND = "person", "background"
 STATE_FILE = ("state", "memory_guard.json")
-
-
-@dataclass(frozen=True)
-class MemoryReading:
-    available_bytes: int
-    ceiling_bytes: Optional[int]
-    source: str  # "cgroup" when a cgroup limit is the tighter bound, else "meminfo"
 
 
 @dataclass(frozen=True)
@@ -98,87 +90,7 @@ def resolve_settings(config: Any) -> MemoryGuardSettings:
     )
 
 
-# -- reading ------------------------------------------------------------------------------------
-
-def _read_int(path: Path) -> Optional[int]:
-    try:
-        text = path.read_text(encoding="utf-8-sig").strip()
-    except OSError:
-        return None
-    return int(text) if text.isdigit() else None
-
-
-def _inactive_file(directory: Path) -> int:
-    try:
-        lines = (directory / "memory.stat").read_text(encoding="utf-8-sig").splitlines()
-    except OSError:
-        return 0
-    for line in lines:
-        key, _, value = line.partition(" ")
-        if key == "inactive_file" and value.strip().isdigit():
-            return int(value)
-    return 0
-
-
-def _cgroup_of(pid: Optional[int]) -> Optional[str]:
-    try:
-        text = Path(f"/proc/{pid or 'self'}/cgroup").read_text(encoding="utf-8-sig")
-    except OSError:
-        return None
-    for line in text.splitlines():
-        if line.startswith("0::"):
-            return line[3:].strip() or "/"
-    return None
-
-
-def cgroup_headroom(rel_path: str, root: Path = _CGROUP_ROOT) -> Optional[tuple[int, int]]:
-    """``(headroom, limit)`` for the tightest finite memory limit from ``rel_path`` up to the
-    root, or None when no level is limited. A limit on an ancestor (a systemd slice, the
-    container's namespace root) caps this process just as hard as one on its own cgroup."""
-    parts = [p for p in rel_path.strip("/").split("/") if p]
-    best: Optional[tuple[int, int]] = None
-    for depth in range(len(parts), -1, -1):
-        directory = root.joinpath(*parts[:depth])
-        limits = [v for v in (_read_int(directory / "memory.max"), _read_int(directory / "memory.high"))
-                  if v is not None and 0 < v < (1 << 62)]
-        current = _read_int(directory / "memory.current")
-        if not limits or current is None:
-            continue
-        limit = min(limits)
-        headroom = limit - max(0, current - _inactive_file(directory))
-        if best is None or headroom < best[0]:
-            best = (headroom, limit)
-    return best
-
-
-def _meminfo() -> tuple[Optional[int], Optional[int]]:
-    """``(MemAvailable, MemTotal)`` in bytes."""
-    values: dict[str, int] = {}
-    try:
-        lines = Path("/proc/meminfo").read_text(encoding="utf-8-sig").splitlines()
-    except OSError:
-        return None, None
-    for line in lines:
-        key, _, rest = line.partition(":")
-        fields = rest.split()
-        if key in ("MemAvailable", "MemTotal") and fields and fields[0].isdigit():
-            values[key] = int(fields[0]) * 1024
-    return values.get("MemAvailable"), values.get("MemTotal")
-
-
-def read_memory(pid: Optional[int] = None) -> Optional[MemoryReading]:
-    """Memory left for ``pid`` (default: this process); None when unknowable (non-Linux)."""
-    if sys.platform != "linux":
-        return None
-    available, total = _meminfo()
-    rel = _cgroup_of(pid)
-    capped = cgroup_headroom(rel) if rel is not None else None
-    if capped is not None and (available is None or capped[0] <= available):
-        return MemoryReading(max(0, capped[0]), capped[1], "cgroup")
-    if available is None:
-        return None
-    return MemoryReading(available, capped[1] if capped else total, "meminfo")
-
+# -- levels -------------------------------------------------------------------------------------
 
 def level_for(reading: Optional[MemoryReading], settings: MemoryGuardSettings, reserved: int = 0) -> str:
     if reading is None:

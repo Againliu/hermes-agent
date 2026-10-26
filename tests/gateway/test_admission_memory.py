@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from gateway import admission_memory as am
+from hermes_platform.memory import MemoryReading
 
 MB = 1024 * 1024
 
@@ -27,7 +28,7 @@ def _gate(free_mb, *, ceiling_mb=4096, **settings):
     clock = _Clock()
     gate = am.MemoryGate(
         settings=am.MemoryGuardSettings(**{"critical_mb": 256, "low_mb": 512, "reserve_mb": 0, **settings}),
-        reader=lambda: am.MemoryReading(state["free"] * MB, ceiling_mb * MB, "cgroup"),
+        reader=lambda: MemoryReading(state["free"] * MB, ceiling_mb * MB, "cgroup"),
         clock=clock,
     )
     return gate, state, clock
@@ -36,19 +37,6 @@ def _gate(free_mb, *, ceiling_mb=4096, **settings):
 def _write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
-
-
-def test_cgroup_headroom_uses_tightest_ancestor_and_credits_page_cache(tmp_path):
-    # Container root capped at 1 GiB; the gateway's own leaf is uncapped. 900 MiB charged, of
-    # which 300 MiB is reclaimable inactive file cache -> 424 MiB really left.
-    _write(tmp_path / "memory.max", str(1024 * MB))
-    _write(tmp_path / "memory.current", str(900 * MB))
-    _write(tmp_path / "memory.stat", f"anon 1\ninactive_file {300 * MB}\n")
-    leaf = tmp_path / "svc" / "gw"
-    _write(leaf / "memory.max", "max")
-    _write(leaf / "memory.current", str(500 * MB))
-    headroom, limit = am.cgroup_headroom("/svc/gw", root=tmp_path)
-    assert (headroom // MB, limit // MB) == (424, 1024)
 
 
 def test_people_start_at_low_while_background_waits_behind_them():
@@ -186,7 +174,7 @@ def test_status_is_written_outside_the_gate_lock(tmp_path, monkeypatch):
 
 
 def test_status_trusts_verified_gateway_discovery_not_the_snapshot_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(am, "read_memory", lambda pid=None: am.MemoryReading(2048 * MB, 4096 * MB, "cgroup"))
+    monkeypatch.setattr(am, "read_memory", lambda pid=None: MemoryReading(2048 * MB, 4096 * MB, "cgroup"))
     # A fresh idle gateway that has published nothing yet is running, with nobody waiting.
     monkeypatch.setattr(am, "_running_gateway_pid", lambda home: 4242, raising=False)
     assert "0 waiting" in am.status_line({}, tmp_path)
