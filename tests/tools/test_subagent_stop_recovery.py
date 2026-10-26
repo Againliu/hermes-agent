@@ -24,7 +24,7 @@ def child(task_index, goal, child=None, parent_agent=None, **kw):
 def build(**kw):
     c = MagicMock(); i = kw["task_index"]
     c._delegate_role = "leaf"; c._subagent_id = f"sa-{i}"; c.session_id = f"child-sess-{i}"
-    c._delegate_parent_tool_call_id = kw.get("parent_tool_call_id")
+    c._delegate_parent_tool_call_id = kw.get("parent_tool_call_id"); c.model = f"route-{i}"
     return c
 record = dd.record_unit_child
 def record_then_signal(delegation_id, entry):
@@ -75,3 +75,4 @@ def test_owner_death_replays_one_subagent_stop_per_started_child(tmp_path):
     assert stops[0]["child_status"] == "completed" and stops[0]["child_summary"] == "done: fast member of the group"
     assert (stops[0]["cost_usd"], stops[0]["tokens"], stops[0]["api_calls"]) == (0.0012, {"input": 10, "output": 3}, 2)
     assert stops[1]["child_status"] == "unknown" and stops[1]["cost_status"] == "unknown"
+    assert stops[1]["model"] == "route-1"  # the unfinished child's own route, not the unit's

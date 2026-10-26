@@ -14,6 +14,9 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# The subagent_start identity keys a recovered stop repeats (``task_children`` also carries each child's model).
+_IDENTITY_KEYS = ("child_session_id", "child_subagent_id", "child_role", "parent_tool_call_id")
+
 
 def recovered_stop_payloads(
     task: dict[str, Any], parent_session_id: Optional[str], results: Optional[list[dict[str, Any]]],
@@ -26,11 +29,12 @@ def recovered_stop_payloads(
     payloads = []
     for key, identity in sorted((task.get("task_children") or {}).items(), key=lambda kv: int(kv[0])):
         index = int(key)
-        entry = {"model": task.get("model"), "cost_status": "unknown",
+        # The child's own model, never the unit's: None when dispatch did not record it.
+        entry = {"model": identity.get("model"), "cost_status": "unknown",
                  **(recorded.get(index) or {"task_index": index, "status": "unknown"})}
         payloads.append({
-            "parent_session_id": parent_session_id, "parent_turn_id": "", "task_index": index, **identity,
-            **subagent_stop_outcome_fields(entry), "recovered": True,
+            "parent_session_id": parent_session_id, "parent_turn_id": "", "task_index": index,
+            **{k: identity.get(k) for k in _IDENTITY_KEYS}, **subagent_stop_outcome_fields(entry), "recovered": True,
         })
     return payloads
 

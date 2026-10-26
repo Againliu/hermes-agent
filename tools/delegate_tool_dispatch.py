@@ -401,7 +401,8 @@ def _hook_identities(children: list[tuple]) -> dict[str, dict[str, Any]]:
     """Per-task ``subagent_start`` identity, persisted with the unit so restart recovery can fire the matching
     ``subagent_stop`` for children whose owner died before the join."""
     fields = (("child_session_id", "session_id"), ("child_subagent_id", "_subagent_id"),
-              ("child_role", "_delegate_role"), ("parent_tool_call_id", "_delegate_parent_tool_call_id"))
+              ("child_role", "_delegate_role"), ("parent_tool_call_id", "_delegate_parent_tool_call_id"),
+              ("model", "model"))  # each child's own route: tasks of one unit can run on different models
     # Strings only: the map is persisted as JSON on the ledger row.
     return {str(i): {key: v if isinstance(v := getattr(c, attr, None), str) else None for key, attr in fields}
             for i, _, c in children}
