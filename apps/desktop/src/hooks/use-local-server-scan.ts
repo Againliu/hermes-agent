@@ -35,7 +35,9 @@ export function useLocalServerScan({
 
     const queryKey = modelOptionsQueryKey(profile, sessionId, ownerConnectionId)
 
-    if (queryClient.getQueryData(queryKey) === undefined) {
+    // No catalog yet, or the picker's own query is already refetching it: that
+    // fetch carries `detectLocal`, so a second read would only repeat its work.
+    if (queryClient.getQueryData(queryKey) === undefined || queryClient.isFetching({ queryKey }) > 0) {
       return
     }
 
