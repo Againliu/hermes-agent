@@ -741,8 +741,10 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
             _driven_daemons[daemon] = hermes_home_key()
         try:
             return {"proc": _run_cli_killing_process_group(cmd, code, env, timeout)}
-        except subprocess.TimeoutExpired:
-            return {"error_result": tool_error(
+        except subprocess.TimeoutExpired as exc:
+            partial = exc.stdout or ""  # communicate() hands back raw bytes on timeout
+            partial = partial.decode("utf-8", "replace") if isinstance(partial, bytes) else partial
+            return {"stdout": partial, "error_result": tool_error(
                 f"browser-use exec timed out after {timeout}s. The daemon may still be working; retry "
                 f"with a larger timeout_s (max {_MAX_TIMEOUT_S}), or split the work into several calls that "
                 "append to workspace files — anything already written to the workspace is preserved."
@@ -757,6 +759,10 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         dispatched = dispatch()
     _reload_if_republished(env, generation)
     if "proc" not in dispatched:
+        partial_stdout = dispatched.pop("stdout", "")
+        if card_capture_refusal:  # a capture taken before the call timed out or failed still shows the card
+            from tools.browser_vault_card_guard import discard_captures
+            discard_captures(_IMAGE_PATH_RE.findall(partial_stdout), workspace, started)
         if "error_result" in dispatched:
             return dispatched["error_result"]
         return tool_result(dispatched)
