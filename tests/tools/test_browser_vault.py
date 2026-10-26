@@ -322,7 +322,7 @@ class TestBrowserVaultTools:
         assert "query" in browser_vault_tool.BROWSER_VAULT_SCHEMA["parameters"]["properties"]
         with patch.object(browser_vault_tool, "browser_vault_list", return_value="{}") as listed:
             browser_vault_tool._handle_vault({"action": "list", "query": "github"})
-        listed.assert_called_once_with("github")
+        listed.assert_called_once_with("github", False)
 
     def test_fill_refused_on_origin_mismatch(self, store):
         from tools import browser_vault_tool

@@ -731,6 +731,8 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
 
     timeout = _clamp_timeout(timeout_s)
     started = time.time()
+    from tools.browser_vault_card_guard import capture_refusal
+    card_capture_refusal = capture_refusal(task_id)  # judged at the start: a capture then submit still saw the card
 
     def dispatch() -> dict[str, Any]:
         _attach_vault_supervisor(env, task_id)
@@ -777,7 +779,20 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
         stderr = stderr[:_STDERR_CAP_CHARS] + "\n… (stderr truncated)"
     if stderr:
         result["stderr"] = stderr
-    screenshot = _find_screenshot(proc.stdout, started)
+    return _result_with_screenshot(result, proc.stdout, started, workspace, card_capture_refusal)
+
+
+def _result_with_screenshot(result: dict[str, Any], stdout: str, started: float, workspace: Optional[str],
+                            card_capture_refusal: Optional[str]):
+    """The exec result with its screenshot attached; while a payment card is filled, every image the call
+    captured is deleted instead (``tools.browser_vault_card_guard``)."""
+    from tools.registry import tool_result
+    if card_capture_refusal:
+        from tools.browser_vault_card_guard import discard_captures
+        if discard_captures(_IMAGE_PATH_RE.findall(stdout or ""), workspace, started):
+            result["screenshot_blocked"] = card_capture_refusal
+        return tool_result(result)
+    screenshot = _find_screenshot(stdout, started)
     if screenshot:
         result["screenshot_path"] = screenshot
         native = _native_screenshot_result(result, screenshot)
