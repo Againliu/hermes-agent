@@ -57,6 +57,12 @@ _REREVIEW_RULES = (
 # tools/process_registry_notifications.py). Earlier rounds are quoted from there; only a successful
 # result counts as a round.
 _COMPLETION_HEADER = "[ASYNC DELEGATION"
+# The briefing's last line; the completion preamble follows the echoed briefing with optional
+# ``Toolsets:`` and the ``Role:`` line. The result is searched only after the LAST such boundary,
+# so a delegation completion quoted inside the conversation excerpt never stands in for it.
+_BRIEFING_END = ("Your review is delivered back into that conversation, addressed to the primary agent and its user. "
+                 "Be direct and specific; do not soften findings.")
+_BRIEFING_BOUNDARY_RE = re.compile(re.escape(_BRIEFING_END) + r"\n(?:Toolsets: [^\n]*\n)?Role: [^\n]*\n")
 _RESULT_START_RE = re.compile(r"^(?:Status: (?:completed|success)\b.*\n--- RESULT ---|--- ✓ TASK 1/1\b.*\) ---)\n",
                               re.MULTILINE)
 _RESULT_END_RE = re.compile(r"^(?:Full live transcript \(|\[INTERNAL NOTIFICATION)", re.MULTILINE)
@@ -110,7 +116,8 @@ def prior_review_results(messages: list[dict[str, Any]]) -> list[str]:
         if not _is_review_completion(message):
             continue
         text = _message_text(message)
-        start = _RESULT_START_RE.search(text)
+        boundaries = list(_BRIEFING_BOUNDARY_RE.finditer(text))
+        start = _RESULT_START_RE.search(text, boundaries[-1].end()) if boundaries else None
         if start is None:
             continue  # failed or interrupted: not a round
         body = text[start.end():]
@@ -196,12 +203,7 @@ def build_review_task(snapshot: list[dict[str, str]], user_prompt: str = "", loa
         ]
     if user_prompt.strip():
         lines += ["", "Additional review instructions from the user:", user_prompt.strip()]
-    lines += [
-        "",
-        "Your review is delivered back into that conversation, addressed to "
-        "the primary agent and its user. Be direct and specific; do not "
-        "soften findings.",
-    ]
+    lines += ["", _BRIEFING_END]
     return goal, "\n".join(lines)
 
 
