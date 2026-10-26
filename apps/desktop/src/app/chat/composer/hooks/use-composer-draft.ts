@@ -21,6 +21,7 @@ import {
 import {
   type ComposerDraftRetry,
   draftRetryTextMatches,
+  loadedDraftRetry,
   matchingDraftRetry,
   readDraftRetry,
   retryAttachmentIds,
@@ -608,6 +609,7 @@ export function useComposerDraft({
     draftRetryRef.current = readDraftRetry(activeQueueSessionKey)
 
     const { attachments, text } = takeSessionDraft(activeQueueSessionKey)
+    draftRetryRef.current = loadedDraftRetry(draftRetryRef.current, text, attachments)
     loadIntoComposer(text, attachments, true)
 
     // Takes back a draft that is still exactly `retry`'s send under its identity.
@@ -686,8 +688,8 @@ export function useComposerDraft({
     }
 
     reloadPersistedDrafts()
-    draftRetryRef.current = readDraftRetry(draftScopeRef.current)
     const stashed = takeSessionDraft(draftScopeRef.current)
+    draftRetryRef.current = loadedDraftRetry(readDraftRetry(draftScopeRef.current), stashed.text, stashed.attachments)
     loadIntoComposer(stashed.text, stashed.attachments)
   }
 
