@@ -965,7 +965,7 @@ def _remove_default_data_preserving_profiles(hermes_home: Path) -> bool:
 
     try:
         children = list(hermes_home.iterdir())
-    except Exception as e:
+    except OSError as e:
         log_warn(f"Could not inspect {hermes_home}: {e}")
         log_info("You may need to manually remove its default-profile data")
         return False
@@ -981,7 +981,7 @@ def _remove_default_data_preserving_profiles(hermes_home: Path) -> bool:
                 child.unlink()
             else:
                 _rmtree(child)
-        except Exception as e:
+        except OSError as e:
             failed = True
             log_warn(f"Could not remove {child}: {e}")
     if failed:
@@ -990,6 +990,20 @@ def _remove_default_data_preserving_profiles(hermes_home: Path) -> bool:
         log_success(f"Removed default-profile data from {hermes_home}")
     log_info(f"Preserved named profiles in {profiles_root}")
     return not failed
+
+
+def _remove_home(hermes_home: Path, *, remove_profiles: bool) -> None:
+    """The full wipe's last step; named profiles stay unless the user opted in."""
+    log_info("Removing configuration and data...")
+    if not remove_profiles and _is_default_hermes_home(hermes_home):
+        removed_home = _remove_default_data_preserving_profiles(hermes_home)
+    else:
+        removed_home = _rmtree_step(hermes_home)
+    if not removed_home:
+        # The checkout and launchers are already gone: claiming success here
+        # would leave an orphaned home with no way to re-run the uninstall.
+        log_warn(f"Uninstall did not finish: Hermes data is still present in {hermes_home}")
+        raise SystemExit(1)
 
 
 def _macos_cache_leftover_dirs() -> list[Path]:
@@ -1189,16 +1203,7 @@ def _perform_uninstall(
                 "Removing Electron and setup caches...",
                 lambda: _remove_each(_macos_cache_leftover_dirs(), _rmtree_if_exists), "Removed {}",
                 "No Electron or setup caches found")
-        log_info("Removing configuration and data...")
-        if not remove_profiles and _is_default_hermes_home(hermes_home):
-            removed_home = _remove_default_data_preserving_profiles(hermes_home)
-        else:
-            removed_home = _rmtree_step(hermes_home)
-        if not removed_home:
-            # The checkout and launchers are already gone: claiming success here
-            # would leave an orphaned home with no way to re-run the uninstall.
-            log_warn(f"Uninstall did not finish: Hermes data is still present in {hermes_home}")
-            raise SystemExit(1)
+        _remove_home(hermes_home, remove_profiles=remove_profiles)
     else:
         log_info(f"Keeping configuration and data in {hermes_home}")
 
