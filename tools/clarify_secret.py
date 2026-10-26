@@ -48,7 +48,9 @@ def ask_secret(questions, name: str, interactive: bool) -> str:
     register_env_passthrough([name])
     usable = is_env_passthrough(name)
     notice = (f"Stored in this profile's secrets as {name}; you never see the value. Use it only as "
-              f"${name} inside terminal or execute_code commands, and never print it."
+              f"${name} inside terminal commands or os.environ[{name!r}] in execute_code, and never print "
+              f"it. An execute_code kernel already running in this session keeps its old environment: "
+              f"pass reset=true on the next execute_code call (this clears its Python state) to see it."
               if usable else
               f"Stored in this profile's secrets as {name}; you never see the value. It is a Hermes "
               f"provider credential, so Hermes uses it directly and it is not passed to commands.")

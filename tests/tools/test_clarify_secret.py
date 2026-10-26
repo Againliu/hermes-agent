@@ -8,7 +8,7 @@ from tools.clarify_tool import clarify_tool
 from tools.env_passthrough import is_env_passthrough
 from tools.skills_tool import bind_turn_secret_capture
 
-SECRET = "wx-live-7f3c9d2e1b8a4f60c5d7e9a1"
+SECRET = "wx-live-" + "7f3c9d2e1b8a4f60c5d7e9a1"  # built by concatenation: a fake value
 QUESTION = [{"question": "Weather API key, used by the forecast script"}]
 
 
@@ -32,6 +32,8 @@ def test_secret_question_stores_masked_value_and_returns_only_its_name(tmp_path,
     assert result["outcome"] == "submitted"
     assert result["responses"][0]["stored_as"] == "WEATHER_DEMO_KEY"
     assert "$WEATHER_DEMO_KEY" in result["notice"]
+    # A kernel started before the capture keeps its old environment; the model must be told how to refresh it.
+    assert "reset=true" in result["notice"]
     assert seen == [("WEATHER_DEMO_KEY", QUESTION[0]["question"])]
     assert load_env()["WEATHER_DEMO_KEY"] == SECRET
     assert is_env_passthrough("WEATHER_DEMO_KEY")
