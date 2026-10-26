@@ -44,3 +44,21 @@ def test_declared_string_setting_keeps_the_word_and_numbers_still_coerce(home):
     set_config_value("plugins.entries.dreamy.settings.undeclared", "off")
 
     assert _settings(home) == {"dreaming_mode": "off", "batch": 5, "undeclared": False}
+
+
+def test_dotted_plugin_id_resolves_like_the_write(tmp_path):
+    """An existing ``my.plugin`` entry receives ``plugins.entries.my.plugin.settings.mode`` (the
+    writer prefers the literal key); the declared type must be found through the same key."""
+    plugin = tmp_path / "plugins" / "my.plugin"
+    plugin.mkdir(parents=True)
+    (plugin / "plugin.yaml").write_text(PLUGIN_YAML.replace("name: dreamy", "name: my.plugin"), encoding="utf-8")
+    (plugin / "__init__.py").write_text("def register(ctx):\n    pass\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text("plugins:\n  entries:\n    my.plugin:\n      settings: {}\n",
+                                          encoding="utf-8")
+    from hermes_cli.config import set_config_value
+
+    with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        set_config_value("plugins.entries.my.plugin.settings.dreaming_mode", "off")
+
+    entries = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8-sig"))["plugins"]["entries"]
+    assert entries == {"my.plugin": {"settings": {"dreaming_mode": "off"}}}

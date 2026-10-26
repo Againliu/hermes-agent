@@ -3084,7 +3084,7 @@ _SCALAR_WORDS = {
     'null': None, 'none': None, '~': None}
 
 
-def _coerce_config_set_value(key: str, value: str) -> Any:
+def _coerce_config_set_value(key: str, value: str, user_config: dict[str, Any]) -> Any:
     """Auto-coerce a ``hermes config set`` string to bool/None/int/float/list/dict.
     String-typed settings (per ``DEFAULT_CONFIG``) are preserved verbatim so enum members such as
     ``approvals.mode="off"`` never become booleans. List/mapping literals are parsed so
@@ -3098,7 +3098,7 @@ def _coerce_config_set_value(key: str, value: str) -> Any:
     if isinstance(_default_value_for_key(key), str) and not (
             key == "model" and _looks_structured_value(value)):
         return value
-    if declared_setting_type(tuple(_split_key_path(key))) in ("string", "enum"):
+    if declared_setting_type(tuple(_split_key_path(key)), user_config) in ("string", "enum"):
         return value
     stripped = value.strip()
     lower = stripped.lower()
@@ -3346,7 +3346,7 @@ def set_config_value(key: str, value: str, force: bool = False):
     # Read the RAW user config (not merged) so defaults are never dumped back; fail-closed.
     config_path = get_config_path()
     user_config = require_readable_config_before_write(config_path)
-    value = _coerce_config_set_value(key, value)
+    value = _coerce_config_set_value(key, value, user_config)
     # A scalar ``model`` shorthand must become a dict before writing sub-keys, or _set_nested
     # replaces it with an empty dict and the model id is lost.
     _model_val = user_config.get("model")

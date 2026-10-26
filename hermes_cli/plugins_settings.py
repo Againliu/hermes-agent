@@ -16,7 +16,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from hermes_cli.plugins_state import _plugin_relative_segments, _plugin_settings_entry, save_plugin_setting
+from hermes_cli.plugins_state import (
+    _nested_plugin_value, _plugin_relative_segments, _plugin_settings_entry, save_plugin_setting)
 
 logger = logging.getLogger(__name__)
 
@@ -86,19 +87,27 @@ def _field_type(spec: Mapping[str, Any]) -> str:
     return kind
 
 
-def declared_setting_type(segments: tuple[str, ...]) -> Optional[str]:
+def declared_setting_type(segments: tuple[str, ...], user_config: Mapping[str, Any]) -> Optional[str]:
     """Wire field type the plugin's ``config_schema`` declares for the dotted config path
     ``plugins.entries.<id>.settings.<key>`` (*segments* already split); ``None`` for any other path,
     an unknown plugin or an undeclared key. ``hermes config set`` reads it so ``off`` stays the
-    string a ``type: str`` field expects instead of turning into ``false``."""
-    if len(segments) < 5 or segments[:2] != ("plugins", "entries") or segments[3] != "settings":
+    string a ``type: str`` field expects instead of turning into ``false``. The plugin ID is
+    resolved against *user_config* (the raw file the write navigates) with the writer's own
+    literal-key rule, so an existing ``my.plugin`` entry is found without escaping its dot."""
+    if len(segments) < 5 or segments[:2] != ("plugins", "entries"):
         return None
+    from hermes_cli.config import _greedy_literal_match
     from hermes_cli.plugins_cmd import _find_plugin_entry
 
-    found = _find_plugin_entry(segments[2])
+    rest = list(segments[2:])
+    entries = _nested_plugin_value(user_config, ("plugins", "entries"), None)
+    plugin_id, consumed = _greedy_literal_match(entries, rest) or (rest[0], 1)
+    if rest[consumed:consumed + 1] != ["settings"] or len(rest) < consumed + 2:
+        return None
+    found = _find_plugin_entry(plugin_id)
     if found is None or not found[4]:
         return None
-    spec = _manifest_config_schema(Path(str(found[4]))).get(".".join(segments[4:]))
+    spec = _manifest_config_schema(Path(str(found[4]))).get(".".join(rest[consumed + 1:]))
     return _field_type(spec) if spec is not None else None
 
 
