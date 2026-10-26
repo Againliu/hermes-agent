@@ -19,7 +19,7 @@ describe('stopped reply folded into its tool bubble', () => {
       tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'terminal', arguments: '{}' } }]
     },
     { id: 3, role: 'tool', content: 'ok', tool_call_id: 'call-1', timestamp: 3 },
-    { id: 4, role: 'assistant', content: 'The answer is', timestamp: 4, display_metadata: { interrupted: true } }
+    { id: 4, role: 'assistant', content: 'The answer is', timestamp: 4, display_metadata: '{"interrupted": true}' }
   ]
 
   it('keeps the stopped mark of the interrupted row it absorbs', () => {
