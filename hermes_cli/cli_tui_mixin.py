@@ -678,12 +678,16 @@ class CLITuiMixin:
         state = self._secret_state
         if not state:
             return []
-        from hermes_cli.cli_render import _wrap_panel_text  # an agent's request is long prose: keep it inside the box
+        from cli import _panel_box_width, _wrap_panel_text
         meta, var_name = state.get("metadata") or {}, state.get("var_name", t("cli.tui.secret_fallback_name"))
-        prompt_rows = _wrap_panel_text(state.get("prompt") or t("cli.tui.secret_prompt", var_name=var_name), 68)
-        content_lines = [*prompt_rows, *([str(meta["help"])] if meta.get("help") else []), t("cli.tui.secret_body")]
-        return self._render_sudo_style_panel(  # an agent's own request is not a skill setup
-            f"🔑 {var_name}" if meta.get("source") == "agent" else t("cli.tui.secret_title"), content_lines)
+        title = f"🔑 {var_name}" if meta.get("source") == "agent" else t("cli.tui.secret_title")  # not a skill setup
+        prose = [state.get("prompt") or t("cli.tui.secret_prompt", var_name=var_name),
+                 *([str(meta["help"])] if meta.get("help") else [])]
+        # An agent's request is long prose: preview-wrap to size the box, then wrap to its final text width
+        # (a narrow terminal caps the box below the preview width).
+        width = _panel_box_width(title, [row for text in prose for row in _wrap_panel_text(text, 68)]) - 2
+        return self._render_sudo_style_panel(
+            title, [row for text in prose for row in _wrap_panel_text(text, width)] + [t("cli.tui.secret_body")])
 
     def _get_connection_display_fragments(self):
         state = self._connection_state
