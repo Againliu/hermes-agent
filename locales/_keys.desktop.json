@@ -1032,6 +1032,7 @@
     "composer.queueFair.hold.restarting",
     "composer.queueFair.hold.session_busy",
     "composer.queueFair.hold.slot",
+    "composer.queueFair.holdFailed",
     "composer.queueFair.holdUnknown",
     "composer.queueFair.moveDown",
     "composer.queueFair.moveUp",

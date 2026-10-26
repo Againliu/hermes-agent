@@ -6,4 +6,6 @@ export interface QueueFairCopy {
   hold: Record<string, string>
   moveUp: string
   moveDown: string
+  /** Toast title: the owner could not hold a row open for editing (it may start before Save). */
+  holdFailed: string
 }

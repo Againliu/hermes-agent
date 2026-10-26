@@ -198,7 +198,15 @@ function collectReceipts(value: RawReceipts, known: Record<string, PendingSubmis
       id,
       text: typeof raw.user === 'string' ? raw.user : (known[id]?.text ?? ''),
       status: stale ? known[id].status : raw.status,
-      ...(Array.isArray(raw.controls) ? { controls: raw.controls.filter((c: unknown) => typeof c === 'string') } : {}),
+      // The owner publishes reorder eligibility as its own flag; the card reads it as one more control.
+      ...(Array.isArray(raw.controls)
+        ? {
+            controls: [
+              ...raw.controls.filter((c: unknown) => typeof c === 'string'),
+              ...(raw.reorderable === true ? ['reorder'] : [])
+            ]
+          }
+        : {}),
       holdReason: typeof raw.hold_reason === 'string' ? raw.hold_reason : undefined
     })
   }

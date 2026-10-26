@@ -54,12 +54,14 @@ export async function holdQueuedPrompt(
   queueSessionKey: string,
   admissionId: string,
   held: boolean,
-  request: GatewayRequest
+  request: GatewayRequest,
+  holder?: string
 ): Promise<unknown> {
   return requestForOwnedSession(queueSessionKey, request, 'prompt.hold_queued', {
     session_id: sessionId ?? queueSessionKey,
     admission_id: admissionId,
-    held
+    held,
+    ...(holder ? { holder } : {})
   })
 }
 

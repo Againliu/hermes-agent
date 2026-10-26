@@ -12,5 +12,6 @@ export const enQueueFair: QueueFairCopy = {
     memory: 'Waiting for free memory'
   },
   moveUp: 'Move up',
-  moveDown: 'Move down'
+  moveDown: 'Move down',
+  holdFailed: 'Could not pause this queued message while you edit it; it may start before you save'
 }
