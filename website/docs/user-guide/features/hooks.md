@@ -702,12 +702,12 @@ def my_callback(session_id: str, user_message: str, conversation_history: list,
 | `turn_origin` | Meaning |
 |---|---|
 | `"native"` | A platform message, as its adapter attributed it: `sender_id` is the sending account |
-| `"viewer"` | A person in a Hermes client (Desktop, TUI, a gateway-backed ACP editor) submitted it; `sender_id` is the session owner |
+| `"viewer"` | A person in a Hermes client (Desktop, TUI, the interactive CLI, a gateway-backed ACP editor) submitted it, typed or queued while a turn ran; `sender_id` is the session owner |
 | `"cli"` | A CLI-shaped submission: a Hermes CLI turn, or a client turn that carries a model override or a clarify batch |
 | `"api"` | An API-server turn; the API client defines the author |
-| `"automation"` | Hermes itself: a heartbeat, `/loop` or goal continuation, a process or delegation notice, a plugin injection, a wake, the onboarding prompt, a startup resume |
+| `"automation"` | Hermes itself: a heartbeat, a `/loop` tick or goal continuation, a cron job, a process, kanban or delegation notice, a plugin injection, a wake, the onboarding prompt, a startup resume or crash auto-continue |
 | `"peer"` | Another agent wrote it: an agent-to-agent forward, an A2A platform call, or a message or submission from a bot account (Bot Chat included) |
-| `None` | Unknown: a `/retry` replay or leftover `/steer` (Hermes re-sends the text on a borrowed source), a webhook or ntfy delivery, a message with no sender id, a local CLI one-shot, the in-process ACP server, cron, a subagent, a managed worker (kanban tasks run in one), batch runs, or an older host |
+| `None` | Unknown: a `/retry` replay or leftover `/steer` (Hermes re-sends the text on a borrowed source), a webhook or ntfy delivery, a message with no sender id, a local CLI one-shot, the in-process ACP server, a subagent, a managed worker (kanban tasks run in one), batch runs, or an older host |
 
 Only `"native"` means `sender_id` is the turn's platform sender: Hermes never labels native a turn whose author it replaced (a viewer's, API or CLI submit, an automation, text re-sent on a borrowed source). It adds nothing to the adapter's attribution, though: a bot account reads `"peer"` only where the adapter flags bots (Discord, Slack, Telegram and Feishu messages), messages batched into one turn carry one of their senders (usually the first), and text rendered for the account's own action or command (a reaction, a button, a forward, `/plan` or a skill) or rewritten by a `pre_gateway_dispatch` plugin counts as that account's. It is attribution, not authorization: never grant anything on it.
 
