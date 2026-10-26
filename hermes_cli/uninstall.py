@@ -764,17 +764,15 @@ def run_uninstall(args):
     """
     _refuse_if_steward_owned()
 
+    from hermes_cli.data_cleanup import guard_data_removal_home, guard_whole_home_removal
+
     project_root = get_project_root()
-    hermes_home = get_hermes_home()
-
-    from hermes_cli.data_cleanup import guard_data_removal_home
-    try:
-        hermes_home = guard_data_removal_home(hermes_home, project_root)
-    except (OSError, ValueError, RuntimeError) as exc:
-        log_warn(str(exc))
-        raise SystemExit(1) from exc
-
+    configured_home = get_hermes_home()
     full_flag = bool(getattr(args, "full", False))
+    # Keep-data mode still deletes under the home (node/, bin/uv, Windows git/), so every mode
+    # vets the home before its first step; the dry run reports the same refusal.
+    hermes_home = _guarded_home(
+        guard_whole_home_removal if full_flag else guard_data_removal_home, configured_home, project_root)
     if bool(getattr(args, "dry_run", False)):
         _print_uninstall_dry_run(
             project_root=project_root, hermes_home=hermes_home, full_uninstall=full_flag)
@@ -835,6 +833,8 @@ def run_uninstall(args):
         return
 
     full_uninstall = (choice == "2")
+    if full_uninstall:
+        _guarded_home(guard_whole_home_removal, configured_home, project_root)
 
     # Full uninstall from the default profile: offer to remove named profiles too (gateway
     # services, alias wrappers, HERMES_HOME dirs) — otherwise they leave zombie services behind.
@@ -868,6 +868,17 @@ def run_uninstall(args):
     _perform_uninstall(
         project_root=project_root, hermes_home=hermes_home, full_uninstall=full_uninstall,
         remove_profiles=remove_profiles, named_profiles=named_profiles)
+
+
+def _guarded_home(guard, home: Path, project_root: Path) -> Path:
+    """``guard(home, project_root)``, or exit before anything is removed when it refuses."""
+    try:
+        return guard(home, project_root)
+    except (OSError, ValueError, RuntimeError) as exc:
+        log_warn(str(exc))
+        log_info(f"Nothing was removed. HERMES_HOME is {home}: check where it is set "
+                 "(shell profile, service environment, or a Hermes .env file).")
+        raise SystemExit(1) from exc
 
 
 def _print_uninstall_dry_run(*, project_root: Path, hermes_home: Path, full_uninstall: bool) -> None:
@@ -1159,7 +1170,7 @@ def _perform_uninstall(
 
     # 5. Optionally remove ~/.hermes/ data directory (and named profiles)
     if full_uninstall:
-        # 5a. Named profiles' homes live under <default>/profiles/ (swept by the rmtree below),
+        # 5a. Named profiles' homes live under <default>/profiles/ (kept below unless opted in),
         #     but their services + alias scripts live OUTSIDE the default root.
         for prof in named_profiles if remove_profiles else ():
             _uninstall_profile(prof)

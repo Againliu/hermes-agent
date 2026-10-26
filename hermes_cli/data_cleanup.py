@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import stat
 
@@ -15,41 +16,44 @@ class DataRemovalPlan:
     keep: tuple[Path, ...]
 
 
+# State Hermes writes on purpose. Launching any ``hermes`` command seeds SOUL.md and the
+# skeleton dirs into whatever HERMES_HOME names, and ``.env`` is common in project dirs,
+# so neither proves a directory is a Hermes home.
+_HOME_MARKERS = ("config.yaml", "state.db", "auth.json")
+
+
 def guard_data_removal_home(home: Path, project: Path) -> Path:
-    """Return the canonical data root or refuse an unsafe recursive-delete target.
+    """Return the canonical home, or refuse a home whose removal reaches data Hermes does not own.
 
-    Inspect the lexical path before resolving it: resolving first erases the evidence
-    that the configured home (or one of its parents) is a symlink or junction.  Both
-    data-only and code-removing uninstall modes use this single preflight.
+    Refused: a filesystem root, the user's home or any ancestor of it, a home inside the
+    install directory, and an existing directory carrying no Hermes marker file. A link
+    anywhere in the path is followed: the checks run on the directory that would be emptied.
     """
-    lexical_home = home.absolute()
-    for part in (lexical_home, *lexical_home.parents):
-        if part == Path(part.anchor):
-            continue
-        try:
-            mode = part.lstat().st_mode
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            raise ValueError(f"cannot safely inspect Hermes home path {part}: {exc}") from exc
-        try:
-            linked = stat.S_ISLNK(mode) or is_junction(part)
-        except OSError as exc:
-            raise ValueError(f"cannot safely inspect Hermes home path {part}: {exc}") from exc
-        if linked:
-            raise ValueError(f"refusing to erase a Hermes home reached through a directory link: {part}")
-
-    resolved_home = lexical_home.resolve()
-    user_home = Path.home().resolve()
-    if resolved_home == Path(resolved_home.anchor) or user_home.is_relative_to(resolved_home):
-        raise ValueError(f"refusing to erase an entire filesystem or user home: {resolved_home}")
-
-    resolved_project = project.resolve()
-    if resolved_home == resolved_project or resolved_home.is_relative_to(resolved_project):
+    resolved_home = home.resolve()
+    if resolved_home == Path(resolved_home.anchor) or Path.home().resolve().is_relative_to(resolved_home):
+        raise ValueError(f"refusing to remove {resolved_home}: it is a filesystem root or contains your home folder")
+    if resolved_home.is_relative_to(project.resolve()):
+        raise ValueError(f"refusing to remove {resolved_home}: it is inside the installation directory")
+    if resolved_home.is_dir() and not any((resolved_home / name).exists() for name in _HOME_MARKERS):
         raise ValueError(
-            f"refusing to erase a Hermes home that aliases the installation directory: {resolved_home}"
+            f"refusing to remove {resolved_home}: it has no {', '.join(_HOME_MARKERS)}, "
+            "so it is not a Hermes home"
         )
     return resolved_home
+
+
+def guard_whole_home_removal(home: Path, project: Path) -> Path:
+    """:func:`guard_data_removal_home` for a wipe of the whole tree, which also refuses a home
+    that is itself a link or junction: its target is a directory the user placed elsewhere,
+    and ``rmtree`` refuses links, so the wipe would fail only after the code was gone.
+    """
+    entry = Path(os.path.abspath(home))
+    if entry.is_symlink() or is_junction(entry):
+        raise ValueError(
+            f"refusing to remove {entry}: it is a link to {entry.resolve()}. "
+            "Set HERMES_HOME to the real directory to remove it."
+        )
+    return guard_data_removal_home(home, project)
 
 
 def plan_data_removal(home: Path, project: Path, userdata: Path | None = None) -> DataRemovalPlan:
