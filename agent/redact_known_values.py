@@ -30,7 +30,7 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
-from urllib.parse import parse_qsl, quote, quote_plus, urlsplit
+from urllib.parse import parse_qsl, quote, quote_plus
 
 MARKER = "«redacted-secret»"
 MIN_VALUE_CHARS = 12
@@ -73,8 +73,11 @@ def _header_values(value: object):
 
 
 def _url_query_values(url: object):
+    # Sliced, not ``urlsplit``: a malformed host (``https://[broken/?k=x``) raises there and would
+    # stop every other secret source from loading.
     if isinstance(url, str) and "?" in url:
-        yield from (v for _, v in parse_qsl(urlsplit(url).query, keep_blank_values=False))
+        query = url.partition("?")[2].partition("#")[0]
+        yield from (v for _, v in parse_qsl(query, keep_blank_values=False))
 
 
 def mcp_server_secret_values(*, env=None, headers=None, url=None):

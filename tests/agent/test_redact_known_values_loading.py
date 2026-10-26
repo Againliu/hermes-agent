@@ -48,6 +48,13 @@ def test_concurrent_first_reader_waits_for_the_load_in_progress(tmp_path, monkey
     assert results == {"first": f"server echoed {MARKER}", "second": f"server echoed {MARKER}"}
 
 
+def test_malformed_mcp_url_does_not_stop_other_sources(tmp_path):
+    (tmp_path / ".env").write_text(f"ACME_SERVICE_TOKEN={ENV_VAL}\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text(
+        "mcp_servers:\n  broken:\n    enabled: false\n    url: 'https://[broken/?k=x'\n", encoding="utf-8")
+    assert redact_known_secret_values(f"value {ENV_VAL}", home=tmp_path) == f"value {MARKER}"
+
+
 @pytest.mark.parametrize("safe_mode", [True, False])
 def test_frozen_worker_masks_its_snapshot_without_opening_profile_files(tmp_path, safe_mode):
     home = tmp_path / "home"
