@@ -129,6 +129,18 @@ def test_cells_that_would_hide_from_the_per_column_scan_are_refused(ds, capsys, 
     assert EMAIL not in raw
 
 
+@pytest.mark.parametrize("extra", [
+    ["--quasi", "post_code", "--k", "2"],
+    ["--quasi", "region", "--k", "1"],
+    ["--originals", "SRC"],
+])
+def test_a_requested_check_that_cannot_run_is_refused_not_reported_clean(ds, capsys, tmp_path, extra):
+    shipped = _write_csv(tmp_path / "shipped.csv", [{"region": "west", "postcode": f"9411{i}"} for i in range(3)])
+    argv = [str(shipped) if a == "SRC" else a for a in extra]
+    code, report, _ = _run(ds, capsys, "scan", str(shipped), *argv)
+    assert code == 2 and "all_zero" not in report
+
+
 def test_parse_error_reports_only_its_type(ds, capsys, tmp_path):
     bad = tmp_path / "bad.jsonl"
     bad.write_text(f'{{"email": "{EMAIL}"}}\n{{"email": "{EMAIL}", oops}}\n', encoding="utf-8")

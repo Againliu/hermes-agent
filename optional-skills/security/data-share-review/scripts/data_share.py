@@ -252,9 +252,26 @@ def _quasi_groups(rows: list[dict], quasi: list[str], k: int) -> dict:
     return {"columns": quasi, "k": k, "groups_below_k": len(small), "rows_in_groups_below_k": sum(small.values())}
 
 
+def _scan_requests(args, cols: list[str] | None) -> tuple[list[str], list[str]]:
+    """Return (originals columns, quasi columns); a check that cannot run is refused, never reported clean."""
+    columns, quasi = _csv_list(args.columns), _csv_list(args.quasi)
+    if bool(args.originals) != bool(columns):
+        raise SystemExit("--originals and --columns go together: name the source file and the columns to look for")
+    if quasi:
+        if cols is None:
+            raise SystemExit("--quasi needs a tabular file")
+        unknown = [c for c in quasi if c not in cols]
+        if unknown:
+            raise SystemExit(f"unknown --quasi columns: {unknown}")
+        if args.k < 2:
+            raise SystemExit("--k must be at least 2")
+    return columns, quasi
+
+
 def cmd_scan(args) -> dict:
     path = Path(args.file)
     cols, rows = read_rows(path)
+    columns, quasi = _scan_requests(args, cols)
     cells = [rows[0]] if cols is None else [str(v) for r in rows for v in r.values()]
     totals = Counter()
     per_column = {}
@@ -272,12 +289,10 @@ def cmd_scan(args) -> dict:
     report = {"file": str(path), "sha256": _sha256(path), "rows": len(rows) if cols else None,
               "totals": {k: totals.get(k, 0) for k in ("email", "phone", "card_luhn", "ip_address", "secret")},
               "per_column": per_column}
-    if args.originals:
-        report["original_values"] = _originals_count(cells, Path(args.originals), _csv_list(args.columns))
-    if args.quasi:
-        if cols is None:
-            raise SystemExit("--quasi needs a tabular file")
-        report["quasi_identifier"] = _quasi_groups(rows, _csv_list(args.quasi), args.k)
+    if columns:
+        report["original_values"] = _originals_count(cells, Path(args.originals), columns)
+    if quasi:
+        report["quasi_identifier"] = _quasi_groups(rows, quasi, args.k)
     counts = list(report["totals"].values()) + list(report.get("original_values", {}).values())
     counts.append(report.get("quasi_identifier", {}).get("rows_in_groups_below_k", 0))
     report["all_zero"] = not any(counts)
