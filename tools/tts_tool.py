@@ -728,8 +728,7 @@ TTS_SCHEMA = {
                 "description": (
                     "Optional voice-design guidance: tone, emotion, pacing, accent, "
                     "whispering, impressions (e.g. 'Speak in a cheerful, excited whisper'). "
-                    "Forwarded to OpenAI voice-design backends and Gemini 3.8 TTS "
-                    "(overrides tts.gemini.style and persona_prompt_file). "
+                    "Forwarded to OpenAI voice-design backends and Gemini 3.8 TTS. "
                     "Silently ignored by backends that don't support it."
                 )
             }
