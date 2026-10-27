@@ -246,10 +246,8 @@ class TestGenerateGeminiTts:
         args, kwargs = mock_post.call_args
         assert DEFAULT_GEMINI_TTS_MODEL in args[0]
         payload = kwargs["json"]
-        voice = (
-            payload["generationConfig"]["speechConfig"]["voiceConfig"]
-            ["prebuiltVoiceConfig"]["voiceName"]
-        )
+        # The 3.8 default names its voice directly (no prebuiltVoiceConfig wrapper).
+        voice = payload["generationConfig"]["speechConfig"]["voiceConfig"]["voice"]
         assert voice == DEFAULT_GEMINI_TTS_VOICE
 
     def test_custom_voice(self, tmp_path, monkeypatch, mock_gemini_response):
@@ -262,10 +260,8 @@ class TestGenerateGeminiTts:
             _generate_gemini_tts("Hi", str(tmp_path / "test.wav"), config)
 
         payload = mock_post.call_args[1]["json"]
-        voice = (
-            payload["generationConfig"]["speechConfig"]["voiceConfig"]
-            ["prebuiltVoiceConfig"]["voiceName"]
-        )
+        # The 3.8 default names its voice directly (no prebuiltVoiceConfig wrapper).
+        voice = payload["generationConfig"]["speechConfig"]["voiceConfig"]["voice"]
         assert voice == "Puck"
 
 
